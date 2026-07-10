@@ -1,0 +1,50 @@
+{
+  "name": "brigadir",
+  "version": "0.0.1",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "build:backend": "nest build backend",
+    "build:worker": "nest build worker",
+    "typecheck": "tsc -p tsconfig.json --noEmit && pnpm --filter @brigadir/contracts typecheck",
+    "lint": "eslint \"{apps,libs,packages}/**/*.ts\"",
+    "test": "pnpm --filter @brigadir/contracts test && vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "start:backend": "node dist/apps/backend/main.api.js",
+    "start:worker": "node dist/apps/worker/main.worker.js"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.0",
+    "@nestjs/schematics": "^11.0.0",
+    "@nestjs/testing": "^11.0.0",
+    "@testcontainers/postgresql": "^12.0.4",
+    "@testcontainers/redis": "^12.0.4",
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.10",
+    "@typescript-eslint/eslint-plugin": "^8.18.0",
+    "@typescript-eslint/parser": "^8.18.0",
+    "drizzle-kit": "^0.30.0",
+    "eslint": "^9.17.0",
+    "testcontainers": "^10.16.0",
+    "typescript": "^5.7.2",
+    "vite-tsconfig-paths": "^5.1.4",
+    "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "@brigadir/contracts": "workspace:*",
+    "@nestjs/bullmq": "^11.0.0",
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "bullmq": "^5.34.0",
+    "drizzle-orm": "^0.38.0",
+    "pg": "^8.13.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "yaml": "^2.6.1"
+  }
+}

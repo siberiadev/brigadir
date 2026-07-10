@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json.schemastore.org/nest-cli",
+  "collection": "@nestjs/schematics",
+  "sourceRoot": "apps/backend/src",
+  "monorepo": true,
+  "root": "apps/backend",
+  "compilerOptions": {
+    "webpack": false,
+    "tsConfigPath": "apps/backend/tsconfig.app.json",
+    "deleteOutDir": true
+  },
+  "projects": {
+    "backend": {
+      "type": "application",
+      "root": "apps/backend",
+      "entryFile": "main.api",
+      "sourceRoot": "apps/backend/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/backend/tsconfig.app.json"
+      }
+    },
+    "worker": {
+      "type": "application",
+      "root": "apps/worker",
+      "entryFile": "main.worker",
+      "sourceRoot": "apps/worker/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/worker/tsconfig.app.json"
+      }
+    },
+    "database": {
+      "type": "library",
+      "root": "libs/database",
+      "entryFile": "index",
+      "sourceRoot": "libs/database/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/database/tsconfig.lib.json"
+      }
+    },
+    "app-config": {
+      "type": "library",
+      "root": "libs/app-config",
+      "entryFile": "index",
+      "sourceRoot": "libs/app-config/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/app-config/tsconfig.lib.json"
+      }
+    },
+    "queues": {
+      "type": "library",
+      "root": "libs/queues",
+      "entryFile": "index",
+      "sourceRoot": "libs/queues/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/queues/tsconfig.lib.json"
+      }
+    },
+    "runs": {
+      "type": "library",
+      "root": "libs/runs",
+      "entryFile": "index",
+      "sourceRoot": "libs/runs/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/runs/tsconfig.lib.json"
+      }
+    },
+    "executors": {
+      "type": "library",
+      "root": "libs/executors",
+      "entryFile": "index",
+      "sourceRoot": "libs/executors/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/executors/tsconfig.lib.json"
+      }
+    }
+  }
+}
