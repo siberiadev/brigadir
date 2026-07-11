@@ -103,6 +103,13 @@ onStatusChanged(ticket, from, to, source):
       backoff: {type: 'custom'},
     })
 
+dependencyGate(ticket):  # решение 2026-07-11: модель «временной команды» (backend+frontend фича)
+  links = issue.fields.issuelinks WHERE type = "is blocked by"
+  return all(linked.status in done-category for linked in links)
+  # false -> прогон не стартует; тикет помечается waiting_dependencies.
+  # Закрытие блокера НЕ обновляет updated заблокированного тикета -> reconcile-проход
+  # перепроверяет все тикеты в триггер-статусах, пропущенные из-за зависимостей.
+
 onRunFinished(run, report | processFailure):
   if report.outcome == success:
     jira.transitionTo(ticket, agent.status_success); jira.comment(buildRunComment)
