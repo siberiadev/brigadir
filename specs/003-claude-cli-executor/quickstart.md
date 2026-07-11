@@ -32,7 +32,7 @@ The fake CLI:
 
 Recorded fixtures: `stream-success` (valid `structured_output`),
 `stream-invalid-report`, `stream-no-report`, `stream-rate-limit`
-(`system/api_retry error:"rate_limit"`), `stream-escalating-cost`.
+(`system/api_retry error:"rate_limit"`), `stream-budget-exceeded` (D11 REVISED — terminal-event cost only, no mid-stream USD).
 
 ## Automated scenarios → spec mapping
 
@@ -44,7 +44,7 @@ Recorded fixtures: `stream-success` (valid `structured_output`),
 | US2 security (FR-019/SC-003) | canary `ANTHROPIC_API_KEY`+secrets in worker env | env dump file: 0 secrets; argv (from fake CLI) : 0 secrets |
 | US3 timeout | fake sleeps past `timeout_minutes` | `timed_out`; child + grandchild gone (0 orphans) |
 | US3 cancel | flip `runs.status` off `running` mid-run | `cancelled`; group killed; a late `stream-success` does NOT revive it |
-| US3 budget (SC-004) | `stream-escalating-cost` past `max_budget_usd` | `failed` budget diagnostic; group killed |
+| US3 budget (SC-004) | `stream-budget-exceeded` (terminal `total_cost_usd` over `max_budget_usd`, D11 REVISED) | `failed` budget diagnostic; no surviving processes |
 | US4 streaming | `stream-success` | `run_events` timeline in order (log/tool_call/progress); `cost_usd`+`usage` on run; stderr tail retained |
 | US5 rate limit (SC-006) | `stream-rate-limit` | distinct `rate_limited`; job requeued; **attempt not incremented**; run stays active |
 | US6 coexistence (SC-002) | mock + claude_cli in config | both validate/resolve; full mock suite green |

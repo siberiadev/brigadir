@@ -123,7 +123,7 @@ test/
 │   ├── stream-invalid-report.ndjson
 │   ├── stream-no-report.ndjson
 │   ├── stream-rate-limit.ndjson    # system/api_retry error:"rate_limit"
-│   └── stream-escalating-cost.ndjson
+│   └── stream-budget-exceeded.ndjson
 └── integration/
     ├── claude-cli-lifecycle.spec.ts   # US1/US4: success/invalid/no-report + timeline + cost
     ├── claude-cli-security.spec.ts    # US2 (FR-019/SC-003): canary env + argv absence
