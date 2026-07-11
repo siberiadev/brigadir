@@ -20,8 +20,15 @@ workspace:
   jira_site: https://acme.atlassian.net
   project_key: BRIG
   board_id: 42            # Jira board; тип (kanban/scrum) система определит сама
-  repo: git@github.com:acme/product.git
-  default_branch: main
+  scope_jql: 'labels = ai-pipeline'   # опционально: глобальный фильтр скоупа (AND к поллеру)
+  branch_prefix: feat     # дефолт для всех агентов; агент может переопределить
+  repositories:           # первый — дефолтный
+    - name: product
+      url: git@github.com:acme/product.git
+      default_branch: main
+    - name: frontend
+      url: git@github.com:acme/frontend.git
+      default_branch: main
 executors:
   claude-sub:
     type: claude_cli
@@ -67,8 +74,9 @@ agents:
 
 1. **Поллер** (`upsertJobScheduler('reconcile', {every: 300_000})`):
    - **Скоуп зависит от типа борды** (решение 2026-07-11, plan-internal п.5). Тип определяется при подключении workspace через `GET /rest/agile/1.0/board/{board_id}` и кэшируется в `workspaces`:
-     - kanban: `project = {key} AND updated >= "{HWM - 60s}"`;
-     - scrum: `project = {key} AND sprint IN openSprints() AND updated >= "{HWM - 60s}"`; нет активного спринта → пасс вхолостую.
+     - kanban: `project = {key} [AND ({scope_jql})] AND updated >= "{HWM - 60s}"`;
+     - scrum: `project = {key} AND sprint IN openSprints() [AND ({scope_jql})] AND updated >= "{HWM - 60s}"`; нет активного спринта → пасс вхолостую.
+   - `workspace.scope_jql` — опциональный глобальный фильтр скоупа (например, `labels = ai-pipeline` для пилота на части доски); действует на всех агентов workspace. Не путать с `agents.trigger_jql` — точечным фильтром одного агента поверх скоупа.
    - fields: `status,summary,updated`.
    - **Вход в скоуп = событие**: тикет, впервые появившийся в скоупе уже в триггер-статусе (добавлен в активный спринт, старт спринта), обрабатывается как `status_changed` (diff против отсутствующего `last_seen_status`).
    - **Смена активного спринта**: старт спринта не обновляет `updated` у задач → поллер хранит `active_sprint_id` в `workspaces.settings`; при изменении — полный рескан задач спринта без условия по `updated` (одноразово), затем обычный HWM-режим.
@@ -238,7 +246,7 @@ Vue 3 + Vite + Pinia + TanStack Query + **Element Plus** (решение 2026-07
 
 Экраны:
 
-0. **Workspace** — визард создания (шаг 1: имя; шаг 2: подключение Jira — URL сайта + email + API-токен с подсказкой «создать на id.atlassian.com», кнопка «Проверить» → `/myself` + чтение проекта, показываем имя бота и название проекта; шаг 3: готово). Настройки workspace: переподключение/ротация токена, бейдж `expires_at` с предупреждением за 30/7 дней. **Agents** — список агентов workspace, «+» открывает форму. Поля: `name`, `instruction` (textarea, без обёртки), `executor` + `model` (Phase 1: только `claude_cli`), `trigger_status`, `status_running` (опционален, **рекомендован по умолчанию** — «взят агентом» на доске), `status_success`, `status_failure`, `timeout_minutes`, `max_budget_usd`, `max_attempts`, `trigger_jql` (advanced), behavior: `branch_prefix`, `allowed_tools`, `required_checks`; кнопка «тестовый прогон» по ключу тикета. Все статус-поля — селекты из `/api/workspaces/:id/statuses`: **плоский список статусов борды, без колонок** (решение 2026-07-11 — колонками пользователь думает в Jira), биндинг по status id + name. Валидация при сохранении (мини-линтер): статусы существуют на борде; **дубль `trigger_status` среди включённых агентов запрещён**, если не различается `trigger_jql`; предупреждение о цикле статусов (status_success агента А триггерит Б, чей status_success возвращает в триггер А).
+0. **Workspace** — визард создания (шаг 1: имя; шаг 2: подключение Jira — URL сайта + email + API-токен с подсказкой «создать на id.atlassian.com», кнопка «Проверить» → `/myself` + борда через Agile API, показываем имя бота, проект и тип борды; шаг 3: **репозитории** — список {name, git URL, default_branch}, первый — дефолтный; шаг 4: готово). Настройки workspace: переподключение/ротация токена, бейдж `expires_at` с предупреждением за 30/7 дней; `scope_jql` (глобальный фильтр скоупа, advanced); `branch_prefix` (дефолт `feat` — наследуется агентами); управление списком репозиториев. **Agents** — список агентов workspace, «+» открывает форму. Поля: `name`, `instruction` (textarea, без обёртки), `executor` + `model` (Phase 1: только `claude_cli`), `trigger_status`, `status_running` (опционален, **рекомендован по умолчанию** — «взят агентом» на доске), `status_success`, `status_failure`, `timeout_minutes`, `max_budget_usd`, `max_attempts`, `trigger_jql` (advanced, фильтр этого агента поверх workspace.scope_jql), `repository` (селект из списка репозиториев workspace; пусто = дефолтный), behavior: `branch_prefix` (пусто = наследуется от workspace), `allowed_tools`, `required_checks`; кнопка «тестовый прогон» по ключу тикета. Все статус-поля — селекты из `/api/workspaces/:id/statuses`: **плоский список статусов борды, без колонок** (решение 2026-07-11 — колонками пользователь думает в Jira), биндинг по status id + name. Валидация при сохранении (мини-линтер): статусы существуют на борде; **дубль `trigger_status` среди включённых агентов запрещён**, если не различается `trigger_jql`; предупреждение о цикле статусов (status_success агента А триггерит Б, чей status_success возвращает в триггер А).
 1. **Board** — колонки Jira-статусов; карточка: ключ, summary, бейдж активного агента (спиннер/✅/❌/✋), стоимость суммарно. Клик → Ticket.
 2. **Ticket** — шапка (ключ, summary, ссылка в Jira, текущий статус); лента прогонов: агент, executor, attempt, длительность, стоимость, outcome; **чеклист** (✅/❌/⚠/⏭ + reason раскрытием); таймлайн событий (progress-стадии, api_retry, jira-actions); кнопки cancel/retry.
 3. **Human queue** (главный экран по умолчанию при наличии open-задач) — список: title, тикет, агент, возраст, kind; форма ответа + выбор action. Счётчик в навбаре.

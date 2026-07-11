@@ -132,7 +132,9 @@ CREATE TABLE workspaces (
   jira_auth_type  text NOT NULL DEFAULT 'api_token',  -- api_token (решение 2026-07-10: основной способ; oauth_3lo — резерв полной продуктовой версии)
   jira_credentials bytea NOT NULL,             -- encrypted (AES-256-GCM, key from env/KMS)
   jira_credential_expires_at timestamptz,      -- API token <= 1 year: alerting!
-  settings        jsonb NOT NULL DEFAULT '{}', -- board url, default repo, git credentials ref
+  settings        jsonb NOT NULL DEFAULT '{}', -- repositories[] (первый — дефолтный), scope_jql,
+                                               -- branch_prefix (дефолт для агентов), active_sprint_id,
+                                               -- high-water mark поллера, git credentials ref
   created_at      timestamptz NOT NULL DEFAULT now(),
   updated_at      timestamptz NOT NULL DEFAULT now()
 );
@@ -447,7 +449,8 @@ POST /api/callbacks/runs/:runId/complete    body = structured report
   "human_escalation": "on_ambiguity",    // never | on_blocker | on_ambiguity | always_before_finish
   "on_failure":       "report_and_stop", // report_and_stop | retry_once_then_report
   "code_delivery":    "branch_push",     // none | branch_push | pull_request
-  "branch_prefix":    "feat",            // ветка прогона: {branch_prefix}/{ticket_key}
+  "repository":       "product",         // из workspace.settings.repositories; пусто = дефолтный
+  "branch_prefix":    "feat",            // override; пусто = наследуется от workspace.branch_prefix
   "allowed_tools":    ["Read", "Edit", "Write", "Glob", "Grep", "Bash(git *)", "Bash(pnpm *)"],
   "required_checks":  ["tests_pass", "lint_pass", "build_pass"], // прекомпилированный чек-план
   "verification":     "run_tests"        // trust_agent | run_tests (харнес сам гоняет тесты после агента)
