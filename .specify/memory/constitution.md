@@ -1,7 +1,13 @@
 <!--
 Sync Impact Report
 ==================
-Version change: (template) → 1.0.0 (initial ratification)
+Version change: 1.0.0 → 1.1.0 (2026-07-11)
+Amendment: added "Lazy resource resolution" rule to Technology Constraints —
+root-caused in iteration 1 (eager Redis connection in a @Module decorator
+argument silently fell back to localhost:6379; see docs/progress.md,
+"Post-DoD fix"). Templates unaffected.
+
+Previous: (template) → 1.0.0 (initial ratification)
 Modified principles: n/a (all principles newly defined)
 Added sections:
   - Core Principles (6): I. Dual Source of Truth; II. Idempotency at Three
@@ -181,6 +187,17 @@ The stack is fixed; deviations require a constitution amendment:
 - Executor implementations plug in behind the `AgentExecutor` interface;
   the runtime abstraction is `RunRuntime`. New executors or runtimes MUST
   implement these contracts rather than fork the pipeline.
+- **Lazy resource resolution** — anything evaluated inside a `@Module()`
+  decorator argument (e.g. `SomeModule.register()` in `imports: [...]`)
+  executes at MODULE IMPORT time, before env vars or config set later (test
+  `beforeAll`, process managers) exist. Therefore connections, credentials,
+  and URLs MUST be resolved inside DI factories at context init
+  (`forRootAsync` / `useFactory` / provider factories) — never eagerly at
+  module composition, and never with silent fallbacks to localhost defaults.
+  Composition-time reads are permitted only for static structure (e.g. queue
+  names for `registerQueue`/`@Processor`) and MUST be documented at the call
+  site. (Root-caused in iteration 1: an eager Redis connection sent every
+  consumer to a host-local redis — see docs/progress.md, "Post-DoD fix".)
 
 ## Development Workflow
 
@@ -216,4 +233,4 @@ The stack is fixed; deviations require a constitution amendment:
   Any deliberate violation MUST appear in the plan's Complexity Tracking
   table.
 
-**Version**: 1.0.0 | **Ratified**: 2026-07-10 | **Last Amended**: 2026-07-10
+**Version**: 1.1.0 | **Ratified**: 2026-07-10 | **Last Amended**: 2026-07-11
