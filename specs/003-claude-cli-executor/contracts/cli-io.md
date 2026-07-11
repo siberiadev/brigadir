@@ -50,9 +50,10 @@ The wrapped instruction / task text (arbitrary ticket content) is written to
 
 **Report extraction (D1):** `report = result.structured_output`, re-validated by
 zod `ReportSchema`. If missing/invalid → `exitStatus:'completed'` **without**
-`report` + diagnostic → processor finalizes `failed` (FR-008). *(Fallback if
-stream-json omits `structured_output`: parse `result.result` text as JSON, same
-validation — pinned by the D1 prototype.)*
+`report` + diagnostic → processor finalizes `failed` (FR-008). *(No fallback
+exists: the D1 prototype (CLI v2.1.207, 2026-07-11) confirmed `structured_output`
+IS present on the stream-json terminal event — fail-closed only, never parse
+`result.result` text.)*
 
 **Malformed line:** `JSON.parse` in try/catch; a bad/partial line is skipped, the
 run continues (FR-014).

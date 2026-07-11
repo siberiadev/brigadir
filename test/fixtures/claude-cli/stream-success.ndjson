@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","session_id":"sess-success-1","model":"claude-sonnet-5","tools":["Read","Edit","Bash"],"mcp_servers":[]}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu-1","name":"Read","input":{"file_path":"src/index.ts"}}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Reading the ticket and implementing the fix now."}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Running tests to confirm the fix works."}]}}
+{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.0123,"usage":{"input_tokens":1200,"output_tokens":340},"session_id":"sess-success-1","num_turns":3,"structured_output":{"schema_version":1,"outcome":"success","summary":"Implemented the fix and verified tests pass.","checks":[{"name":"tests_pass","status":"pass"},{"name":"lint_pass","status":"pass"}]}}

@@ -1,0 +1,27 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildArgs (T077) > matches a snapshot of the built argv for a representative config 1`] = `
+[
+  "-p",
+  "--output-format",
+  "stream-json",
+  "--verbose",
+  "--json-schema",
+  "{"type":"object","properties":{"schema_version":{"type":"number","const":1},"outcome":{"type":"string","enum":["success","failure","needs_human"]},"summary":{"type":"string","maxLength":2000},"checks":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string","maxLength":200},"status":{"type":"string","enum":["pass","fail","skip","warn"]},"reason":{"type":"string","maxLength":1000}},"required":["name","status"],"additionalProperties":false},"maxItems":50},"human_task":{"type":"object","properties":{"kind":{"type":"string","enum":["question","blocker","review"]},"title":{"type":"string","maxLength":120},"details":{"type":"string","maxLength":4000}},"required":["kind","title"],"additionalProperties":false},"artifacts":{"type":"object","properties":{"branch":{"type":"string"},"pr_url":{"type":"string"},"commits":{"type":"array","items":{"type":"string"}},"files_changed":{"type":"integer"}},"additionalProperties":false}},"required":["schema_version","outcome","summary","checks"],"additionalProperties":false,"$schema":"http://json-schema.org/draft-07/schema#"}",
+  "--model",
+  "claude-sonnet-5",
+  "--append-system-prompt-file",
+  "/tmp/brigadir/worktrees/run-123/.brigadir/wrapper.txt",
+  "--allowed-tools",
+  "Read,Edit,Bash(git *)",
+  "--strict-mcp-config",
+  "--settings",
+  "{}",
+  "--permission-mode",
+  "dontAsk",
+  "--max-turns",
+  "40",
+  "--max-budget-usd",
+  "5",
+]
+`;

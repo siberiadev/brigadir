@@ -1,18 +1,34 @@
-# agents.yaml — BRIGADIR Phase 0 config (iteration 1: mock executor).
+# agents.yaml — BRIGADIR Phase 0 config (iteration 3: claude_cli joins mock).
 # Validated by AgentsConfigSchema at startup; a bad config aborts boot with a
 # path-qualified error. YAML is the Phase 0 source of agents; the backend seeds
 # these rows into Postgres on boot.
+#
+# The `coder`/`claude-implementer` entries below have no `trigger_status`, so
+# they stay dormant in a real deployment — they exist so `QueuesModule.register()`
+# (which reads this file at `WorkerAppModule` decorator-argument-evaluation
+# time, i.e. before any test's `beforeAll` can override AGENTS_CONFIG_PATH —
+# see docs/progress.md iteration 3 notes) provisions the `run.claude_cli`
+# queue for every test/dev boot, exactly as `mock-exec` already does for `run.mock`.
 workspace:
   jira_site: https://acme.atlassian.net
   project_key: BRIG
   board_id: 42
   repo: git@github.com:acme/product.git
   default_branch: main
+  repositories:
+    - name: product
+      url: git@github.com:acme/product.git
+      default_branch: main
 
 executors:
   mock-exec:
     type: mock
     concurrency: 2
+  coder:
+    type: claude_cli
+    model: claude-sonnet-5
+    repository: product
+    concurrency: 1
 
 agents:
   - name: implementer
@@ -27,6 +43,19 @@ agents:
     behavior:
       branch_prefix: feat
       allowed_tools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash(git *)"]
+      required_checks: [tests_pass, lint_pass]
+    instruction: |
+      Implement the ticket. Run tests.
+  - name: claude-implementer
+    executor: coder
+    status_success: "Code Review"
+    status_failure: "Blocked"
+    timeout_minutes: 45
+    max_budget_usd: 5
+    max_attempts: 2
+    behavior:
+      branch_prefix: feat
+      allowed_tools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash(git *)", "Bash(pnpm *)"]
       required_checks: [tests_pass, lint_pass]
     instruction: |
       Implement the ticket. Run tests.

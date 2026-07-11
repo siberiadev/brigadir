@@ -47,15 +47,52 @@ export const WorkspaceConfigSchema = z
   })
   .strict();
 
-export const ExecutorConfigSchema = z
+/**
+ * `claude_cli` executor branch (contracts/executor-config.md, iteration 3) —
+ * typed and boot-validated, unlike the other (still-unimplemented) executor
+ * types below. Cross-field checks (`repository` must reference a declared
+ * workspace repository; `allowedTools` must resolve to a non-empty list)
+ * live in `AgentsConfigSchema.superRefine` below, since they need the
+ * workspace/agent context this branch alone doesn't have.
+ */
+export const ClaudeCliExecutorConfigSchema = z
   .object({
-    type: z.enum(EXECUTOR_TYPES),
+    type: z.literal('claude_cli'),
     concurrency: z.number().int().min(1).default(2),
-    model: z.string().optional(),
-    routine_id: z.string().optional(),
+    model: z.string().min(1),
+    cliPath: z.string().min(1).default('claude'),
+    repository: z.string().min(1),
+    allowedTools: z.array(z.string()).optional(),
+    keepFailedWorktrees: z.boolean().default(false),
+    worktreeRoot: z.string().min(1).optional(),
+    repoCacheRoot: z.string().min(1).optional(),
+    maxTurns: z.number().int().min(1).optional(),
+    killGraceMs: z.number().int().min(0).default(5000),
+    cancelPollMs: z.number().int().min(1).default(3000),
   })
-  // type-specific extras (e.g. cli path) are allowed through
-  .passthrough();
+  .strict();
+
+/** Shape shared by the executor types that have no typed extension yet. */
+function passthroughExecutorConfig<T extends string>(type: T) {
+  return z
+    .object({
+      type: z.literal(type),
+      concurrency: z.number().int().min(1).default(2),
+      model: z.string().optional(),
+      routine_id: z.string().optional(),
+    })
+    // type-specific extras are allowed through until each type gets its own
+    // typed branch (this is what claude_cli just graduated out of).
+    .passthrough();
+}
+
+export const ExecutorConfigSchema = z.discriminatedUnion('type', [
+  ClaudeCliExecutorConfigSchema,
+  passthroughExecutorConfig('mock'),
+  passthroughExecutorConfig('claude_routines'),
+  passthroughExecutorConfig('anthropic_api'),
+  passthroughExecutorConfig('deepseek_api'),
+]);
 
 export const AgentBehaviorSchema = z
   .object({
@@ -113,6 +150,37 @@ export const AgentsConfigSchema = z
         });
       }
       seenAgentNames.add(agent.name);
+    });
+
+    // claude_cli cross-field checks (contracts/executor-config.md, D9):
+    // `repository` must reference a declared workspace repository.
+    const repoNames = new Set((config.workspace.repositories ?? []).map((r) => r.name));
+    for (const [name, executor] of Object.entries(config.executors)) {
+      if (executor.type !== 'claude_cli') continue;
+      if (!repoNames.has(executor.repository)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['executors', name, 'repository'],
+          message: `references unknown repository "${executor.repository}" — must match one of workspace.repositories[].name`,
+        });
+      }
+    }
+
+    // claude_cli `allowedTools`: if the executor doesn't declare its own,
+    // every agent using it must declare a non-empty behavior.allowed_tools —
+    // no silent "all tools" default (Constitution V posture).
+    config.agents.forEach((agent, index) => {
+      const executor = config.executors[agent.executor];
+      if (!executor || executor.type !== 'claude_cli') return;
+      if (executor.allowedTools && executor.allowedTools.length > 0) return;
+      const behaviorTools = agent.behavior?.allowed_tools;
+      if (!behaviorTools || behaviorTools.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['agents', index, 'behavior', 'allowed_tools'],
+          message: `agent "${agent.name}" uses claude_cli executor "${agent.executor}" but neither the executor's allowedTools nor the agent's behavior.allowed_tools declare any tools`,
+        });
+      }
     });
   });
 

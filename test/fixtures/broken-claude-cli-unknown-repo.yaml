@@ -1,0 +1,37 @@
+# BROKEN: claude_cli executor's `repository` doesn't match any
+# workspace.repositories[].name (T075/T089 superRefine).
+workspace:
+  jira_site: https://acme.atlassian.net
+  project_key: BRIG
+  board_id: 42
+  default_branch: main
+  repositories:
+    - name: product
+      url: git@github.com:acme/product.git
+      default_branch: main
+
+executors:
+  mock-exec:
+    type: mock
+    concurrency: 2
+  coder:
+    type: claude_cli
+    model: claude-sonnet-5
+    repository: does-not-exist
+    concurrency: 1
+
+agents:
+  - name: implementer
+    executor: mock-exec
+    status_success: "Code Review"
+    status_failure: "Blocked"
+    instruction: |
+      Implement the ticket.
+  - name: claude-implementer
+    executor: coder
+    status_success: "Code Review"
+    status_failure: "Blocked"
+    behavior:
+      allowed_tools: ["Read"]
+    instruction: |
+      Implement the ticket.

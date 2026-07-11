@@ -90,7 +90,17 @@ export interface SeededPipeline {
 
 export async function seedPipeline(
   db: NodePgDatabase<typeof schema>,
-  opts: { maxAttempts?: number; executorType?: string } = {},
+  opts: {
+    maxAttempts?: number;
+    executorType?: string;
+    /** Merged into `executors.config` (jsonb) — the claude_cli instance config (T083). */
+    executorConfig?: Record<string, unknown>;
+    /** Merged into `agents.behavior` (jsonb) — e.g. allowed_tools, branch_prefix. */
+    behavior?: Record<string, unknown>;
+    maxBudgetUsd?: number;
+    timeoutMinutes?: number;
+    ticketKey?: string;
+  } = {},
 ): Promise<SeededPipeline> {
   const [workspace] = await db
     .insert(schema.workspaces)
@@ -109,6 +119,7 @@ export async function seedPipeline(
       type: opts.executorType ?? 'mock',
       name: 'mock-exec',
       concurrencyLimit: 2,
+      config: opts.executorConfig ?? {},
     })
     .returning({ id: schema.executors.id });
 
@@ -122,6 +133,9 @@ export async function seedPipeline(
       statusSuccess: 'Code Review',
       statusFailure: 'Blocked',
       maxAttempts: opts.maxAttempts ?? 2,
+      behavior: opts.behavior ?? {},
+      maxBudgetUsd: opts.maxBudgetUsd !== undefined ? String(opts.maxBudgetUsd) : null,
+      timeoutMinutes: opts.timeoutMinutes ?? 45,
     })
     .returning({ id: schema.agents.id });
 
@@ -129,7 +143,7 @@ export async function seedPipeline(
     .insert(schema.tickets)
     .values({
       workspaceId: workspace.id,
-      jiraKey: 'BRIG-1',
+      jiraKey: opts.ticketKey ?? 'BRIG-1',
       jiraId: '10001',
       summary: 'Test ticket',
     })

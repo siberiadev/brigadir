@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","session_id":"sess-noreport-1","model":"claude-sonnet-5","tools":["Read"],"mcp_servers":[]}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Doing something, but never produces structured output."}]}}
+{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.0030,"usage":{"input_tokens":100,"output_tokens":40},"session_id":"sess-noreport-1","num_turns":1}

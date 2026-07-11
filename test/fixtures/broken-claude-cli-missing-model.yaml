@@ -1,0 +1,35 @@
+# BROKEN: claude_cli executor missing the required `model` field (T075/T089).
+workspace:
+  jira_site: https://acme.atlassian.net
+  project_key: BRIG
+  board_id: 42
+  default_branch: main
+  repositories:
+    - name: product
+      url: git@github.com:acme/product.git
+      default_branch: main
+
+executors:
+  mock-exec:
+    type: mock
+    concurrency: 2
+  coder:
+    type: claude_cli
+    repository: product
+    concurrency: 1
+
+agents:
+  - name: implementer
+    executor: mock-exec
+    status_success: "Code Review"
+    status_failure: "Blocked"
+    instruction: |
+      Implement the ticket.
+  - name: claude-implementer
+    executor: coder
+    status_success: "Code Review"
+    status_failure: "Blocked"
+    behavior:
+      allowed_tools: ["Read"]
+    instruction: |
+      Implement the ticket.

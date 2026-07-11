@@ -2,3 +2,5 @@ export * from './executors.module';
 export * from './agent-executor.interface';
 export * from './executor.registry';
 export * from './mock.executor';
+export * from './claude-cli/claude-cli.executor';
+export * from './claude-cli/claude-cli.config';

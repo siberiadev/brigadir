@@ -130,4 +130,85 @@ describe('AgentsConfigSchema', () => {
       ).toBe(true);
     }
   });
+
+  // --- iteration 3: claude_cli executor branch (T075) ---
+
+  const withClaudeCli = () => {
+    const config = structuredClone(valid) as {
+      workspace: { repositories?: { name: string; url: string; default_branch?: string }[] };
+      executors: Record<string, unknown>;
+      agents: { executor: string; behavior?: Record<string, unknown> }[];
+    };
+    config.workspace.repositories = [
+      { name: 'product', url: 'git@github.com:acme/product.git', default_branch: 'main' },
+    ];
+    config.executors['coder'] = {
+      type: 'claude_cli',
+      model: 'claude-sonnet-5',
+      repository: 'product',
+      concurrency: 1,
+    };
+    config.agents[0].executor = 'coder';
+    config.agents[0].behavior = { allowed_tools: ['Read', 'Edit', 'Bash(git *)'] };
+    return config;
+  };
+
+  it('accepts a valid claude_cli executor alongside mock in one config', () => {
+    const config = withClaudeCli();
+    config.executors['mock-exec'] = { type: 'mock', concurrency: 2 };
+    const res = AgentsConfigSchema.safeParse(config);
+    expect(res.success).toBe(true);
+    if (res.success) {
+      const coder = res.data.executors['coder'];
+      expect(coder.type).toBe('claude_cli');
+      if (coder.type === 'claude_cli') {
+        expect(coder.cliPath).toBe('claude');
+        expect(coder.keepFailedWorktrees).toBe(false);
+        expect(coder.killGraceMs).toBe(5000);
+        expect(coder.cancelPollMs).toBe(3000);
+      }
+    }
+  });
+
+  it('rejects a claude_cli `repository` not in workspace.repositories[].name', () => {
+    const config = withClaudeCli();
+    (config.executors['coder'] as { repository: string }).repository = 'does-not-exist';
+    const res = AgentsConfigSchema.safeParse(config);
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      const issue = res.error.issues.find((i) => i.path.join('.') === 'executors.coder.repository');
+      expect(issue).toBeDefined();
+      expect(issue?.message).toContain('does-not-exist');
+    }
+  });
+
+  it('rejects a claude_cli executor missing `model`', () => {
+    const config = withClaudeCli();
+    delete (config.executors['coder'] as { model?: string }).model;
+    const res = AgentsConfigSchema.safeParse(config);
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues.some((i) => i.path.join('.') === 'executors.coder.model')).toBe(true);
+    }
+  });
+
+  it('rejects a claude_cli agent with allowedTools omitted and empty behavior.allowed_tools', () => {
+    const config = withClaudeCli();
+    config.agents[0].behavior = {};
+    const res = AgentsConfigSchema.safeParse(config);
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(
+        res.error.issues.some((i) => i.path.join('.') === 'agents.0.behavior.allowed_tools'),
+      ).toBe(true);
+    }
+  });
+
+  it('accepts a claude_cli agent when the executor itself declares allowedTools', () => {
+    const config = withClaudeCli();
+    (config.executors['coder'] as { allowedTools?: string[] }).allowedTools = ['Read', 'Edit'];
+    config.agents[0].behavior = {};
+    const res = AgentsConfigSchema.safeParse(config);
+    expect(res.success).toBe(true);
+  });
 });

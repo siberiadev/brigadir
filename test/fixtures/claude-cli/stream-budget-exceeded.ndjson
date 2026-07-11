@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","session_id":"sess-budget-1","model":"claude-sonnet-5","tools":["Read","Edit","Bash"],"mcp_servers":[]}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu-1","name":"Bash","input":{"command":"pnpm test"}}],"usage":{"input_tokens":5000,"output_tokens":900}}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Iterating on a large refactor across many files."}],"usage":{"input_tokens":8000,"output_tokens":1500}}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Still working - this ticket needs more turns than usual."}],"usage":{"input_tokens":12000,"output_tokens":2200}}}
+{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.12,"usage":{"input_tokens":25000,"output_tokens":4600},"session_id":"sess-budget-1","num_turns":3,"structured_output":{"schema_version":1,"outcome":"success","summary":"Finished after a long session.","checks":[{"name":"tests_pass","status":"pass"}]}}

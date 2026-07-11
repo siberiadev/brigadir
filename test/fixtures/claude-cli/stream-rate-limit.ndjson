@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","session_id":"sess-ratelimit-1","model":"claude-sonnet-5","tools":["Read"],"mcp_servers":[]}
+{"type":"system","subtype":"api_retry","error":"rate_limit","retry_delay_ms":900000,"attempt":1,"max_retries":3}

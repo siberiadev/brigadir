@@ -9,12 +9,15 @@ import { IngestModule } from '@brigadir/ingest';
 import { ReconcileProcessor } from './reconcile.processor';
 import { ReconcileScheduler } from './reconcile.scheduler';
 import { RunProcessor } from './run.processor';
+import { ClaudeCliRunProcessor } from './claude-cli-run.processor';
 
 /**
  * Worker composition. JiraModule.forRootAsync() is @Global and LAZY — it exposes
  * JIRA_CLIENT app-wide without reading credentials at boot (credential-free boot;
  * the reconcile pass resolves the client on first use). PipelineModule drives the
- * run→Jira write; IngestModule owns the reconcile job.
+ * run→Jira write; IngestModule owns the reconcile job. `ClaudeCliRunProcessor`
+ * binds to `run.claude_cli`, auto-provisioned by `QueuesModule.register()`
+ * whenever `agents.yaml` declares a `claude_cli` executor (T083).
  */
 @Module({
   imports: [
@@ -26,6 +29,6 @@ import { RunProcessor } from './run.processor';
     PipelineModule,
     IngestModule,
   ],
-  providers: [RunProcessor, ReconcileProcessor, ReconcileScheduler],
+  providers: [RunProcessor, ClaudeCliRunProcessor, ReconcileProcessor, ReconcileScheduler],
 })
 export class WorkerAppModule {}
