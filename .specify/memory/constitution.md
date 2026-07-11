@@ -132,8 +132,12 @@ Secrets never appear in argv and never in the agent process environment.
 
 - Run tokens, API keys, and git credentials live only in the environment of
   the tool process (MCP server) or behind a broker/credential helper — out
-  of the agent's reach. Config files reference them via env interpolation
-  (e.g. `${BRIGADIR_RUN_TOKEN}`), never inline values.
+  of the agent's reach. Delivery mechanism (amended 1.2.0 after a live probe,
+  2026-07-11): a per-run `0600` config file OUTSIDE the worktree with the
+  secret as a literal in the tool-server's own `env` block, deleted at run
+  cleanup. `${VAR}` interpolation is FORBIDDEN for run secrets — expansion
+  requires the value in the CLI process env, which the agent's Bash tool
+  inherits (proven leak on v2.1.207). Secrets never in argv either way.
 - Agent environments MUST be sanitized (no `ANTHROPIC_API_KEY` or other
   host secrets leaking in); CLI executors MUST use `--strict-mcp-config`
   and explicit `--settings` so host configuration cannot leak into a run.
@@ -233,4 +237,4 @@ The stack is fixed; deviations require a constitution amendment:
   Any deliberate violation MUST appear in the plan's Complexity Tracking
   table.
 
-**Version**: 1.1.0 | **Ratified**: 2026-07-10 | **Last Amended**: 2026-07-11
+**Version**: 1.2.0 | **Ratified**: 2026-07-10 | **Last Amended**: 2026-07-11
