@@ -126,6 +126,9 @@ CREATE TABLE workspaces (
   name            text NOT NULL,
   jira_site_url   text NOT NULL,               -- https://acme.atlassian.net
   jira_project_key text NOT NULL,              -- BRIG
+  jira_board_id   int,                         -- миграция итерации 2: привязка к борде
+  jira_board_type text,                        -- kanban | scrum (определяется через Agile API при подключении)
+                                               -- scrum => скоуп поллера = активный спринт (см. spec 0.3 и plan-internal п.5)
   jira_auth_type  text NOT NULL DEFAULT 'api_token',  -- api_token (решение 2026-07-10: основной способ; oauth_3lo — резерв полной продуктовой версии)
   jira_credentials bytea NOT NULL,             -- encrypted (AES-256-GCM, key from env/KMS)
   jira_credential_expires_at timestamptz,      -- API token <= 1 year: alerting!

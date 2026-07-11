@@ -19,6 +19,7 @@ Phase 0–1 — детально (эндпоинты, таблицы, повед
 workspace:
   jira_site: https://acme.atlassian.net
   project_key: BRIG
+  board_id: 42            # Jira board; тип (kanban/scrum) система определит сама
   repo: git@github.com:acme/product.git
   default_branch: main
 executors:
@@ -65,7 +66,12 @@ agents:
 ## 0.3 IngestModule
 
 1. **Поллер** (`upsertJobScheduler('reconcile', {every: 300_000})`):
-   - JQL: `project = {key} AND updated >= "{high_water_mark - 60s}"` (überlap 60 c), fields: `status,summary,updated`.
+   - **Скоуп зависит от типа борды** (решение 2026-07-11, plan-internal п.5). Тип определяется при подключении workspace через `GET /rest/agile/1.0/board/{board_id}` и кэшируется в `workspaces`:
+     - kanban: `project = {key} AND updated >= "{HWM - 60s}"`;
+     - scrum: `project = {key} AND sprint IN openSprints() AND updated >= "{HWM - 60s}"`; нет активного спринта → пасс вхолостую.
+   - fields: `status,summary,updated`.
+   - **Вход в скоуп = событие**: тикет, впервые появившийся в скоупе уже в триггер-статусе (добавлен в активный спринт, старт спринта), обрабатывается как `status_changed` (diff против отсутствующего `last_seen_status`).
+   - **Смена активного спринта**: старт спринта не обновляет `updated` у задач → поллер хранит `active_sprint_id` в `workspaces.settings`; при изменении — полный рескан задач спринта без условия по `updated` (одноразово), затем обычный HWM-режим.
    - Для каждого issue: upsert `tickets`, diff `last_seen_status` vs фактический → событие `status_changed` в PipelineModule → обновить high-water mark (max `updated`, персистится в `workspaces.settings`).
    - Также: watchdog прогонов (running дольше timeout+grace → kill/fail), sweep застрявших `queued`.
 2. **Webhook endpoint** `POST /webhooks/jira` (опционален в Phase 0, включается если админ создал system webhook):
@@ -190,9 +196,12 @@ claude -p "<prompt>" \
 ```
 # workspaces (создание/подключение Jira — решение 2026-07-10)
 GET  /api/workspaces
-POST /api/workspaces                      # {name, jira_site_url, jira_email, jira_api_token, project_key}
+POST /api/workspaces                      # {name, jira_site_url, jira_email, jira_api_token, board}
+                                          # board — id или URL борды (id извлекается из URL)
                                           # перед сохранением: GET /myself (валидация токена) +
-                                          # GET /project/{key} (доступ к проекту); ошибка -> 422 с причиной
+                                          # GET /rest/agile/1.0/board/{id} (доступ, тип kanban/scrum,
+                                          # project_key из location) — тип и ключ сохраняются в workspace;
+                                          # ошибка -> 422 с причиной
 PUT  /api/workspaces/:id/jira-connection  # переподключение/ротация токена (та же валидация)
 GET  /api/workspaces/:id/statuses         # статусы проекта из Jira — для селектов в форме агента
 
