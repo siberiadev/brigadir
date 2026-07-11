@@ -1,0 +1,20 @@
+# BROKEN config referenced by quickstart.md step 5 (config fail-fast smoke).
+# Dangling executor reference — agent points at an executor key that is absent.
+workspace:
+  jira_site: https://acme.atlassian.net
+  project_key: BRIG
+  repo: git@github.com:acme/product.git
+  default_branch: main
+
+executors:
+  mock-exec:
+    type: mock
+    concurrency: 2
+
+agents:
+  - name: implementer
+    executor: clod-sub
+    status_success: "Code Review"
+    status_failure: "Blocked"
+    instruction: |
+      Implement the ticket.

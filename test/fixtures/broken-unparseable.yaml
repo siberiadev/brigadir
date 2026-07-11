@@ -1,0 +1,7 @@
+# BROKEN: not valid YAML (unclosed bracket / bad indentation).
+workspace:
+  jira_site: https://acme.atlassian.net
+  project_key: BRIG
+executors: [mock-exec: {type: mock, concurrency: 2
+agents:
+  - name: implementer

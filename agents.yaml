@@ -1,0 +1,31 @@
+# agents.yaml — BRIGADIR Phase 0 config (iteration 1: mock executor).
+# Validated by AgentsConfigSchema at startup; a bad config aborts boot with a
+# path-qualified error. YAML is the Phase 0 source of agents; the backend seeds
+# these rows into Postgres on boot.
+workspace:
+  jira_site: https://acme.atlassian.net
+  project_key: BRIG
+  repo: git@github.com:acme/product.git
+  default_branch: main
+
+executors:
+  mock-exec:
+    type: mock
+    concurrency: 2
+
+agents:
+  - name: implementer
+    executor: mock-exec
+    trigger_status: "Ready for Dev"
+    status_running: "In Progress"
+    status_success: "Code Review"
+    status_failure: "Blocked"
+    timeout_minutes: 45
+    max_budget_usd: 3
+    max_attempts: 2
+    behavior:
+      branch_prefix: feat
+      allowed_tools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash(git *)"]
+      required_checks: [tests_pass, lint_pass]
+    instruction: |
+      Implement the ticket. Run tests.

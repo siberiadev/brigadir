@@ -1,0 +1,23 @@
+# Valid config fixture — mirrors the root agents.yaml (mock executor).
+workspace:
+  jira_site: https://acme.atlassian.net
+  project_key: BRIG
+  repo: git@github.com:acme/product.git
+  default_branch: main
+
+executors:
+  mock-exec:
+    type: mock
+    concurrency: 2
+
+agents:
+  - name: implementer
+    executor: mock-exec
+    trigger_status: "Ready for Dev"
+    status_running: "In Progress"
+    status_success: "Code Review"
+    status_failure: "Blocked"
+    timeout_minutes: 45
+    max_attempts: 2
+    instruction: |
+      Implement the ticket. Run tests.

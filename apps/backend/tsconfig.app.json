@@ -5,5 +5,5 @@
     "outDir": "../../dist/apps/backend"
   },
   "include": ["src/**/*", "../../libs/**/*"],
-  "exclude": ["node_modules", "dist", "test", "**/*.spec.ts"]
+  "exclude": ["node_modules", "dist", "test", "**/*.spec.ts", "../../libs/**/*.spec.ts"]
 }

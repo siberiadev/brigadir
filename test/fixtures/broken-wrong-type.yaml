@@ -1,0 +1,19 @@
+# BROKEN: executor `concurrency` must be an integer, not a string.
+workspace:
+  jira_site: https://acme.atlassian.net
+  project_key: BRIG
+  repo: git@github.com:acme/product.git
+  default_branch: main
+
+executors:
+  mock-exec:
+    type: mock
+    concurrency: "two"
+
+agents:
+  - name: implementer
+    executor: mock-exec
+    status_success: "Code Review"
+    status_failure: "Blocked"
+    instruction: |
+      Implement the ticket.

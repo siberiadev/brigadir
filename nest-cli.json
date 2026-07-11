@@ -5,7 +5,7 @@
   "monorepo": true,
   "root": "apps/backend",
   "compilerOptions": {
-    "webpack": false,
+    "webpack": true,
     "tsConfigPath": "apps/backend/tsconfig.app.json",
     "deleteOutDir": true
   },
@@ -26,6 +26,15 @@
       "sourceRoot": "apps/worker/src",
       "compilerOptions": {
         "tsConfigPath": "apps/worker/tsconfig.app.json"
+      }
+    },
+    "smoke": {
+      "type": "application",
+      "root": "apps/smoke",
+      "entryFile": "main.smoke",
+      "sourceRoot": "apps/smoke/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/smoke/tsconfig.app.json"
       }
     },
     "database": {

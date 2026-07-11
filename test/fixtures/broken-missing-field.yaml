@@ -1,0 +1,18 @@
+# BROKEN: agent is missing the required `status_success` field.
+workspace:
+  jira_site: https://acme.atlassian.net
+  project_key: BRIG
+  repo: git@github.com:acme/product.git
+  default_branch: main
+
+executors:
+  mock-exec:
+    type: mock
+    concurrency: 2
+
+agents:
+  - name: implementer
+    executor: mock-exec
+    status_failure: "Blocked"
+    instruction: |
+      Implement the ticket.

@@ -2,7 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "declaration": false,
-    "outDir": "../../dist/apps/worker"
+    "outDir": "../../dist/apps/smoke"
   },
   "include": ["src/**/*", "../../libs/**/*"],
   "exclude": ["node_modules", "dist", "test", "**/*.spec.ts", "../../libs/**/*.spec.ts"]

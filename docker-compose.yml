@@ -1,0 +1,66 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: brigadir
+      POSTGRES_PASSWORD: brigadir
+      POSTGRES_DB: brigadir
+    ports:
+      - '5432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U brigadir -d brigadir']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: .
+    command: node dist/apps/backend/main.api.js
+    environment:
+      DATABASE_URL: postgres://brigadir:brigadir@postgres:5432/brigadir
+      REDIS_URL: redis://redis:6379
+      AGENTS_CONFIG_PATH: ./agents.yaml
+      PORT: '3000'
+    ports:
+      - '3000:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  worker:
+    build: .
+    command: node dist/apps/worker/main.worker.js
+    environment:
+      DATABASE_URL: postgres://brigadir:brigadir@postgres:5432/brigadir
+      REDIS_URL: redis://redis:6379
+      AGENTS_CONFIG_PATH: ./agents.yaml
+    # Graceful shutdown: worker.close() drains in-flight jobs (research D8 / NFR 1).
+    stop_grace_period: 35s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
