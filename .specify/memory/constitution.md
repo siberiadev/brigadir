@@ -1,7 +1,16 @@
 <!--
 Sync Impact Report
 ==================
-Version change: 1.0.0 → 1.1.0 (2026-07-11)
+Version change: 1.1.0 → 1.2.0 (2026-07-11)
+Amendments (feature 004 planning, live probes on CLI v2.1.207):
+- Principle V: run-secret delivery = literal in a 0600 tool-server env-block
+  config file outside the worktree; ${VAR} interpolation FORBIDDEN (proven
+  Bash-visible leak). Replaces the outdated ${BRIGADIR_RUN_TOKEN} example.
+- Principle IV: exactly one completion channel per run; callback-wired runs
+  have no structured-output rescue path (spec 004 FR-011).
+Templates unaffected.
+
+Previous: 1.0.0 → 1.1.0 (2026-07-11)
 Amendment: added "Lazy resource resolution" rule to Technology Constraints —
 root-caused in iteration 1 (eager Redis connection in a @Module decorator
 argument silently fell back to localhost:6379; see docs/progress.md,
@@ -116,9 +125,11 @@ schema-valid structured report is received.
   the run to `awaiting_human`, after which the agent process may exit
   without `complete_task`.
 - Any other process exit without `complete_task` MUST be recorded as
-  `failed` with diagnostics; enforcement (Stop-hook for Claude executors,
-  fallback structured-output channels) exists to make this rare, never to
-  relax it.
+  `failed` with diagnostics; enforcement (Stop-hook for Claude executors)
+  exists to make this rare, never to relax it. Exactly ONE completion
+  channel is live per run (amended 1.2.0): callback-wired runs have no
+  structured-output rescue path — a silent fallback would mask agents that
+  never report and let a broken callback channel degrade silently.
 - A repeated `complete` for a finished run MUST be rejected (409) —
   completion is idempotent.
 
