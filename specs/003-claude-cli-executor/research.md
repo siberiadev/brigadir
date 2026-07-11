@@ -317,18 +317,29 @@ concurrency limits across executors — arch §4 wants per-type concurrency).
 
 ---
 
-## D11 — Budget enforcement (belt + suspenders)
+## D11 — Budget enforcement (REVISED after empirical probe, 2026-07-11)
 
-**Decision.** (a) Pass native `--max-budget-usd <cfg.maxBudgetUsd>` so the CLI
-self-limits. (b) Independently, the stream parser tracks cumulative
-`total_cost_usd` from result/usage events; when it crosses `limits.maxBudgetUsd`
-the executor group-kills (D2) and resolves `exitStatus:'crashed'` (maps to
-`failed`) with a **budget-exceeded** diagnostic (FR-015). Our own check
-guarantees the process-group kill and a deterministic single finalize even if the
-native flag's accounting lags.
+**Empirical finding (live probe, CLI v2.1.207).** Intermediate stream-json
+events carry only per-message token `usage` — **no USD figure appears anywhere
+mid-stream**. `total_cost_usd` exists ONLY on the terminal `result` event.
+A watchdog that "tracks cumulative reported cost mid-run" therefore has nothing
+to observe and would never fire in production.
 
-**Rationale.** FR-015 requires *we* terminate and fail on the ceiling; the native
-flag is a helpful first line but we don't depend on it alone.
+**Decision.** (a) Native `--max-budget-usd <cfg.maxBudgetUsd>` is THE mid-run
+enforcement — the CLI tracks its own spend internally and self-stops. (b) The
+executor verifies post-hoc: on the terminal `result` event, if `total_cost_usd`
+exceeds `limits.maxBudgetUsd` or the result signals a budget stop
+(`is_error`/`terminal_reason`), it resolves `exitStatus:'crashed'` with a
+**budget-exceeded** diagnostic (FR-015's fail-closed classification); the normal
+group-kill/cleanup path then reaps any lingering children. (c) NO token→USD
+estimation from mid-stream `usage` (would require maintaining pricing tables —
+rejected as fragile over-engineering). If a future CLI version starts reporting
+USD mid-stream, the same ceiling comparison applies incrementally — guarded,
+not assumed.
+
+**Rationale.** Enforce with the mechanism that actually has the data (the CLI),
+verify with the signal we actually receive (the terminal event); never test or
+ship a code path the real stream cannot trigger.
 
 ---
 
