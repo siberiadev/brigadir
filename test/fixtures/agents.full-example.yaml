@@ -1,0 +1,39 @@
+# Full documented workspace example from docs/spec.md §0.1 — used by the
+# config forward-compatibility test (T041 / FR-039). board_id + scope_jql are
+# functional this iteration; branch_prefix + repositories[] are validated but
+# unused until iteration 3. Must pass fail-fast startup validation and seed.
+workspace:
+  jira_site: https://acme.atlassian.net
+  project_key: BRIG
+  board_id: 42
+  scope_jql: 'labels = ai-pipeline'
+  branch_prefix: feat
+  repositories:
+    - name: product
+      url: git@github.com:acme/product.git
+      default_branch: main
+    - name: frontend
+      url: git@github.com:acme/frontend.git
+      default_branch: main
+
+executors:
+  mock-exec:
+    type: mock
+    concurrency: 2
+
+agents:
+  - name: implementer
+    executor: mock-exec
+    trigger_status: "Ready for Dev"
+    status_running: "In Progress"
+    status_success: "Code Review"
+    status_failure: "Blocked"
+    timeout_minutes: 45
+    max_budget_usd: 3
+    max_attempts: 2
+    behavior:
+      branch_prefix: feat
+      allowed_tools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash(git *)", "Bash(pnpm *)"]
+      required_checks: [tests_pass, lint_pass]
+    instruction: |
+      Implement the ticket. Run tests.

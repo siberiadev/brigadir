@@ -24,7 +24,8 @@
       "@brigadir/app-config": ["libs/app-config/src"],
       "@brigadir/queues": ["libs/queues/src"],
       "@brigadir/runs": ["libs/runs/src"],
-      "@brigadir/executors": ["libs/executors/src"]
+      "@brigadir/executors": ["libs/executors/src"],
+      "@brigadir/jira": ["libs/jira/src"]
     }
   }
 }

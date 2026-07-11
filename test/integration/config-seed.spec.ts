@@ -40,6 +40,8 @@ describe('config → DB seeder (T017)', () => {
 
     expect(workspaces).toHaveLength(1);
     expect(workspaces[0].jiraProjectKey).toBe('BRIG');
+    expect(workspaces[0].jiraBoardId).toBe(42); // T040: board_id → column
+    expect(workspaces[0].jiraBoardType).toBeNull(); // populated later by introspection (T049)
     expect(executors).toHaveLength(1);
     expect(executors[0].name).toBe('mock-exec');
     expect(executors[0].type).toBe('mock');

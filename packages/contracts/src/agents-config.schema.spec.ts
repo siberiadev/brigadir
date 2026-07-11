@@ -5,6 +5,7 @@ const valid = {
   workspace: {
     jira_site: 'https://acme.atlassian.net',
     project_key: 'BRIG',
+    board_id: 42,
     repo: 'git@github.com:acme/product.git',
     default_branch: 'main',
   },
@@ -78,6 +79,55 @@ describe('AgentsConfigSchema', () => {
     expect(res.success).toBe(false);
     if (!res.success) {
       expect(res.error.issues.some((i) => i.path.join('.') === 'agents.1.name')).toBe(true);
+    }
+  });
+
+  // --- iteration 2: board binding + scope filter + forward-compat keys ---
+
+  it('accepts the full documented §0.1 workspace shape (board_id, scope_jql, branch_prefix, repositories[])', () => {
+    const full = structuredClone(valid);
+    full.workspace = {
+      jira_site: 'https://acme.atlassian.net',
+      project_key: 'BRIG',
+      board_id: 42,
+      scope_jql: 'labels = ai-pipeline',
+      branch_prefix: 'feat',
+      repositories: [
+        { name: 'product', url: 'git@github.com:acme/product.git', default_branch: 'main' },
+        { name: 'frontend', url: 'git@github.com:acme/frontend.git', default_branch: 'main' },
+      ],
+    } as (typeof valid)['workspace'];
+    const res = AgentsConfigSchema.safeParse(full);
+    expect(res.success).toBe(true);
+  });
+
+  it('rejects a workspace missing board_id with the field path', () => {
+    const broken = structuredClone(valid);
+    // @ts-expect-error intentional deletion for the test
+    delete broken.workspace.board_id;
+    const res = AgentsConfigSchema.safeParse(broken);
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues.some((i) => i.path.join('.') === 'workspace.board_id')).toBe(true);
+    }
+  });
+
+  it('still rejects a genuinely unknown workspace key (strict)', () => {
+    const broken = structuredClone(valid);
+    // @ts-expect-error intentional unknown key
+    broken.workspace.totally_unknown = true;
+    const res = AgentsConfigSchema.safeParse(broken);
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      // strict() reports unrecognized keys at the object's path with the key name in `keys`.
+      expect(
+        res.error.issues.some(
+          (i) =>
+            i.code === 'unrecognized_keys' &&
+            i.path.join('.') === 'workspace' &&
+            (i as { keys?: string[] }).keys?.includes('totally_unknown'),
+        ),
+      ).toBe(true);
     }
   });
 });

@@ -20,11 +20,29 @@ export const EXECUTOR_TYPES = [
   'deepseek_api',
 ] as const;
 
+/** A git repository the workspace can operate on (validated now, consumed in iteration 3). */
+export const RepositoryConfigSchema = z
+  .object({
+    name: z.string().min(1),
+    url: z.string().min(1),
+    default_branch: z.string().min(1).default('main'),
+  })
+  .strict();
+
 export const WorkspaceConfigSchema = z
   .object({
     jira_site: z.string().url(),
     project_key: z.string().min(1),
-    repo: z.string().min(1),
+    // Board binding (iteration 2, plan-internal decision 5): required going
+    // forward; the system introspects the board TYPE via the Agile API.
+    board_id: z.number().int().positive(),
+    // Optional global scope filter, ANDed into every reconciliation query (FR-038).
+    scope_jql: z.string().min(1).optional(),
+    // Forward-compat: validated for shape but unused until iteration 3 (FR-027/FR-039).
+    branch_prefix: z.string().min(1).optional(),
+    repositories: z.array(RepositoryConfigSchema).min(1).optional(),
+    // Deprecated single-repo fields — kept optional for iteration-1 config back-compat.
+    repo: z.string().min(1).optional(),
     default_branch: z.string().min(1).default('main'),
   })
   .strict();
@@ -98,6 +116,7 @@ export const AgentsConfigSchema = z
     });
   });
 
+export type RepositoryConfig = z.infer<typeof RepositoryConfigSchema>;
 export type WorkspaceConfig = z.infer<typeof WorkspaceConfigSchema>;
 export type ExecutorConfig = z.infer<typeof ExecutorConfigSchema>;
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;

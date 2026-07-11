@@ -2,6 +2,7 @@
 workspace:
   jira_site: https://acme.atlassian.net
   project_key: BRIG
+  board_id: 42
   repo: git@github.com:acme/product.git
   default_branch: main
 

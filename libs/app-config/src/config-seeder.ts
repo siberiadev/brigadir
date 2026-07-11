@@ -48,11 +48,24 @@ export class ConfigSeeder {
         .limit(1);
 
       let workspaceId: string;
+      // board_id → column (jira_board_type is populated later by connect-time
+      // introspection, T049). scope_jql / branch_prefix / repositories live in
+      // the settings blob (architecture §3); repo/default_branch kept for
+      // iteration-1 back-compat.
+      const settings = {
+        ...(workspace.scope_jql !== undefined ? { scope_jql: workspace.scope_jql } : {}),
+        ...(workspace.branch_prefix !== undefined ? { branch_prefix: workspace.branch_prefix } : {}),
+        ...(workspace.repo !== undefined ? { repo: workspace.repo } : {}),
+        ...(workspace.default_branch !== undefined
+          ? { default_branch: workspace.default_branch }
+          : {}),
+      };
       const workspaceValues = {
         name: workspaceName,
         jiraSiteUrl: workspace.jira_site,
         jiraProjectKey: workspace.project_key,
-        settings: { repo: workspace.repo, default_branch: workspace.default_branch },
+        jiraBoardId: workspace.board_id,
+        settings,
       };
 
       if (existing.length > 0) {

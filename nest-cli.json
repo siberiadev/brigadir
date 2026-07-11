@@ -81,6 +81,15 @@
       "compilerOptions": {
         "tsConfigPath": "libs/executors/tsconfig.lib.json"
       }
+    },
+    "jira": {
+      "type": "library",
+      "root": "libs/jira",
+      "entryFile": "index",
+      "sourceRoot": "libs/jira/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/jira/tsconfig.lib.json"
+      }
     }
   }
 }
