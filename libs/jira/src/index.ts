@@ -3,6 +3,7 @@ export * from './jira.errors';
 export * from './jira.module';
 export * from './workspace-connection.service';
 export * from './basic-auth-jira.client';
+export * from './lazy-jira.client';
 export * from './transition-discovery';
 export * from './adf-composer';
 export * from './credentials.codec';

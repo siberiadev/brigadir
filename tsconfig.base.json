@@ -25,7 +25,9 @@
       "@brigadir/queues": ["libs/queues/src"],
       "@brigadir/runs": ["libs/runs/src"],
       "@brigadir/executors": ["libs/executors/src"],
-      "@brigadir/jira": ["libs/jira/src"]
+      "@brigadir/jira": ["libs/jira/src"],
+      "@brigadir/pipeline": ["libs/pipeline/src"],
+      "@brigadir/ingest": ["libs/ingest/src"]
     }
   }
 }

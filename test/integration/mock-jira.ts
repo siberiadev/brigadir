@@ -5,11 +5,12 @@ import type { ADFDoc, JiraIssue, JiraIssueLink, StatusCategoryKey } from '@briga
 /**
  * Configurable mock Jira (contracts.md C8 / research D11) over msw node
  * interceptors on global fetch. Reproduces: /search/jql nextPageToken
- * pagination echoing requested fields, Agile board/{id} + active-sprint,
- * /transitions GET+POST with 409-on-cue, 429 + Retry-After on cue, ADF comment
- * capture, and issuelinks. Backed by an in-memory store the test drives.
- *
- * Postgres/Redis stay real (global-setup); only Jira HTTP is mocked.
+ * pagination echoing requested fields (and applying a small, structured subset
+ * of the JQL scope — updated/sprint/labels/key), Agile board/{id} +
+ * active-sprint, /transitions GET+POST with 409-on-cue, 429 + Retry-After on
+ * cue, ADF comment capture, and issuelinks (resolved LIVE from the blocker's
+ * current status so moving a blocker changes the gate). Backed by an in-memory
+ * store the test drives. Postgres/Redis stay real (global-setup).
  */
 
 export interface MockJiraConfig {
@@ -29,7 +30,9 @@ interface StoredIssue {
   updated: string;
   issueType: string;
   sprintId?: number;
-  issuelinks: JiraIssueLink[];
+  labels: string[];
+  /** keys of blockers ("is blocked by"); resolved to live status on read. */
+  blockedBy: string[];
 }
 
 // Default status → category catalog for the statuses the tests use.
@@ -56,11 +59,14 @@ export interface MockJira {
       updated?: string;
       issueType?: string;
       sprintId?: number;
+      labels?: string[];
     },
   ): void;
   setStatus(key: string, status: string): void;
   setCategory(status: string, category: StatusCategoryKey): void;
   addBlockedByLink(key: string, blockerKey: string): void;
+  /** Move a blocker to a new status (and optionally set that status's category). */
+  moveBlocker(blockerKey: string, status: string, category?: StatusCategoryKey): void;
   startSprint(sprintId: number, issueKeys: string[]): void;
   arm409OnNextTransition(key: string): void;
   arm429(retryAfterSeconds: number): void;
@@ -88,6 +94,17 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
 
   const catOf = (status: string): StatusCategoryKey => category[status] ?? 'indeterminate';
 
+  const linkFor = (blockerKey: string): JiraIssueLink => {
+    const blocker = issues.get(blockerKey);
+    const status = blocker
+      ? { name: blocker.statusName, statusCategory: { key: catOf(blocker.statusName) } }
+      : { name: 'Unknown', statusCategory: { key: 'indeterminate' as StatusCategoryKey } };
+    return {
+      type: { name: 'Blocks', inward: 'is blocked by', outward: 'blocks' },
+      inwardIssue: { key: blockerKey, fields: { status } },
+    };
+  };
+
   const toJiraIssue = (i: StoredIssue): JiraIssue => ({
     key: i.key,
     id: i.id,
@@ -95,9 +112,43 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
       summary: i.summary,
       status: { name: i.statusName, statusCategory: { key: catOf(i.statusName) } },
       updated: i.updated,
-      issuelinks: i.issuelinks,
+      issuelinks: i.blockedBy.map(linkFor),
     },
   });
+
+  /**
+   * Apply the structured subset of the poller JQL the mock understands:
+   * `updated >= "X"`, `sprint in (…)`, `key in (…)`, `labels = X` / `labels in (…)`.
+   * Everything else (project clause, ORDER BY) is ignored.
+   */
+  const matchesJql = (i: StoredIssue, jql: string): boolean => {
+    const upd = jql.match(/updated\s*>=\s*"([^"]+)"/i);
+    if (upd) {
+      const bound = Date.parse(upd[1]);
+      if (!Number.isNaN(bound) && Date.parse(i.updated) < bound) return false;
+    }
+    const sprint = jql.match(/sprint\s+in\s*\(([^)]*)\)/i);
+    if (sprint) {
+      const ids = sprint[1]
+        .split(',')
+        .map((s) => Number(s.trim()))
+        .filter((n) => !Number.isNaN(n));
+      if (i.sprintId == null || !ids.includes(i.sprintId)) return false;
+    }
+    const keyIn = jql.match(/key\s+in\s*\(([^)]*)\)/i);
+    if (keyIn) {
+      const keys = keyIn[1].split(',').map((s) => s.trim().replace(/^"|"$/g, ''));
+      if (!keys.includes(i.key)) return false;
+    }
+    const labelEq = jql.match(/labels\s*=\s*"?([\w-]+)"?/i);
+    if (labelEq && !i.labels.includes(labelEq[1])) return false;
+    const labelIn = jql.match(/labels\s+in\s*\(([^)]*)\)/i);
+    if (labelIn) {
+      const wanted = labelIn[1].split(',').map((s) => s.trim().replace(/^"|"$/g, ''));
+      if (!i.labels.some((l) => wanted.includes(l))) return false;
+    }
+    return true;
+  };
 
   /** Consume a one-shot 429 arm; returns a 429 response when armed. */
   const maybe429 = (): HttpResponse | null => {
@@ -111,12 +162,15 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
   };
 
   const server = setupServer(
-    // --- POST /rest/api/3/search/jql (nextPageToken pagination) ---
+    // --- POST /rest/api/3/search/jql (JQL scope + nextPageToken pagination) ---
     http.post(`${baseUrl}/rest/api/3/search/jql`, async ({ request }) => {
       const r = maybe429();
       if (r) return r;
-      const body = (await request.json()) as { fields?: string[]; nextPageToken?: string };
-      const all = [...issues.values()].sort((a, b) => a.key.localeCompare(b.key));
+      const body = (await request.json()) as { jql?: string; fields?: string[]; nextPageToken?: string };
+      const jql = body.jql ?? '';
+      const all = [...issues.values()]
+        .filter((i) => matchesJql(i, jql))
+        .sort((a, b) => a.key.localeCompare(b.key));
       const start = body.nextPageToken ? Number(body.nextPageToken) : 0;
       const slice = all.slice(start, start + pageSize);
       const nextStart = start + pageSize;
@@ -208,7 +262,8 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
         updated: opts.updated ?? new Date().toISOString(),
         issueType: opts.issueType ?? 'Task',
         sprintId: opts.sprintId,
-        issuelinks: [],
+        labels: opts.labels ?? [],
+        blockedBy: [],
       });
     },
     setStatus(key, status) {
@@ -220,15 +275,14 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
     },
     addBlockedByLink(key, blockerKey) {
       const issue = issues.get(key);
-      const blocker = issues.get(blockerKey);
-      if (!issue || !blocker) throw new Error(`seed both issues before linking (${key}, ${blockerKey})`);
-      issue.issuelinks.push({
-        type: { name: 'Blocks', inward: 'is blocked by', outward: 'blocks' },
-        inwardIssue: {
-          key: blocker.key,
-          fields: { status: { name: blocker.statusName, statusCategory: { key: catOf(blocker.statusName) } } },
-        },
-      });
+      if (!issue) throw new Error(`seed the blocked issue before linking (${key})`);
+      if (!issues.has(blockerKey)) throw new Error(`seed the blocker before linking (${blockerKey})`);
+      issue.blockedBy.push(blockerKey);
+    },
+    moveBlocker(blockerKey, status, cat) {
+      const i = issues.get(blockerKey);
+      if (i) i.statusName = status;
+      if (cat) category[status] = cat;
     },
     startSprint(sprintId, issueKeys) {
       activeSprintId = sprintId;

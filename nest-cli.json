@@ -90,6 +90,24 @@
       "compilerOptions": {
         "tsConfigPath": "libs/jira/tsconfig.lib.json"
       }
+    },
+    "pipeline": {
+      "type": "library",
+      "root": "libs/pipeline",
+      "entryFile": "index",
+      "sourceRoot": "libs/pipeline/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/pipeline/tsconfig.lib.json"
+      }
+    },
+    "ingest": {
+      "type": "library",
+      "root": "libs/ingest",
+      "entryFile": "index",
+      "sourceRoot": "libs/ingest/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/ingest/tsconfig.lib.json"
+      }
     }
   }
 }

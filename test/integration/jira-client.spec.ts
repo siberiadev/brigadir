@@ -113,22 +113,26 @@ describe('JiraModule.forRootAsync resolves the client from the workspace row (T0
     });
   }
 
-  it('builds the client at context init and issues a read (getBoard)', async () => {
+  it('resolves the client from the workspace row on first use and issues a read (getBoard)', async () => {
     await seedWorkspace(encodeJiraCredentials({ email: 'bot@acme.io', api_token: 'tok' }));
     const moduleRef = await Test.createTestingModule({
       imports: [DatabaseModule.forRoot({ databaseUrl: h.url }), JiraModule.forRootAsync()],
     }).compile();
     const client = moduleRef.get<JiraClient>(JIRA_CLIENT);
+    // Lazy: compile() reads no credentials; the first call resolves the client.
     expect(await client.getBoard(42)).toEqual({ type: 'scrum', projectKey: 'BRIG' });
     await moduleRef.close();
   });
 
-  it('fails clearly when credentials are the iteration-1 placeholder (no silent fallback)', async () => {
+  it('boot stays credential-free; placeholder credentials fail clearly on first use (no silent fallback)', async () => {
     await seedWorkspace(Buffer.from('placeholder-jira-credentials'));
-    await expect(
-      Test.createTestingModule({
-        imports: [DatabaseModule.forRoot({ databaseUrl: h.url }), JiraModule.forRootAsync()],
-      }).compile(),
-    ).rejects.toThrow(/jira_credentials/i);
+    // Credential-free boot: building the module does NOT read/validate credentials.
+    const moduleRef = await Test.createTestingModule({
+      imports: [DatabaseModule.forRoot({ databaseUrl: h.url }), JiraModule.forRootAsync()],
+    }).compile();
+    const client = moduleRef.get<JiraClient>(JIRA_CLIENT);
+    // The failure surfaces on first use — lazily, with a clear diagnostic.
+    await expect(client.getBoard(42)).rejects.toThrow(/jira_credentials/i);
+    await moduleRef.close();
   });
 });

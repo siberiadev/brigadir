@@ -6,6 +6,7 @@ import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import { runQueueName, backoffStrategy } from '@brigadir/queues';
 import { RunsService, mapExitStatusToRunStatus } from '@brigadir/runs';
 import { ExecutorRegistry, type ExecutorResult, type RunContext } from '@brigadir/executors';
+import { PipelineService } from '@brigadir/pipeline';
 
 interface LoadedRun {
   runId: string;
@@ -39,6 +40,7 @@ export class RunProcessor extends WorkerHost {
     @Inject(DRIZZLE) private readonly db: BrigadirDb,
     private readonly runs: RunsService,
     private readonly registry: ExecutorRegistry,
+    private readonly pipeline: PipelineService,
   ) {
     super();
   }
@@ -55,6 +57,8 @@ export class RunProcessor extends WorkerHost {
     }
 
     await this.runs.markRunning(runId, attempt);
+    // Optional in-progress Jira transition at job start (non-fatal on failure).
+    await this.pipeline.onRunStarted(runId);
 
     let result: ExecutorResult;
     try {
@@ -79,6 +83,7 @@ export class RunProcessor extends WorkerHost {
         this.logger.error(`invalid report for run ${runId}: ${String(err)}`);
         await this.runs.finalizeStatus(runId, 'failed', { error: `invalid report: ${String(err)}` });
       }
+      await this.afterFinalize(runId);
       return;
     }
 
@@ -102,8 +107,23 @@ export class RunProcessor extends WorkerHost {
       }
       case 'finalize': {
         await this.runs.finalizeStatus(runId, decision.status, { error: result.diagnostics });
+        await this.afterFinalize(runId);
         return;
       }
+    }
+  }
+
+  /**
+   * Persist-then-write (FR-022, closes F2): the run result is already persisted;
+   * now drive the Jira side (transition + ADF comment). A Jira failure MUST NOT
+   * fail the job or burn an attempt — it is logged and left for reconcile drift
+   * repair to re-apply (the run stays terminal, its result intact).
+   */
+  private async afterFinalize(runId: string): Promise<void> {
+    try {
+      await this.pipeline.onRunFinished(runId);
+    } catch (err) {
+      this.logger.error(`onRunFinished failed for run ${runId} (will be repaired on reconcile): ${String(err)}`);
     }
   }
 
