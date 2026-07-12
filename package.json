@@ -7,7 +7,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "pnpm --filter @brigadir/contracts build && pnpm --filter @brigadir/mcp-server build && nest build backend && nest build worker",
+    "build": "pnpm --filter @brigadir/contracts build && pnpm --filter @brigadir/mcp-server build && nest build backend && nest build worker && pnpm --filter @brigadir/web build",
     "build:backend": "nest build backend",
     "build:worker": "nest build worker",
     "build:smoke": "nest build smoke",

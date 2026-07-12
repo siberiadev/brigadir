@@ -1,0 +1,390 @@
+<script setup lang="ts">
+import { computed, reactive, ref, watch } from 'vue';
+import type {
+  AgentResponse,
+  AgentWriteRequest,
+  BoardStatus,
+  ErrorIssue,
+  LintableAgent,
+  WorkspaceRepository,
+} from '@brigadir/contracts';
+// Runtime value: the SHARED linter, imported from its source module (ESM) so it
+// never drags the CJS barrel / node:crypto into the browser bundle.
+import { lintAgent } from '@brigadir/contracts/agent-linter';
+import { useStatuses } from '../../composables/useStatuses';
+import { useAgents, useCreateAgent, useUpdateAgent, useTestRun } from '../../composables/useAgents';
+import { ApiError } from '../../api/client';
+
+const props = defineProps<{
+  workspaceId: string;
+  agent?: AgentResponse | null;
+  repositories: WorkspaceRepository[];
+}>();
+const emit = defineEmits<{ saved: [warnings: ErrorIssue[]]; close: [] }>();
+
+const isEdit = computed(() => props.agent != null);
+
+// Force a live statuses re-fetch on open (FR-011); a 502 blocks status editing.
+const statusesQuery = useStatuses(props.workspaceId, { refresh: true });
+const boardStatuses = computed<BoardStatus[]>(() => statusesQuery.data.value?.statuses ?? []);
+const statusesUnavailable = computed(() => statusesQuery.isError.value);
+const statusById = computed(() => new Map(boardStatuses.value.map((s) => [s.name, s.id])));
+
+const agentsQuery = useAgents(props.workspaceId);
+// Only discovery seam for executors in the frozen API: reuse ids off existing
+// agents (an executors provisioning endpoint is deferred to iteration 6).
+const executorOptions = computed(() => {
+  const ids = new Set((agentsQuery.data.value ?? []).map((a) => a.executor_id).filter(Boolean));
+  return [...ids];
+});
+
+const a = props.agent;
+const form = reactive({
+  name: a?.name ?? '',
+  instruction: a?.instruction ?? '',
+  executor_id: a?.executor_id ?? '',
+  model: (a?.behavior?.model as string | undefined) ?? '',
+  trigger_status: a?.trigger_status ?? '',
+  trigger_jql: a?.trigger_jql ?? '',
+  status_running: a?.status_running ?? '',
+  status_success: a?.status_success ?? '',
+  status_failure: a?.status_failure ?? '',
+  timeout_minutes: a?.timeout_minutes ?? 45,
+  max_budget_usd: a?.max_budget_usd ?? null,
+  max_attempts: a?.max_attempts ?? 2,
+  repository: '',
+  branch_prefix: (a?.behavior?.branch_prefix as string | undefined) ?? '',
+  allowed_tools: (a?.behavior?.allowed_tools as string[] | undefined) ?? [],
+  required_checks: (a?.behavior?.required_checks as string[] | undefined) ?? [],
+  use_callback_channel: (a?.behavior?.use_callback_channel as boolean | undefined) ?? true,
+});
+
+// Default the executor to the first discoverable one for a fresh form.
+watch(executorOptions, (opts) => {
+  if (!form.executor_id && opts.length) form.executor_id = opts[0];
+});
+
+const showAdvanced = ref(false);
+
+// --- client-side linter mirror (same function the server enforces, T120) ---
+const candidate = computed<LintableAgent>(() => ({
+  id: props.agent?.id,
+  name: form.name,
+  trigger_status: form.trigger_status || null,
+  trigger_jql: form.trigger_jql || null,
+  status_running: form.status_running || null,
+  status_success: form.status_success,
+  status_failure: form.status_failure,
+  enabled: props.agent?.enabled ?? true,
+}));
+
+const others = computed<LintableAgent[]>(() =>
+  (agentsQuery.data.value ?? []).map((ag) => ({
+    id: ag.id,
+    name: ag.name,
+    trigger_status: ag.trigger_status,
+    trigger_jql: ag.trigger_jql,
+    status_running: ag.status_running,
+    status_success: ag.status_success,
+    status_failure: ag.status_failure,
+    enabled: ag.enabled,
+  })),
+);
+
+const lint = computed(() => lintAgent(candidate.value, others.value, boardStatuses.value));
+
+// Server issues override/augment the client mirror on a save failure.
+const serverIssues = ref<ErrorIssue[]>([]);
+
+/** First blocking issue (client mirror ∪ last server response) for a field. */
+function errorFor(field: string): string | undefined {
+  const server = serverIssues.value.find((i) => i.path[0] === field && i.level === 'error');
+  if (server) return server.message;
+  const client = lint.value.errors.find((i) => i.path[0] === field);
+  return client?.message;
+}
+
+/** Non-blocking warning (e.g. status_cycle) for a field. */
+function warningFor(field: string): string | undefined {
+  return lint.value.warnings.find((i) => i.path[0] === field)?.message;
+}
+
+const create = useCreateAgent(props.workspaceId);
+const update = useUpdateAgent(props.workspaceId);
+const saving = computed(() => create.isPending.value || update.isPending.value);
+const generalError = ref('');
+
+function buildRequest(): AgentWriteRequest {
+  const status_ids = {
+    trigger: statusById.value.get(form.trigger_status),
+    running: form.status_running ? statusById.value.get(form.status_running) : undefined,
+    success: statusById.value.get(form.status_success),
+    failure: statusById.value.get(form.status_failure),
+  };
+  return {
+    workspace_id: props.workspaceId,
+    name: form.name,
+    instruction: form.instruction,
+    executor_id: form.executor_id,
+    model: form.model || null,
+    trigger_status: form.trigger_status,
+    trigger_jql: form.trigger_jql || null,
+    status_running: form.status_running || null,
+    status_success: form.status_success,
+    status_failure: form.status_failure,
+    status_ids,
+    timeout_minutes: form.timeout_minutes,
+    max_budget_usd: form.max_budget_usd,
+    max_attempts: form.max_attempts,
+    repository: form.repository || null,
+    behavior: {
+      branch_prefix: form.branch_prefix || null,
+      allowed_tools: form.allowed_tools,
+      required_checks: form.required_checks,
+      use_callback_channel: form.use_callback_channel,
+      ...(form.model ? { model: form.model } : {}),
+    },
+  };
+}
+
+async function submit() {
+  serverIssues.value = [];
+  generalError.value = '';
+  // The client mirror surfaces issues for immediate feedback, but the SERVER is
+  // authoritative on save (T153): we always attempt the write and let a 422
+  // re-pin anything. status_cycle is a warning and never blocks.
+  const body = buildRequest();
+  try {
+    const res = props.agent
+      ? await update.mutateAsync({ id: props.agent.id, body })
+      : await create.mutateAsync(body);
+    emit('saved', res.warnings ?? []);
+  } catch (err) {
+    if (err instanceof ApiError && err.issues.length) {
+      serverIssues.value = err.issues;
+    } else {
+      generalError.value = (err as Error)?.message ?? 'Save failed.';
+    }
+  }
+}
+
+// --- test-run by ticket key (edit only) ---
+const testRun = useTestRun();
+const ticketKey = ref('');
+const testRunResult = ref('');
+
+async function runTest() {
+  if (!props.agent || !ticketKey.value) return;
+  testRunResult.value = '';
+  try {
+    const res = await testRun.mutateAsync({ id: props.agent.id, ticketKey: ticketKey.value });
+    testRunResult.value = res.deduplicated
+      ? `Deduplicated — existing run ${res.existing_run_id}`
+      : `Enqueued run ${res.run_id}`;
+  } catch (err) {
+    testRunResult.value = (err as Error)?.message ?? 'Test run failed.';
+  }
+}
+</script>
+
+<template>
+  <el-form label-position="top" class="agent-form">
+    <el-alert
+      v-if="statusesUnavailable"
+      type="warning"
+      :closable="false"
+      data-test="statuses-unavailable"
+      title="Board statuses are unavailable — status fields are disabled until they load."
+    />
+
+    <el-form-item label="Name">
+      <el-input v-model="form.name" data-test="name-input" />
+    </el-form-item>
+
+    <el-form-item label="Instruction">
+      <el-input v-model="form.instruction" type="textarea" data-test="instruction-input" />
+    </el-form-item>
+
+    <div class="two-col">
+      <el-form-item label="Executor">
+        <el-select
+          v-model="form.executor_id"
+          filterable
+          allow-create
+          default-first-option
+          data-test="executor-select"
+          placeholder="executor id"
+        >
+          <el-option v-for="id in executorOptions" :key="id" :label="id" :value="id" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="Model">
+        <el-input v-model="form.model" data-test="model-input" placeholder="claude-…" />
+      </el-form-item>
+    </div>
+
+    <el-form-item label="Trigger status" :error="errorFor('trigger_status')">
+      <el-select
+        v-model="form.trigger_status"
+        filterable
+        allow-create
+        :disabled="statusesUnavailable"
+        data-test="trigger-status-select"
+      >
+        <el-option v-for="s in boardStatuses" :key="s.id" :label="s.name" :value="s.name" />
+      </el-select>
+      <div v-if="errorFor('trigger_status')" class="field-error" data-test="trigger-status-error">
+        {{ errorFor('trigger_status') }}
+      </div>
+    </el-form-item>
+
+    <el-form-item label="Running status (recommended)" :error="errorFor('status_running')">
+      <el-select
+        v-model="form.status_running"
+        filterable
+        allow-create
+        clearable
+        :disabled="statusesUnavailable"
+        data-test="status-running-select"
+      >
+        <el-option v-for="s in boardStatuses" :key="s.id" :label="s.name" :value="s.name" />
+      </el-select>
+    </el-form-item>
+
+    <el-form-item label="Success status" :error="errorFor('status_success')">
+      <el-select
+        v-model="form.status_success"
+        filterable
+        allow-create
+        :disabled="statusesUnavailable"
+        data-test="status-success-select"
+      >
+        <el-option v-for="s in boardStatuses" :key="s.id" :label="s.name" :value="s.name" />
+      </el-select>
+      <div v-if="errorFor('status_success')" class="field-error" data-test="status-success-error">
+        {{ errorFor('status_success') }}
+      </div>
+      <div
+        v-if="warningFor('status_success')"
+        class="field-warning"
+        data-test="status-success-warning"
+      >
+        {{ warningFor('status_success') }}
+      </div>
+    </el-form-item>
+
+    <el-form-item label="Failure status" :error="errorFor('status_failure')">
+      <el-select
+        v-model="form.status_failure"
+        filterable
+        allow-create
+        :disabled="statusesUnavailable"
+        data-test="status-failure-select"
+      >
+        <el-option v-for="s in boardStatuses" :key="s.id" :label="s.name" :value="s.name" />
+      </el-select>
+    </el-form-item>
+
+    <div class="two-col">
+      <el-form-item label="Timeout (min)">
+        <el-input-number v-model="form.timeout_minutes" :min="1" data-test="timeout-input" />
+      </el-form-item>
+      <el-form-item label="Max attempts">
+        <el-input-number v-model="form.max_attempts" :min="1" data-test="max-attempts-input" />
+      </el-form-item>
+      <el-form-item label="Max budget (USD)">
+        <el-input-number v-model="form.max_budget_usd" :min="0" :step="0.5" data-test="budget-input" />
+      </el-form-item>
+    </div>
+
+    <el-form-item label="Repository (empty = workspace default)">
+      <el-select v-model="form.repository" clearable data-test="repository-select">
+        <el-option v-for="r in repositories" :key="r.name" :label="r.name" :value="r.name" />
+      </el-select>
+    </el-form-item>
+
+    <el-divider>
+      <el-button link @click="showAdvanced = !showAdvanced" data-test="toggle-advanced">
+        {{ showAdvanced ? 'Hide' : 'Show' }} advanced
+      </el-button>
+    </el-divider>
+
+    <template v-if="showAdvanced">
+      <el-form-item label="Trigger JQL (advanced)">
+        <el-input v-model="form.trigger_jql" data-test="trigger-jql-input" />
+      </el-form-item>
+      <el-form-item label="Branch prefix (empty = workspace default)">
+        <el-input v-model="form.branch_prefix" data-test="branch-prefix-input" />
+      </el-form-item>
+      <el-form-item label="Allowed tools">
+        <el-select v-model="form.allowed_tools" multiple filterable allow-create data-test="allowed-tools-select" />
+      </el-form-item>
+      <el-form-item label="Required checks">
+        <el-select v-model="form.required_checks" multiple filterable allow-create data-test="required-checks-select" />
+      </el-form-item>
+    </template>
+
+    <el-form-item label="Use callback channel">
+      <el-switch v-model="form.use_callback_channel" data-test="callback-switch" />
+    </el-form-item>
+
+    <el-alert v-if="generalError" type="error" :closable="false" data-test="general-error">
+      {{ generalError }}
+    </el-alert>
+
+    <div class="actions">
+      <el-button data-test="cancel-button" @click="emit('close')">Cancel</el-button>
+      <el-button type="primary" data-test="save-button" :loading="saving" @click="submit">
+        {{ isEdit ? 'Save' : 'Create agent' }}
+      </el-button>
+    </div>
+
+    <!-- Test-run by ticket key (edit only) -->
+    <el-divider v-if="isEdit" />
+    <div v-if="isEdit" class="test-run">
+      <el-input
+        v-model="ticketKey"
+        placeholder="BRIG-123"
+        data-test="ticket-key-input"
+        style="max-width: 200px"
+      />
+      <el-button data-test="test-run-button" :loading="testRun.isPending.value" @click="runTest">
+        Test run
+      </el-button>
+      <span v-if="testRunResult" data-test="test-run-result">{{ testRunResult }}</span>
+    </div>
+  </el-form>
+</template>
+
+<style scoped>
+.agent-form {
+  max-width: 640px;
+}
+.two-col {
+  display: flex;
+  gap: 16px;
+}
+.two-col > * {
+  flex: 1;
+}
+.field-error {
+  font-size: 12px;
+  color: var(--el-color-danger);
+  margin-top: 4px;
+}
+.field-warning {
+  font-size: 12px;
+  color: var(--el-color-warning);
+  margin-top: 4px;
+}
+.actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+}
+.test-run {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+</style>

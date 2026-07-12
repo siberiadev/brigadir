@@ -4,5 +4,12 @@
     "outDir": "./dist"
   },
   "include": ["apps/**/*.ts", "libs/**/*.ts"],
-  "exclude": ["node_modules", "dist", "**/*.spec.ts", "test", "packages"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/*.spec.ts",
+    "test",
+    "packages",
+    "apps/web"
+  ]
 }

@@ -23,6 +23,10 @@ export default defineWorkspace([
     test: {
       name: 'unit',
       include: ['libs/**/*.spec.ts', 'apps/**/*.spec.ts'],
+      // apps/web is a Vue/jsdom package with its own vitest config (msw +
+      // @vue/test-utils) run via `pnpm --filter @brigadir/web test` — keep its
+      // component specs out of the node-env unit runner.
+      exclude: ['apps/web/**'],
       environment: 'node',
     },
   },
