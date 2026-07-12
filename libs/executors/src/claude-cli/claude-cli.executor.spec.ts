@@ -62,7 +62,7 @@ function fakeDb(executorConfig: unknown, behavior: unknown) {
         innerJoin: () => ({
           innerJoin: () => ({
             where: () => ({
-              limit: () => Promise.resolve([{ executorConfig, behavior }]),
+              limit: () => Promise.resolve([{ executorConfig, behavior, workspaceId: 'ws-1' }]),
             }),
           }),
         }),
@@ -154,7 +154,8 @@ describe('ClaudeCliExecutor.run (T082)', () => {
 
   function makeExecutor(config: unknown = executorConfig, behavior: Record<string, unknown> = {}) {
     const db = fakeDb(config, behavior);
-    return new ClaudeCliExecutor(db as never, agentsConfig);
+    const fakeJira = { getFeatureContext: vi.fn().mockResolvedValue({ linked: [] }) };
+    return new ClaudeCliExecutor(db as never, agentsConfig, fakeJira as never);
   }
 
   it('success: completed with a schema-valid report', async () => {

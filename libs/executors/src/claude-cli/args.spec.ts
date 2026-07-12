@@ -82,3 +82,54 @@ describe('buildArgs (T077)', () => {
     expect(args[idx + 1]).toBe('Read,Edit,Bash(git *)');
   });
 });
+
+describe('buildArgs — useCallbackChannel (T103, D6)', () => {
+  it('drops --json-schema, adds the three mcp__brigadir__* tools, --mcp-config, and --strict-mcp-config', () => {
+    const args = buildArgs({
+      ...input,
+      useCallbackChannel: true,
+      mcpConfigPath: '/tmp/brigadir/mcp-config/run-123.mcp.json',
+      stopHookSettingsJson: '{"hooks":{"Stop":[]}}',
+    });
+
+    expect(args).not.toContain('--json-schema');
+    expect(args).toContain('--strict-mcp-config');
+
+    const toolsIdx = args.indexOf('--allowed-tools');
+    const tools = args[toolsIdx + 1].split(',');
+    expect(tools).toEqual([
+      'Read',
+      'Edit',
+      'Bash(git *)',
+      'mcp__brigadir__report_progress',
+      'mcp__brigadir__request_human',
+      'mcp__brigadir__complete_task',
+    ]);
+
+    const mcpConfigIdx = args.indexOf('--mcp-config');
+    expect(mcpConfigIdx).toBeGreaterThanOrEqual(0);
+    expect(args[mcpConfigIdx + 1]).toBe('/tmp/brigadir/mcp-config/run-123.mcp.json');
+
+    const settingsIdx = args.indexOf('--settings');
+    expect(args[settingsIdx + 1]).toBe('{"hooks":{"Stop":[]}}');
+  });
+
+  it('the built argv contains no run-token value (grep canary — token never in argv)', () => {
+    const runToken = 'super-secret-run-token-value-should-never-appear';
+    const args = buildArgs({
+      ...input,
+      useCallbackChannel: true,
+      mcpConfigPath: '/tmp/brigadir/mcp-config/run-123.mcp.json',
+      stopHookSettingsJson: '{}',
+    });
+    expect(args.join(' ')).not.toContain(runToken);
+  });
+
+  it('with the flag off, argv is byte-for-byte the iteration-3 shape (--json-schema present)', () => {
+    const withFlag = buildArgs({ ...input, useCallbackChannel: false });
+    const withoutFlag = buildArgs(input);
+    expect(withFlag).toEqual(withoutFlag);
+    expect(withFlag).toContain('--json-schema');
+    expect(withFlag).not.toContain('--mcp-config');
+  });
+});

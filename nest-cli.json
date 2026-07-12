@@ -108,6 +108,33 @@
       "compilerOptions": {
         "tsConfigPath": "libs/ingest/tsconfig.lib.json"
       }
+    },
+    "scrubber": {
+      "type": "library",
+      "root": "libs/scrubber",
+      "entryFile": "index",
+      "sourceRoot": "libs/scrubber/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/scrubber/tsconfig.lib.json"
+      }
+    },
+    "callback": {
+      "type": "library",
+      "root": "libs/callback",
+      "entryFile": "index",
+      "sourceRoot": "libs/callback/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/callback/tsconfig.lib.json"
+      }
+    },
+    "human-tasks": {
+      "type": "library",
+      "root": "libs/human-tasks",
+      "entryFile": "index",
+      "sourceRoot": "libs/human-tasks/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/human-tasks/tsconfig.lib.json"
+      }
     }
   }
 }

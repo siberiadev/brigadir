@@ -12,6 +12,7 @@ const base: ClaudeCliExecutorConfig = {
   keepFailedWorktrees: false,
   killGraceMs: 5000,
   cancelPollMs: 3000,
+  useCallbackChannel: false,
 };
 
 describe('resolveClaudeCliConfig (T076)', () => {
@@ -48,5 +49,15 @@ describe('resolveClaudeCliConfig (T076)', () => {
   it('defaults allowedTools to an empty array when neither source declares any', () => {
     const runtime = resolveClaudeCliConfig(base);
     expect(runtime.allowedTools).toEqual([]);
+  });
+
+  it('resolves useCallbackChannel true (T097, D6 — explicit config, not implicit magic)', () => {
+    const runtime = resolveClaudeCliConfig({ ...base, useCallbackChannel: true });
+    expect(runtime.useCallbackChannel).toBe(true);
+  });
+
+  it('resolves useCallbackChannel false when omitted', () => {
+    const runtime = resolveClaudeCliConfig(base);
+    expect(runtime.useCallbackChannel).toBe(false);
   });
 });

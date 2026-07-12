@@ -35,6 +35,9 @@ const ALLOWLIST_KEYS = [
   'FAKE_CLAUDE_STDERR_TEXT',
   'FAKE_CLAUDE_EXIT_CODE',
   'FAKE_CLAUDE_LINE_DELAY_MS',
+  // Feature 004 (T096): scripted callback sequence for the fake CLI's
+  // callback mode — same harmless-in-production posture as the rest.
+  'FAKE_CLAUDE_CALLBACKS',
 ] as const;
 
 /**

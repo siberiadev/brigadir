@@ -1,10 +1,12 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { eq } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import { AGENTS_CONFIG } from '@brigadir/app-config';
+import { JIRA_CLIENT, type JiraClient } from '@brigadir/jira';
 import { ReportSchema, type AgentsConfig } from '@brigadir/contracts';
 import type { AgentExecutor, ExecutorResult, RunContext } from '../agent-executor.interface';
 import { resolveClaudeCliConfig, type ClaudeCliExecutorConfigInput } from './claude-cli.config';
@@ -13,6 +15,9 @@ import { buildChildEnv } from './env-allowlist';
 import { ClaudeStreamParser, type TerminalResult } from './stream-parser';
 import { prepare, cleanup, type WorktreeRepo } from './worktree';
 import { spawnGroup } from './process-group';
+import { buildWrapperText } from './wrapper';
+import { writeMcpConfig, defaultMcpConfigRoot, type WrittenMcpConfig } from './mcp-config';
+import { buildFeatureContextSection } from './feature-context';
 
 const STDERR_TAIL_BYTES = 16 * 1024;
 
@@ -29,34 +34,6 @@ class StderrTail {
   get text(): string {
     return this.buf;
   }
-}
-
-function buildWrapperText(ctx: RunContext, worktreeDir: string): string {
-  const lines = [
-    `You are an autonomous coding agent working on Jira ticket ${ctx.ticket.key}: ${ctx.ticket.summary}`,
-    ctx.ticket.description ? `\n${ctx.ticket.description}` : '',
-    '',
-    '## Your task',
-    ctx.instruction,
-    '',
-    '## How to report your result',
-    'No MCP tools are available in this session (Phase 0). When you are completely finished, ' +
-      'return your final answer strictly as JSON conforming to the provided report schema. ' +
-      'Do not include any other text after the JSON.',
-    '- outcome="success" ONLY if every required check actually passed in this session. Never ' +
-      'claim a check passed without running it.',
-    '- outcome="failure" if something required failed — report each check honestly with its ' +
-      'status and reason.',
-    '- outcome="needs_human" if you are blocked or requirements are ambiguous and cannot ' +
-      'proceed — include a human_task describing the question or blocker.',
-    '',
-    '## Rules',
-    `- Work only inside this workspace directory (${worktreeDir}).`,
-    '- Do not transition or comment the Jira ticket yourself — the system does that from your report.',
-    '- If you cannot finish, still return a JSON report with outcome="failure" or ' +
-      '"needs_human" — never exit the session without one.',
-  ];
-  return lines.join('\n');
 }
 
 /** Was this outcome one a human should be able to inspect the worktree for? */
@@ -89,10 +66,11 @@ export class ClaudeCliExecutor implements AgentExecutor {
   constructor(
     @Inject(DRIZZLE) private readonly db: BrigadirDb,
     @Inject(AGENTS_CONFIG) private readonly agentsConfig: AgentsConfig,
+    @Inject(JIRA_CLIENT) private readonly jira: JiraClient,
   ) {}
 
   async run(ctx: RunContext, signal: AbortSignal): Promise<ExecutorResult> {
-    const { runtimeConfig, repo, branchPrefix } = await this.loadRunConfig(ctx.runId);
+    const { runtimeConfig, repo, branchPrefix, workspaceId } = await this.loadRunConfig(ctx.runId);
 
     let worktree: { worktreeDir: string; branch: string; cacheDir: string };
     try {
@@ -103,6 +81,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
         branchPrefix,
         runtimeConfig.worktreeRoot,
         runtimeConfig.repoCacheRoot,
+        { reuseBranch: ctx.isResumedAttempt === true },
       );
     } catch (err) {
       return { exitStatus: 'crashed', diagnostics: err instanceof Error ? err.message : String(err) };
@@ -113,18 +92,45 @@ export class ClaudeCliExecutor implements AgentExecutor {
       .set({ worktreePath: worktree.worktreeDir })
       .where(eq(schema.runs.id, ctx.runId));
 
+    let mcpConfig: WrittenMcpConfig | undefined;
     try {
+      if (runtimeConfig.useCallbackChannel) {
+        mcpConfig = await writeMcpConfig(
+          {
+            runId: ctx.runId,
+            callbackUrl: ctx.callback.httpBaseUrl,
+            runToken: ctx.callback.runToken,
+            mcpServerEntryPath: this.resolveMcpServerEntryPath(),
+          },
+          defaultMcpConfigRoot(tmpdir()),
+        );
+      }
+
+      const featureContextSection = runtimeConfig.useCallbackChannel
+        ? await buildFeatureContextSection({ jira: this.jira, db: this.db }, ctx.ticket.key, workspaceId)
+        : undefined;
+
       await mkdir(join(worktree.worktreeDir, '.brigadir'), { recursive: true });
       await writeFile(
         join(worktree.worktreeDir, '.brigadir', 'wrapper.txt'),
-        buildWrapperText(ctx, worktree.worktreeDir),
+        buildWrapperText(ctx, worktree.worktreeDir, {
+          useCallbackChannel: runtimeConfig.useCallbackChannel,
+          featureContextSection,
+        }),
       );
     } catch (err) {
+      await mcpConfig?.cleanup();
       await cleanup(worktree.cacheDir, worktree.worktreeDir, { keep: runtimeConfig.keepFailedWorktrees });
       return { exitStatus: 'crashed', diagnostics: err instanceof Error ? err.message : String(err) };
     }
 
-    const result = await this.runProcess(ctx, signal, worktree, runtimeConfig);
+    const result = await this.runProcess(ctx, signal, worktree, runtimeConfig, mcpConfig);
+
+    try {
+      await mcpConfig?.cleanup();
+    } catch (err) {
+      this.logger.error(`mcp-config cleanup failed for run ${ctx.runId}: ${String(err)}`);
+    }
 
     try {
       await cleanup(worktree.cacheDir, worktree.worktreeDir, {
@@ -137,11 +143,17 @@ export class ClaudeCliExecutor implements AgentExecutor {
     return result;
   }
 
+  /** Resolves to the built `packages/mcp-server/dist/main.js`; overridable for deployments/tests. */
+  private resolveMcpServerEntryPath(): string {
+    return process.env.BRIGADIR_MCP_SERVER_ENTRY ?? join(process.cwd(), 'packages', 'mcp-server', 'dist', 'main.js');
+  }
+
   private runProcess(
     ctx: RunContext,
     signal: AbortSignal,
     worktree: { worktreeDir: string; cacheDir: string },
     runtimeConfig: ReturnType<typeof resolveClaudeCliConfig>,
+    mcpConfig: WrittenMcpConfig | undefined,
   ): Promise<ExecutorResult> {
     const argv = buildArgs({
       model: runtimeConfig.model,
@@ -149,6 +161,9 @@ export class ClaudeCliExecutor implements AgentExecutor {
       allowedTools: runtimeConfig.allowedTools,
       maxTurns: ctx.limits.maxTurns ?? runtimeConfig.maxTurns,
       maxBudgetUsd: ctx.limits.maxBudgetUsd,
+      useCallbackChannel: runtimeConfig.useCallbackChannel,
+      mcpConfigPath: mcpConfig?.configPath,
+      stopHookSettingsJson: mcpConfig?.settingsJson,
     });
     const env = buildChildEnv(process.env);
     const group = spawnGroup(runtimeConfig.cliPath, argv, { cwd: worktree.worktreeDir, env });
@@ -301,13 +316,17 @@ export class ClaudeCliExecutor implements AgentExecutor {
     });
   }
 
-  private async loadRunConfig(
-    runId: string,
-  ): Promise<{ runtimeConfig: ReturnType<typeof resolveClaudeCliConfig>; repo: WorktreeRepo; branchPrefix: string }> {
+  private async loadRunConfig(runId: string): Promise<{
+    runtimeConfig: ReturnType<typeof resolveClaudeCliConfig>;
+    repo: WorktreeRepo;
+    branchPrefix: string;
+    workspaceId: string;
+  }> {
     const [row] = await this.db
       .select({
         executorConfig: schema.executors.config,
         behavior: schema.agents.behavior,
+        workspaceId: schema.runs.workspaceId,
       })
       .from(schema.runs)
       .innerJoin(schema.agents, eq(schema.runs.agentId, schema.agents.id))
@@ -336,6 +355,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
       runtimeConfig,
       repo: { name: repoEntry.name, url: repoEntry.url, defaultBranch: repoEntry.default_branch },
       branchPrefix: behavior.branch_prefix ?? 'run',
+      workspaceId: row.workspaceId,
     };
   }
 

@@ -29,11 +29,23 @@ export class RunsService {
 
   constructor(@Inject(DRIZZLE) private readonly db: BrigadirDb) {}
 
-  /** Enter `running`: stamp `started_at` once, set the current attempt number. */
+  /**
+   * Enter `running`: stamp `started_at` once, set the current attempt number.
+   * `attempt` here is the BullMQ-level retry count for THIS row
+   * (`job.attemptsMade + 1`) — GREATEST-guarded (not a blind overwrite) so it
+   * never regresses a resume-seeded row's own attempt number (feature 004:
+   * ResumeService inserts the new attempt's row with `attempt = parked + 1`
+   * BEFORE the job's first processing ever calls this with
+   * `job.attemptsMade=0` → local attempt `1`, which must not clobber it).
+   */
   async markRunning(runId: string, attempt: number): Promise<boolean> {
     const rows = await this.db
       .update(schema.runs)
-      .set({ status: 'running', startedAt: sql`coalesce(started_at, now())`, attempt })
+      .set({
+        status: 'running',
+        startedAt: sql`coalesce(started_at, now())`,
+        attempt: sql`GREATEST(${schema.runs.attempt}, ${attempt})`,
+      })
       .where(and(eq(schema.runs.id, runId), inArray(schema.runs.status, ['queued', 'running'])))
       .returning({ id: schema.runs.id });
     return rows.length > 0;
@@ -80,6 +92,57 @@ export class RunsService {
       await this.createHumanTask(runId, report.human_task);
     }
     return true;
+  }
+
+  /**
+   * Fail-closed guard for callback-wired runs (D7, FR-010/011). Guards
+   * `WHERE status = 'running'` ONLY — deliberately narrower than
+   * `guardedFinalize`'s full active set — so a run legitimately parked
+   * `awaiting_human` (blocking `request_human`) or already finalized is a
+   * 0-row no-op, never clobbered by a silent process exit.
+   */
+  async failIfStillRunning(runId: string, diagnostic: string): Promise<boolean> {
+    const rows = await this.db
+      .update(schema.runs)
+      .set({ status: 'failed', finishedAt: sql`now()`, error: diagnostic })
+      .where(and(eq(schema.runs.id, runId), eq(schema.runs.status, 'running')))
+      .returning({ id: schema.runs.id });
+    const flipped = rows.length > 0;
+    if (!flipped) {
+      this.logger.log(`failIfStillRunning: run ${runId} no-op (not 'running' — awaiting_human or already finalized)`);
+    }
+    return flipped;
+  }
+
+  /**
+   * Process-exit-derived finalize for callback-wired runs — the D7 posture of
+   * `failIfStillRunning`, generalized to any terminal status (timed_out,
+   * cancelled, crash-exhausted). Guards `WHERE status = 'running'` ONLY: the
+   * process outcome may finalize a run only while the callbacks haven't
+   * already parked it (`awaiting_human`) or finalized it. Found the hard way:
+   * the cancel-poll sees a legitimately parked run as "no longer running",
+   * aborts the lingering process, and without this guard the resulting
+   * 'cancelled'/'timed_out' finalize would clobber the park.
+   */
+  async finalizeStatusIfRunning(
+    runId: string,
+    status: TerminalStatus,
+    extra: FinalizeExtra = {},
+  ): Promise<boolean> {
+    const rows = await this.db
+      .update(schema.runs)
+      // Same loose-fields spread as guardedFinalize (FinalizeExtra's number
+      // costUsd serializes fine into the numeric column at runtime).
+      .set({ status, finishedAt: sql`now()`, ...(extra as Record<string, never>) })
+      .where(and(eq(schema.runs.id, runId), eq(schema.runs.status, 'running')))
+      .returning({ id: schema.runs.id });
+    const flipped = rows.length > 0;
+    if (!flipped) {
+      this.logger.log(
+        `finalizeStatusIfRunning(${status}): run ${runId} no-op (not 'running' — parked or already finalized)`,
+      );
+    }
+    return flipped;
   }
 
   /** Finalize to a terminal status without a report (timeout, crash-exhausted, cancelled). */

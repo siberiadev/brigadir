@@ -41,6 +41,15 @@ export class QueuesModule {
           useFactory: () => ({
             connection: buildRedisConnection(),
             defaultJobOptions: DEFAULT_JOB_OPTIONS,
+            // Key namespace for every queue/worker this app creates. Production
+            // keeps the BullMQ default ('bull'). Integration suites set a
+            // UNIQUE prefix per suite (harness.startRedis): 37+ suites rotate
+            // over only 15 Redis logical DBs, so two concurrent suites CAN
+            // share a DB — without distinct prefixes a co-tenant's worker
+            // consumes foreign jobs ("run not found — dropping job") and its
+            // twin's runs hang at `queued`. Read lazily here (forRootAsync),
+            // same discipline as the connection.
+            prefix: process.env.BULLMQ_PREFIX ?? 'bull',
           }),
         }),
         BullModule.registerQueue(...allQueues.map((name) => ({ name }))),

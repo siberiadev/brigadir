@@ -33,6 +33,10 @@ interface StoredIssue {
   labels: string[];
   /** keys of blockers ("is blocked by"); resolved to live status on read. */
   blockedBy: string[];
+  /** feature 004 (T114): epic (parent) key, resolved to live status on read. */
+  epicKey?: string;
+  /** feature 004 (T114): generic linked issue keys, resolved to live status+summary on read. */
+  linked: string[];
 }
 
 // Default status → category catalog for the statuses the tests use.
@@ -65,6 +69,10 @@ export interface MockJira {
   setStatus(key: string, status: string): void;
   setCategory(status: string, category: StatusCategoryKey): void;
   addBlockedByLink(key: string, blockerKey: string): void;
+  /** feature 004 (T114): set this issue's epic (parent) key. */
+  setEpic(key: string, epicKey: string): void;
+  /** feature 004 (T114): add a generic issue link (both issues must already be seeded). */
+  addLinkedIssue(key: string, linkedKey: string): void;
   /** Move a blocker to a new status (and optionally set that status's category). */
   moveBlocker(blockerKey: string, status: string, category?: StatusCategoryKey): void;
   startSprint(sprintId: number, issueKeys: string[]): void;
@@ -231,10 +239,23 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
       return HttpResponse.json({ id: '10000' }, { status: 201 });
     }),
 
-    // --- single issue (context for transition discovery) ---
+    // --- single issue (context for transition discovery + feature-context read) ---
     http.get(`${baseUrl}/rest/api/3/issue/:key`, ({ params }) => {
+      const r = maybe429();
+      if (r) return r;
       const issue = issues.get(params.key as string);
       if (!issue) return HttpResponse.json({ errorMessages: ['not found'] }, { status: 404 });
+      const epic = issue.epicKey ? issues.get(issue.epicKey) : undefined;
+      const linkRef = (linkedKey: string) => {
+        const linked = issues.get(linkedKey);
+        return {
+          key: linkedKey,
+          fields: {
+            status: { name: linked?.statusName ?? '', statusCategory: { key: catOf(linked?.statusName ?? '') } },
+            summary: linked?.summary ?? null,
+          },
+        };
+      };
       return HttpResponse.json({
         key: issue.key,
         id: issue.id,
@@ -242,6 +263,8 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
           status: { name: issue.statusName, statusCategory: { key: catOf(issue.statusName) } },
           issuetype: { name: issue.issueType },
           project: { key: projectKey },
+          parent: epic ? { key: epic.key, fields: { status: { name: epic.statusName } } } : undefined,
+          issuelinks: issue.linked.map((linkedKey) => ({ outwardIssue: linkRef(linkedKey) })),
         },
       });
     }),
@@ -264,6 +287,7 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
         sprintId: opts.sprintId,
         labels: opts.labels ?? [],
         blockedBy: [],
+        linked: [],
       });
     },
     setStatus(key, status) {
@@ -278,6 +302,18 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
       if (!issue) throw new Error(`seed the blocked issue before linking (${key})`);
       if (!issues.has(blockerKey)) throw new Error(`seed the blocker before linking (${blockerKey})`);
       issue.blockedBy.push(blockerKey);
+    },
+    setEpic(key, epicKey) {
+      const issue = issues.get(key);
+      if (!issue) throw new Error(`seed the issue before setting its epic (${key})`);
+      if (!issues.has(epicKey)) throw new Error(`seed the epic before linking (${epicKey})`);
+      issue.epicKey = epicKey;
+    },
+    addLinkedIssue(key, linkedKey) {
+      const issue = issues.get(key);
+      if (!issue) throw new Error(`seed the issue before linking (${key})`);
+      if (!issues.has(linkedKey)) throw new Error(`seed the linked issue before linking (${linkedKey})`);
+      issue.linked.push(linkedKey);
     },
     moveBlocker(blockerKey, status, cat) {
       const i = issues.get(blockerKey);

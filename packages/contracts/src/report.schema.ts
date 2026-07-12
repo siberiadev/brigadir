@@ -62,3 +62,4 @@ export const ReportSchema = z
 export type ReportCheck = z.infer<typeof ReportCheckSchema>;
 export type ReportHumanTask = z.infer<typeof ReportHumanTaskSchema>;
 export type AgentReport = z.infer<typeof ReportSchema>;
+export type HumanTaskKind = (typeof HUMAN_TASK_KINDS)[number];

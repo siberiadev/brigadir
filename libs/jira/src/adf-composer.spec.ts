@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { AgentReport } from '@brigadir/contracts';
-import { buildRunComment } from './adf-composer';
+import { buildRunComment, buildHumanTaskComment } from './adf-composer';
 
 const base: AgentReport = {
   schema_version: 1,
@@ -36,5 +36,17 @@ describe('buildRunComment (T051)', () => {
 
   it('is pure — identical input yields identical output', () => {
     expect(buildRunComment(base)).toEqual(buildRunComment(base));
+  });
+});
+
+describe('buildHumanTaskComment (T101)', () => {
+  it('renders a blocking question with details', () => {
+    const doc = buildHumanTaskComment({ kind: 'question', title: 'Which auth flow?', details: 'OAuth or API token?' });
+    expect(doc).toMatchSnapshot();
+  });
+
+  it('renders without details when omitted', () => {
+    const doc = buildHumanTaskComment({ kind: 'blocker', title: 'Missing credentials' });
+    expect(doc.content).toHaveLength(2);
   });
 });

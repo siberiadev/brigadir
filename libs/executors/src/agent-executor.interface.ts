@@ -24,6 +24,15 @@ export interface RunContext {
   callback: { httpBaseUrl: string; runToken: string; mcpStdioCmd?: string[] };
   limits: { timeoutMs: number; maxBudgetUsd?: number; maxTurns?: number };
   env: Record<string, string>;
+  /**
+   * Feature 004 (FR-016/018): true when this run's attempt was created by
+   * ResumeService (`trigger_event.source === 'human-resume'`). The claude_cli
+   * executor uses this to CONTINUE the same ticket branch instead of the
+   * normal "fail loud if the branch already exists" crash-retry guard
+   * (worktree.ts) — a resumed attempt is a deliberate continuation, not a
+   * stale/unsafe leftover.
+   */
+  isResumedAttempt?: boolean;
 }
 
 export interface ExecutorResult {

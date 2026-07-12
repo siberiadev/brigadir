@@ -39,7 +39,7 @@ export interface JiraIssueLinkType {
 
 export interface JiraLinkedIssueRef {
   key: string;
-  fields: { status: JiraStatus };
+  fields: { status: JiraStatus; summary?: string | null };
 }
 
 export interface JiraIssueLink {
@@ -62,6 +62,15 @@ export interface JiraIssue {
 export interface JiraTransition {
   id: string;
   to: { name: string };
+}
+
+/**
+ * Bounded feature-context read (feature 004, D5/FR-026): the ticket's epic
+ * and its linked issues, statuses only — no bodies/comments.
+ */
+export interface JiraFeatureContext {
+  epic?: { key: string; status: string };
+  linked: { key: string; status: string; summary: string }[];
 }
 
 /** Board type governs the poller scope (kanban = project; scrum = active sprint). */

@@ -127,4 +127,16 @@ export function resetFakeClaudeEnv(): void {
   delete process.env.FAKE_CLAUDE_STDERR_TEXT;
   delete process.env.FAKE_CLAUDE_EXIT_CODE;
   delete process.env.FAKE_CLAUDE_LINE_DELAY_MS;
+  delete process.env.FAKE_CLAUDE_CALLBACKS;
+}
+
+/** One scripted callback the fake CLI makes against the real callback API (T096). */
+export interface FakeClaudeCallbackStep {
+  tool: 'progress' | 'human' | 'complete';
+  body: Record<string, unknown>;
+}
+
+/** Sets FAKE_CLAUDE_CALLBACKS so the fake CLI plays this scripted sequence (quickstart.md pattern 1). */
+export function setFakeClaudeCallbacks(steps: FakeClaudeCallbackStep[]): void {
+  process.env.FAKE_CLAUDE_CALLBACKS = JSON.stringify(steps);
 }

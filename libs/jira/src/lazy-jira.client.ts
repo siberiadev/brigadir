@@ -1,4 +1,4 @@
-import type { ADFDoc, JiraIssue, JiraTransition, JiraBoardType } from '@brigadir/contracts';
+import type { ADFDoc, JiraIssue, JiraTransition, JiraBoardType, JiraFeatureContext } from '@brigadir/contracts';
 import type { JiraClient } from './jira-client.interface';
 
 /**
@@ -38,6 +38,9 @@ export class LazyJiraClient implements JiraClient {
   }
   async getTransitions(issueKey: string): Promise<JiraTransition[]> {
     return (await this.client()).getTransitions(issueKey);
+  }
+  async getFeatureContext(issueKey: string): Promise<JiraFeatureContext> {
+    return (await this.client()).getFeatureContext(issueKey);
   }
   async transitionTo(issueKey: string, targetStatusName: string): Promise<void> {
     return (await this.client()).transitionTo(issueKey, targetStatusName);

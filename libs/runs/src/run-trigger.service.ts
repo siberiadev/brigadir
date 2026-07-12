@@ -103,6 +103,10 @@ export class RunTriggerService {
       'run',
       { runId },
       {
+        // jobId pinned to the run id (feature 004): lets CallbackModule
+        // resolve the exact BullMQ Job for job.updateProgress() from the
+        // backend process without a new DB column.
+        jobId: runId,
         deduplication: { id: `${ticketId}:${agentId}` },
         attempts: agent.maxAttempts,
         backoff: { type: 'custom' },

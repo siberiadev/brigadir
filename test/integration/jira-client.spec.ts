@@ -85,6 +85,39 @@ describe('BasicAuthJiraClient over mock Jira (T048/T052)', () => {
       NoTransitionPath,
     );
   });
+
+  // --- T114 (feature 004, FR-026): bounded feature-context read ---
+
+  it('getFeatureContext returns the epic + linked issues with statuses only', async () => {
+    mock.seedIssue('BRIG-EPIC', { status: 'In Progress', summary: 'The parent feature' });
+    mock.seedIssue('BRIG-SIBLING', { status: 'Code Review', summary: 'A sibling ticket' });
+    mock.seedIssue('BRIG-1', { status: 'Ready for Dev' });
+    mock.setEpic('BRIG-1', 'BRIG-EPIC');
+    mock.addLinkedIssue('BRIG-1', 'BRIG-SIBLING');
+
+    const ctx = await client.getFeatureContext('BRIG-1');
+    expect(ctx.epic).toEqual({ key: 'BRIG-EPIC', status: 'In Progress' });
+    expect(ctx.linked).toEqual([{ key: 'BRIG-SIBLING', status: 'Code Review', summary: 'A sibling ticket' }]);
+  });
+
+  it('getFeatureContext omits epic when the issue has none, and returns an empty linked list', async () => {
+    mock.seedIssue('BRIG-1', { status: 'Ready for Dev' });
+    const ctx = await client.getFeatureContext('BRIG-1');
+    expect(ctx.epic).toBeUndefined();
+    expect(ctx.linked).toEqual([]);
+  });
+
+  it('getFeatureContext is read-only and rate-limited like other reads (a 429 is honored)', async () => {
+    mock.seedIssue('BRIG-1', { status: 'Ready for Dev' });
+    mock.arm429(1);
+    const t0 = Date.now();
+    const ctx = await client.getFeatureContext('BRIG-1');
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(900);
+    expect(ctx.linked).toEqual([]);
+    // no mutation of any kind occurred
+    expect(mock.transitionsFor('BRIG-1')).toEqual([]);
+    expect(mock.commentsFor('BRIG-1')).toEqual([]);
+  });
 });
 
 describe('JiraModule.forRootAsync resolves the client from the workspace row (T047)', () => {

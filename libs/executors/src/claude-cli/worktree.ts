@@ -50,6 +50,7 @@ export async function prepare(
   branchPrefix: string,
   worktreeRoot: string,
   repoCacheRoot: string,
+  opts: { reuseBranch?: boolean } = {},
 ): Promise<PrepareResult> {
   await mkdir(repoCacheRoot, { recursive: true });
   await mkdir(worktreeRoot, { recursive: true });
@@ -68,7 +69,14 @@ export async function prepare(
   const baseRef = `origin/${repo.defaultBranch}`;
 
   try {
-    await git(['worktree', 'add', '-b', branch, worktreeDir, baseRef], cacheDir);
+    if (opts.reuseBranch) {
+      // Feature 004 (FR-016/018): a resumed attempt deliberately CONTINUES
+      // the same ticket branch a prior attempt started — attach a worktree
+      // to the existing branch rather than creating a fresh one.
+      await git(['worktree', 'add', worktreeDir, branch], cacheDir);
+    } else {
+      await git(['worktree', 'add', '-b', branch, worktreeDir, baseRef], cacheDir);
+    }
   } catch (err) {
     throw new WorktreePrepareError(
       `cannot create worktree on branch "${branch}" — it likely already exists from a prior run ` +

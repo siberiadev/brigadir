@@ -86,4 +86,20 @@ describe('worktree prepare/cleanup (T080)', () => {
     expect(first.cacheDir).toBe(second.cacheDir);
     expect(existsSync(join(second.worktreeDir, 'README.md'))).toBe(true);
   });
+
+  it('{reuseBranch:true} (feature 004 resume) attaches a worktree to an already-existing branch instead of failing', async () => {
+    const first = await prepare(repo, 'run-7', 'BRIG-7', 'feat', worktreeRoot, repoCacheRoot);
+    await execFileAsync(
+      'git',
+      ['-C', first.worktreeDir, '-c', 'user.email=t@t.com', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'wip'],
+    );
+    await cleanup(first.cacheDir, first.worktreeDir);
+
+    const resumed = await prepare(repo, 'run-8', 'BRIG-7', 'feat', worktreeRoot, repoCacheRoot, {
+      reuseBranch: true,
+    });
+    expect(resumed.branch).toBe('feat/BRIG-7');
+    const { stdout } = await execFileAsync('git', ['-C', resumed.worktreeDir, 'log', '--oneline', '-1']);
+    expect(stdout).toContain('wip'); // continues the same branch, prior commit intact
+  });
 });

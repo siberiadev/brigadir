@@ -3,13 +3,16 @@ import { Inject, Logger } from '@nestjs/common';
 import { Worker, type Job } from 'bullmq';
 import { desc, eq } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
+import { BRIGADIR_JWT_SECRET } from '@brigadir/app-config';
 import { runQueueName, backoffStrategy } from '@brigadir/queues';
 import { RunsService, mapExitStatusToRunStatus } from '@brigadir/runs';
 import { ExecutorRegistry, type ExecutorResult, type RunContext } from '@brigadir/executors';
 import { PipelineService } from '@brigadir/pipeline';
+import { signRunToken } from '@brigadir/contracts';
 
 interface LoadedRun {
   runId: string;
+  workspaceId: string;
   executorType: string;
   triggerEvent: unknown;
   instruction: string;
@@ -18,12 +21,17 @@ interface LoadedRun {
   ticketKey: string;
   ticketSummary: string | null;
   cancelPollMs: number;
+  /** Feature 004 (D6): explicit opt-in to the MCP callback channel. */
+  useCallbackChannel: boolean;
 }
 
 /** research D5/architecture §4: 5h subscription reset isn't programmatically
  * knowable, so absent a fresher signal we fall back to this heuristic. */
 const DEFAULT_RATE_LIMIT_TTL_MS = 15 * 60_000;
 const DEFAULT_CANCEL_POLL_MS = 3000;
+/** Run-token TTL grace beyond the run's own timeout (contracts/run-jwt.md, plan.md). */
+const RUN_TOKEN_GRACE_SECONDS = 300;
+const DEFAULT_CALLBACK_BASE_URL = 'http://localhost:3000/api/callbacks';
 
 /**
  * ClaudeCliRunProcessor (T083) — consumes `run.claude_cli` jobs. A near-copy
@@ -44,6 +52,7 @@ export class ClaudeCliRunProcessor extends WorkerHost {
 
   constructor(
     @Inject(DRIZZLE) private readonly db: BrigadirDb,
+    @Inject(BRIGADIR_JWT_SECRET) private readonly jwtSecret: string,
     private readonly runs: RunsService,
     private readonly registry: ExecutorRegistry,
     private readonly pipeline: PipelineService,
@@ -62,7 +71,16 @@ export class ClaudeCliRunProcessor extends WorkerHost {
       return;
     }
 
-    await this.runs.markRunning(runId, attempt);
+    // markRunning guards status ∈ {queued, running}: false means the run is
+    // parked (`awaiting_human`) or already finalized — e.g. a BullMQ crash
+    // retry landing AFTER a blocking request_human parked the run. Executing
+    // the agent again over a parked run would violate the completion contract,
+    // so the job is dropped, not retried.
+    const startable = await this.runs.markRunning(runId, attempt);
+    if (!startable) {
+      this.logger.warn(`run ${runId} is not startable (parked or finalized) — dropping job`);
+      return;
+    }
     await this.pipeline.onRunStarted(runId);
 
     const controller = new AbortController();
@@ -97,6 +115,23 @@ export class ClaudeCliRunProcessor extends WorkerHost {
     }
 
     if (result.exitStatus === 'completed') {
+      if (loaded.useCallbackChannel) {
+        // FR-010/011 (D7): callback-wired runs have NO structured-output
+        // rescue path — any report-shaped stdout text is diagnostics only,
+        // never a finalize source. A 'completed' exit here means the process
+        // ended without complete_task/blocking request_human ever landing.
+        // Fail closed, guarded WHERE status='running' ONLY: a legitimate
+        // awaiting_human park (or an already-finalized run — a callback
+        // could have landed a beat before this) is a no-op, never clobbered.
+        const diagnostic =
+          result.diagnostics ?? 'claude_cli exited without a complete_task or request_human callback';
+        const flipped = await this.runs.failIfStillRunning(runId, diagnostic);
+        if (flipped) {
+          await this.afterFinalize(runId);
+        }
+        return;
+      }
+
       try {
         await this.runs.finalizeWithReport(runId, result.report, {
           externalRef: result.externalRef,
@@ -136,12 +171,22 @@ export class ClaudeCliRunProcessor extends WorkerHost {
         // field table has no "only if completed" qualifier on cost_usd/usage,
         // so these ride along here too (still the same finalizeStatus/decision
         // control flow as the mock processor — FR-009 — just richer `extra`).
-        await this.runs.finalizeStatus(runId, decision.status, {
+        const extra = {
           error: result.diagnostics,
           externalRef: result.externalRef,
           costUsd: result.costUsd,
           usage: result.usage,
-        });
+        };
+        if (loaded.useCallbackChannel) {
+          // D7 generalized: the cancel-poll aborts a lingering process after a
+          // blocking request_human parked the run (status left 'running'), and
+          // the executor then resolves 'cancelled' — that process outcome must
+          // NOT clobber the park. Same for a timeout/crash racing a callback.
+          const flipped = await this.runs.finalizeStatusIfRunning(runId, decision.status, extra);
+          if (flipped) await this.afterFinalize(runId);
+          return;
+        }
+        await this.runs.finalizeStatus(runId, decision.status, extra);
         await this.afterFinalize(runId);
         return;
       }
@@ -193,6 +238,7 @@ export class ClaudeCliRunProcessor extends WorkerHost {
     const [row] = await this.db
       .select({
         runId: schema.runs.id,
+        workspaceId: schema.runs.workspaceId,
         executorType: schema.runs.executorType,
         triggerEvent: schema.runs.triggerEvent,
         instruction: schema.agents.instruction,
@@ -211,9 +257,12 @@ export class ClaudeCliRunProcessor extends WorkerHost {
 
     if (!row) return undefined;
 
-    const executorConfig = row.executorConfig as { cancelPollMs?: number } | null;
+    const executorConfig = row.executorConfig as
+      | { cancelPollMs?: number; useCallbackChannel?: boolean }
+      | null;
     return {
       runId: row.runId,
+      workspaceId: row.workspaceId,
       executorType: row.executorType,
       triggerEvent: row.triggerEvent,
       instruction: row.instruction,
@@ -222,10 +271,26 @@ export class ClaudeCliRunProcessor extends WorkerHost {
       ticketKey: row.ticketKey,
       ticketSummary: row.ticketSummary,
       cancelPollMs: executorConfig?.cancelPollMs ?? DEFAULT_CANCEL_POLL_MS,
+      useCallbackChannel: executorConfig?.useCallbackChannel === true,
     };
   }
 
   private buildContext(loaded: LoadedRun): RunContext {
+    const httpBaseUrl = process.env.BRIGADIR_CALLBACK_BASE_URL ?? DEFAULT_CALLBACK_BASE_URL;
+    // Real per-run JWT only minted for callback-wired runs (contracts/run-jwt.md);
+    // non-callback runs never call the callback API, so the placeholder is inert.
+    const runToken = loaded.useCallbackChannel
+      ? signRunToken(
+          {
+            sub: loaded.runId,
+            wsp: loaded.workspaceId,
+            tkt: loaded.ticketKey,
+            exp: Math.floor(Date.now() / 1000) + loaded.timeoutMinutes * 60 + RUN_TOKEN_GRACE_SECONDS,
+          },
+          this.jwtSecret,
+        )
+      : 'claude-cli-run-token';
+
     return {
       runId: loaded.runId,
       ticket: {
@@ -234,14 +299,28 @@ export class ClaudeCliRunProcessor extends WorkerHost {
         description: '',
         url: '',
       },
-      instruction: loaded.instruction,
+      instruction: this.instructionWithResumeAnswer(loaded),
       workspaceDir: null,
-      callback: { httpBaseUrl: 'http://localhost:3000/api/callbacks', runToken: 'claude-cli-run-token' },
+      callback: { httpBaseUrl, runToken },
       limits: {
         timeoutMs: loaded.timeoutMinutes * 60_000,
         maxBudgetUsd: loaded.maxBudgetUsd !== null ? Number(loaded.maxBudgetUsd) : undefined,
       },
       env: {},
+      isResumedAttempt: this.isResumedAttempt(loaded),
     };
+  }
+
+  private isResumedAttempt(loaded: LoadedRun): boolean {
+    return (loaded.triggerEvent as { source?: string } | null)?.source === 'human-resume';
+  }
+
+  /** FR-018: a resumed attempt's instruction context MUST include the human's answer. */
+  private instructionWithResumeAnswer(loaded: LoadedRun): string {
+    const trigger = loaded.triggerEvent as { source?: string; resolution?: string | null } | null;
+    if (trigger?.source !== 'human-resume' || !trigger.resolution) {
+      return loaded.instruction;
+    }
+    return `${loaded.instruction}\n\n## Answer to your earlier question\nA human answered your escalation:\n${trigger.resolution}`;
   }
 }

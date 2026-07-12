@@ -19,8 +19,22 @@
 //   FAKE_CLAUDE_STDERR_TEXT    - text to write to stderr before exiting
 //   FAKE_CLAUDE_EXIT_CODE      - process exit code (default 0)
 //   FAKE_CLAUDE_LINE_DELAY_MS  - delay between stdout lines (default 20)
+//   FAKE_CLAUDE_CALLBACKS      - feature 004 (research D1/D8, quickstart.md
+//                                "the primary pattern"): JSON array of
+//                                { tool: 'progress'|'human'|'complete', body }
+//                                steps. When set, this script reads the
+//                                --mcp-config <path> it was invoked with,
+//                                pulls BRIGADIR_RUN_TOKEN/BRIGADIR_CALLBACK_URL/
+//                                BRIGADIR_RUN_ID out of the server env block
+//                                (mcpServers.brigadir.env — never its own
+//                                process env, proving the token stays outside
+//                                the agent-visible env), and POSTs each step
+//                                to the REAL callback HTTP API in order before
+//                                exiting. The unconditional env dump below
+//                                still lets a test assert BRIGADIR_RUN_TOKEN
+//                                is absent from this process's own env.
 
-import { createReadStream, writeFileSync } from 'node:fs';
+import { createReadStream, readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -39,6 +53,7 @@ const exitCode = process.env.FAKE_CLAUDE_EXIT_CODE ? Number(process.env.FAKE_CLA
 const lineDelayMs = process.env.FAKE_CLAUDE_LINE_DELAY_MS
   ? Number(process.env.FAKE_CLAUDE_LINE_DELAY_MS)
   : 20;
+const callbacksRaw = process.env.FAKE_CLAUDE_CALLBACKS;
 
 // Honor SIGTERM promptly (D2): print nothing further, exit. SIGKILL is the
 // OS default (no handler needed/possible).
@@ -60,6 +75,45 @@ if (selfPidFile) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Find `--mcp-config <path>` in this process's own argv (never a control var). */
+function findMcpConfigPath() {
+  const idx = process.argv.indexOf('--mcp-config');
+  return idx >= 0 ? process.argv[idx + 1] : undefined;
+}
+
+async function runCallbacks() {
+  const steps = JSON.parse(callbacksRaw);
+  const mcpConfigPath = findMcpConfigPath();
+  if (!mcpConfigPath) {
+    throw new Error('FAKE_CLAUDE_CALLBACKS set but no --mcp-config <path> found in argv');
+  }
+  const mcpConfig = JSON.parse(readFileSync(mcpConfigPath, 'utf8'));
+  const serverEnv = mcpConfig.mcpServers?.brigadir?.env ?? {};
+  const runToken = serverEnv.BRIGADIR_RUN_TOKEN;
+  const callbackUrl = serverEnv.BRIGADIR_CALLBACK_URL;
+  const runId = serverEnv.BRIGADIR_RUN_ID;
+  if (!runToken || !callbackUrl || !runId) {
+    throw new Error('mcp-config file is missing BRIGADIR_RUN_TOKEN/BRIGADIR_CALLBACK_URL/BRIGADIR_RUN_ID');
+  }
+
+  const base = callbackUrl.replace(/\/+$/, '');
+  for (const step of steps) {
+    // { tool: 'sleep', ms } — linger without calling anything: models a real
+    // agent whose process outlives its blocking request_human park (the
+    // cancel-poll → abort → finalize race regression).
+    if (step.tool === 'sleep') {
+      await sleep(step.ms ?? 1000);
+      continue;
+    }
+    const res = await fetch(`${base}/runs/${runId}/${step.tool === 'human' ? 'human' : step.tool}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${runToken}` },
+      body: JSON.stringify(step.body ?? {}),
+    });
+    process.stderr.write(`fake-claude callback ${step.tool} -> ${res.status}\n`);
+  }
 }
 
 async function main() {
@@ -90,6 +144,10 @@ async function main() {
       process.stdout.write(line + '\n');
       await sleep(lineDelayMs);
     }
+  }
+
+  if (callbacksRaw) {
+    await runCallbacks();
   }
 
   if (stderrText) {

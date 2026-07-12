@@ -4,6 +4,7 @@ import type {
   JiraIssue,
   JiraTransition,
   JiraBoardType,
+  JiraFeatureContext,
 } from '@brigadir/contracts';
 import type { JiraClient } from './jira-client.interface';
 import { RateLimiter } from './rate-limiter';
@@ -122,6 +123,33 @@ export class BasicAuthJiraClient implements JiraClient {
       `/rest/api/3/issue/${issueKey}/transitions`,
     );
     return (res.transitions ?? []).map((t) => ({ id: t.id, to: { name: t.to?.name ?? '' } }));
+  }
+
+  async getFeatureContext(issueKey: string): Promise<JiraFeatureContext> {
+    const issue = await this.request<{
+      fields: {
+        parent?: { key: string; fields?: { status?: { name?: string } } };
+        issuelinks?: Array<{
+          outwardIssue?: { key: string; fields?: { status?: { name?: string }; summary?: string | null } };
+          inwardIssue?: { key: string; fields?: { status?: { name?: string }; summary?: string | null } };
+        }>;
+      };
+    }>('GET', `/rest/api/3/issue/${issueKey}?fields=parent,issuelinks`);
+
+    const epic = issue.fields.parent
+      ? { key: issue.fields.parent.key, status: issue.fields.parent.fields?.status?.name ?? '' }
+      : undefined;
+
+    const linked = (issue.fields.issuelinks ?? [])
+      .map((link) => link.outwardIssue ?? link.inwardIssue)
+      .filter((ref): ref is NonNullable<typeof ref> => ref !== undefined)
+      .map((ref) => ({
+        key: ref.key,
+        status: ref.fields?.status?.name ?? '',
+        summary: ref.fields?.summary ?? '',
+      }));
+
+    return { epic, linked };
   }
 
   private async getIssueContext(

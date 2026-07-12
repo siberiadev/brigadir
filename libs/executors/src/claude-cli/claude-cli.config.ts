@@ -24,6 +24,8 @@ export interface ClaudeCliRuntimeConfig {
   maxTurns?: number;
   killGraceMs: number;
   cancelPollMs: number;
+  /** Feature 004 (D6): explicit opt-in to the MCP callback channel. */
+  useCallbackChannel: boolean;
 }
 
 /**
@@ -48,5 +50,6 @@ export function resolveClaudeCliConfig(
     maxTurns: raw.maxTurns,
     killGraceMs: raw.killGraceMs,
     cancelPollMs: raw.cancelPollMs,
+    useCallbackChannel: raw.useCallbackChannel,
   };
 }

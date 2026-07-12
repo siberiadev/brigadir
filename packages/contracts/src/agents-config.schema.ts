@@ -69,6 +69,11 @@ export const ClaudeCliExecutorConfigSchema = z
     maxTurns: z.number().int().min(1).optional(),
     killGraceMs: z.number().int().min(0).default(5000),
     cancelPollMs: z.number().int().min(1).default(3000),
+    // Feature 004 (D6): explicit opt-in to the MCP callback channel. When
+    // true, the executor drops --json-schema and wires the run onto
+    // mcp-config + Stop hook instead; omitted/false keeps the iteration-3
+    // structured-output path byte-for-byte unchanged.
+    useCallbackChannel: z.boolean().default(false),
   })
   .strict();
 

@@ -27,7 +27,10 @@
       "@brigadir/executors": ["libs/executors/src"],
       "@brigadir/jira": ["libs/jira/src"],
       "@brigadir/pipeline": ["libs/pipeline/src"],
-      "@brigadir/ingest": ["libs/ingest/src"]
+      "@brigadir/ingest": ["libs/ingest/src"],
+      "@brigadir/scrubber": ["libs/scrubber/src"],
+      "@brigadir/callback": ["libs/callback/src"],
+      "@brigadir/human-tasks": ["libs/human-tasks/src"]
     }
   }
 }

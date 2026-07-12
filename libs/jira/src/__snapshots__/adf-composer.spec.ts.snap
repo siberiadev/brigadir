@@ -1,5 +1,49 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`buildHumanTaskComment (T101) > renders a blocking question with details 1`] = `
+{
+  "content": [
+    {
+      "attrs": {
+        "panelType": "warning",
+      },
+      "content": [
+        {
+          "content": [
+            {
+              "text": "Agent has a question",
+              "type": "text",
+            },
+          ],
+          "type": "paragraph",
+        },
+      ],
+      "type": "panel",
+    },
+    {
+      "content": [
+        {
+          "text": "Which auth flow?",
+          "type": "text",
+        },
+      ],
+      "type": "paragraph",
+    },
+    {
+      "content": [
+        {
+          "text": "OAuth or API token?",
+          "type": "text",
+        },
+      ],
+      "type": "paragraph",
+    },
+  ],
+  "type": "doc",
+  "version": 1,
+}
+`;
+
 exports[`buildRunComment (T051) > renders a failure report (error panel) 1`] = `
 {
   "content": [

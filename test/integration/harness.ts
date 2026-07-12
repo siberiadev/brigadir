@@ -20,8 +20,24 @@ export interface DbHarness {
 
 const MIGRATIONS_DIR = join(process.cwd(), 'drizzle');
 
+/**
+ * Feature 004: BRIGADIR_JWT_SECRET is a hard boot-time requirement for both
+ * BackendAppModule (RunTokenGuard) and WorkerAppModule (ClaudeCliRunProcessor
+ * minting run tokens) — no silent default in production code (Constitution
+ * lazy resolution). Every integration suite calls startDatabase() in its
+ * beforeAll, so this is the one place a fixed test value is supplied,
+ * mirroring how DATABASE_URL/REDIS_URL are already suite-scoped here rather
+ * than touching each of the ~26 spec files individually.
+ */
+function ensureTestJwtSecret(): void {
+  if (!process.env.BRIGADIR_JWT_SECRET) {
+    process.env.BRIGADIR_JWT_SECRET = 'test-integration-jwt-secret-not-for-prod';
+  }
+}
+
 /** Create a fresh database on the shared Postgres, apply committed migrations from scratch. */
 export async function startDatabase(): Promise<DbHarness> {
+  ensureTestJwtSecret();
   const adminUrl = inject('PG_ADMIN_URL');
   const dbName = `test_${randomBytes(6).toString('hex')}`;
 
@@ -56,7 +72,7 @@ export interface RedisHarness {
   stop: () => Promise<void>;
 }
 
-/** Reserve a fresh logical DB (SELECT n) on the shared Redis and flush it. */
+/** Reserve a logical DB (SELECT n) on the shared Redis + a unique BullMQ prefix. */
 export async function startRedis(): Promise<RedisHarness> {
   const baseUrl = inject('REDIS_BASE_URL');
 
@@ -64,9 +80,17 @@ export async function startRedis(): Promise<RedisHarness> {
   // Atomic round-robin over logical DBs 1..15 (0 stays untouched as the counter home).
   const n = await client.incr('brigadir:test:db-counter');
   const dbIndex = (n % 15) + 1;
-  await client.select(dbIndex);
-  await client.flushdb();
   await client.quit();
+
+  // With 37+ suites over 15 logical DBs, two CONCURRENT suites can share a DB.
+  // Isolation therefore comes from a per-suite-unique BullMQ key prefix (the
+  // counter value is unique for the whole run), read lazily by
+  // QueuesModule.forRootAsync. This is also why there is NO flushdb here:
+  // the container is fresh per run (global-setup), so there are no stale keys,
+  // and flushing a shared DB nuked a live co-tenant's bull keys mid-suite —
+  // its queued jobs vanished and runs hung at `queued` (found at the
+  // iteration-4 checkpoint under full-suite load).
+  process.env.BULLMQ_PREFIX = `bull-t${n}`;
 
   const url = new URL(baseUrl);
   url.pathname = `/${dbIndex}`;
@@ -100,15 +124,21 @@ export async function seedPipeline(
     maxBudgetUsd?: number;
     timeoutMinutes?: number;
     ticketKey?: string;
+    /** Feature 004: point at a mockJira() baseUrl so PipelineService/HumanTaskService Jira writes actually land. */
+    jiraSiteUrl?: string;
+    /** Feature 004: real `encodeJiraCredentials(...)` bytes — required alongside jiraSiteUrl for a working LazyJiraClient. */
+    jiraCredentials?: Buffer;
+    /** Feature 004: agent.status_running, for resume/onRunStarted transition assertions. */
+    statusRunning?: string;
   } = {},
 ): Promise<SeededPipeline> {
   const [workspace] = await db
     .insert(schema.workspaces)
     .values({
       name: 'test-ws',
-      jiraSiteUrl: 'https://test.atlassian.net',
+      jiraSiteUrl: opts.jiraSiteUrl ?? 'https://test.atlassian.net',
       jiraProjectKey: 'BRIG',
-      jiraCredentials: Buffer.from('placeholder'),
+      jiraCredentials: opts.jiraCredentials ?? Buffer.from('placeholder'),
     })
     .returning({ id: schema.workspaces.id });
 
@@ -130,6 +160,7 @@ export async function seedPipeline(
       executorId: executor.id,
       name: 'implementer',
       instruction: 'Implement the ticket.',
+      statusRunning: opts.statusRunning ?? null,
       statusSuccess: 'Code Review',
       statusFailure: 'Blocked',
       maxAttempts: opts.maxAttempts ?? 2,
