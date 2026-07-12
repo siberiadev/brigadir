@@ -169,4 +169,35 @@ describe('workspace wizard verify/create + statuses (T139/T140)', () => {
     expect(fail.status).toBe(502);
     expect((await fail.json()).error.code).toBe('statuses_unavailable');
   });
+
+  it('REGRESSION (multi-workspace): statuses use the TARGET workspace credentials, not `workspaces LIMIT 1`', async () => {
+    // Reproduces the live iteration-5 acceptance failure: a first workspace
+    // with an undecodable placeholder blob (the yaml-seeded leftover) made the
+    // global memoized JIRA_CLIENT — resolved via LIMIT 1 — poison EVERY
+    // workspace's statuses with "unrecognized envelope". The per-workspace
+    // JiraClientFactory path must resolve the SECOND workspace on its own row.
+    await db.db.insert(schema.workspaces).values({
+      name: 'seed-placeholder',
+      jiraSiteUrl: 'https://acme.atlassian.net',
+      jiraProjectKey: 'JUNK',
+      jiraCredentials: Buffer.from('placeholder-jira-credentials'),
+    });
+
+    const created = await (
+      await create({
+        name: 'Real',
+        jira_site_url: jira.baseUrl,
+        jira_email: GOOD.email,
+        jira_api_token: GOOD.token,
+        expires_at: '2027-07-12T00:00:00.000Z',
+        board: '42',
+        repositories: [],
+      })
+    ).json();
+
+    const res = await fetch(`${url}/api/workspaces/${created.id}/statuses?refresh=true`, { headers: authHeaders });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.statuses.some((s: { name: string }) => s.name === 'Ready for Dev')).toBe(true);
+  });
 });

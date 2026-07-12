@@ -2,8 +2,7 @@ import { Injectable, Inject, Logger } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import type { BoardStatus } from '@brigadir/contracts';
-import { JIRA_CLIENT } from './jira-client.interface';
-import type { JiraClient } from './jira-client.interface';
+import { JiraClientFactory } from './jira-client-factory';
 
 /** Thrown when the board's status list can't be fetched (→ 502, not empty/stale). */
 export class StatusesUnavailable extends Error {
@@ -35,7 +34,10 @@ export class StatusesService {
 
   constructor(
     @Inject(DRIZZLE) private readonly db: BrigadirDb,
-    @Inject(JIRA_CLIENT) private readonly jira: JiraClient,
+    // Per-workspace client (NOT the global memoized JIRA_CLIENT, which resolves
+    // `workspaces LIMIT 1` and returns the wrong site/credentials once a second
+    // workspace exists — found live at the iteration-5 acceptance).
+    private readonly clientFactory: JiraClientFactory,
   ) {}
 
   async get(workspaceId: string, opts: { refresh?: boolean } = {}): Promise<BoardStatus[]> {
@@ -57,7 +59,8 @@ export class StatusesService {
 
     let statuses: BoardStatus[];
     try {
-      statuses = await this.jira.getProjectStatuses(ws.projectKey);
+      const jira = await this.clientFactory.forWorkspace(workspaceId);
+      statuses = await jira.getProjectStatuses(ws.projectKey);
     } catch (err) {
       this.logger.warn(`getProjectStatuses failed for ${ws.projectKey}: ${String(err)}`);
       throw new StatusesUnavailable(workspaceId, err);
