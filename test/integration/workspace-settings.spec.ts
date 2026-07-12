@@ -56,4 +56,18 @@ describe('workspace settings accessors (T039)', () => {
       active_sprint_id: 4123,
     });
   });
+
+  it('REGRESSION: a Jira-offset timestamp is normalized to UTC ISO before the strict schema sees it', async () => {
+    // Real Jira `updated` carries a numeric offset ("+0300"); the strict
+    // z.string().datetime() rejected it at write time (live iteration-5 find —
+    // mock-jira always emitted Z, so no suite caught it).
+    await setReconcileState(h.db, workspaceId, { highWaterMark: '2026-07-12T14:03:21.123+0300' });
+    expect((await getReconcileState(h.db, workspaceId)).highWaterMark).toBe(
+      '2026-07-12T11:03:21.123Z',
+    );
+
+    await expect(
+      setReconcileState(h.db, workspaceId, { highWaterMark: 'not-a-date' }),
+    ).rejects.toThrow(/not a parseable timestamp/);
+  });
 });

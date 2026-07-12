@@ -1,0 +1,29 @@
+// Design tokens for the BRIGADIR dashboard.
+//
+// Kept intentionally minimal — we do NOT re-declare Element Plus's palette here.
+// Element Plus already exposes its own `--el-*` CSS variables; these tokens are
+// for our own layout/spacing/typography so component styles stop hard-coding
+// magic numbers. Import into a component with:
+//   @use '@/styles/variables' as *;
+
+// Typography ---------------------------------------------------------------
+// Ubuntu is self-hosted via @fontsource (see main.ts). The stack falls back to
+// the platform UI font if Ubuntu fails to load.
+$font-family-base:
+  'Ubuntu', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+  'Helvetica Neue', Arial, sans-serif !default;
+
+$font-weight-regular: 400 !default;
+$font-weight-medium: 500 !default;
+$font-weight-bold: 700 !default;
+
+// Spacing scale (4px base) -------------------------------------------------
+$space-xs: 4px !default;
+$space-sm: 8px !default;
+$space-md: 12px !default;
+$space-lg: 16px !default;
+$space-xl: 24px !default;
+
+// Radius -------------------------------------------------------------------
+$radius-sm: 4px !default;
+$radius-md: 8px !default;

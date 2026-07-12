@@ -71,6 +71,22 @@ export async function getReconcileState(db: Db, workspaceId: string): Promise<Re
   };
 }
 
+/**
+ * Normalize any parseable timestamp to UTC ISO (`...Z`). Real Jira emits
+ * `updated` with a numeric offset (`2026-07-12T14:03:21.123+0300`), which the
+ * strict `z.string().datetime()` in WorkspaceSettingsSchema rejects — found
+ * live at the iteration-5 acceptance (mock-jira always emitted `Z`, hiding it).
+ * The HWM is stored in ONE canonical form so schema stays strict and JQL
+ * `sinceClause` math never has to reason about offsets.
+ */
+function toUtcIso(value: string): string {
+  const ms = Date.parse(value);
+  if (Number.isNaN(ms)) {
+    throw new Error(`setReconcileState: high_water_mark is not a parseable timestamp: "${value}"`);
+  }
+  return new Date(ms).toISOString();
+}
+
 /** Merge-write the reconcile sub-object, preserving whichever field is omitted. */
 export async function setReconcileState(
   db: Db,
@@ -79,7 +95,9 @@ export async function setReconcileState(
 ): Promise<void> {
   const current = await getWorkspaceSettings(db, workspaceId);
   const reconcile = {
-    high_water_mark: patch.highWaterMark ?? current.reconcile?.high_water_mark,
+    high_water_mark: patch.highWaterMark
+      ? toUtcIso(patch.highWaterMark)
+      : current.reconcile?.high_water_mark,
     active_sprint_id:
       patch.activeSprintId !== undefined ? patch.activeSprintId : current.reconcile?.active_sprint_id,
   };
