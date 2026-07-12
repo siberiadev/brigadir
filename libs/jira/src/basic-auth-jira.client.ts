@@ -5,6 +5,8 @@ import type {
   JiraTransition,
   JiraBoardType,
   JiraFeatureContext,
+  BoardStatus,
+  StatusCategoryKey,
 } from '@brigadir/contracts';
 import type { JiraClient } from './jira-client.interface';
 import { RateLimiter } from './rate-limiter';
@@ -150,6 +152,31 @@ export class BasicAuthJiraClient implements JiraClient {
       }));
 
     return { epic, linked };
+  }
+
+  async getMyself(): Promise<{ displayName: string }> {
+    const me = await this.request<{ displayName?: string }>('GET', '/rest/api/3/myself');
+    return { displayName: me.displayName ?? '' };
+  }
+
+  async getProjectStatuses(projectKey: string): Promise<BoardStatus[]> {
+    // Grouped by issue type; flatten + de-dup by status id (research R3).
+    const groups = await this.request<
+      Array<{ statuses?: Array<{ id: string; name: string; statusCategory?: { key?: string } }> }>
+    >('GET', `/rest/api/3/project/${projectKey}/statuses`);
+
+    const byId = new Map<string, BoardStatus>();
+    for (const group of groups ?? []) {
+      for (const s of group.statuses ?? []) {
+        if (byId.has(s.id)) continue;
+        byId.set(s.id, {
+          id: s.id,
+          name: s.name,
+          statusCategory: (s.statusCategory?.key ?? 'indeterminate') as StatusCategoryKey,
+        });
+      }
+    }
+    return [...byId.values()];
   }
 
   private async getIssueContext(

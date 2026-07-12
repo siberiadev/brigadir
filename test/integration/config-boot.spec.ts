@@ -6,8 +6,13 @@ import { join } from 'node:path';
 /**
  * T015 integration-lite + T017 broken matrix: the compiled backend bootstrap
  * (main.api.ts) aborts with a non-zero exit and a path-qualified stderr message
- * for every broken config. Config validation runs before any DB access, so
- * these cases need no Postgres.
+ * for every PRESENT-but-broken config. Config validation runs before any DB
+ * access, so these cases need no Postgres.
+ *
+ * Feature 005 (T128/FR-019): an ABSENT agents.yaml is NO LONGER a boot error —
+ * the DB is authoritative and the backend boots on DB-only config. That
+ * clean-boot-on-absent-yaml path is covered by config-source-flip.spec.ts (c);
+ * only present-but-invalid configs fail fast here.
  */
 
 const ROOT = process.cwd();
@@ -53,10 +58,4 @@ describe('backend bootstrap fail-fast on broken config (T015/T017)', () => {
       expect(stderr).toMatch(expectPath);
     });
   }
-
-  it('absent config file → non-zero exit naming the path', () => {
-    const { status, stderr } = bootWith(FIX('does-not-exist.yaml'));
-    expect(status).not.toBe(0);
-    expect(stderr).toContain('does-not-exist.yaml');
-  });
 });

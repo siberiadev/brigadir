@@ -28,6 +28,8 @@ describe('config forward-compatibility (T041 / FR-039)', () => {
 
   it('validates the full documented example (no unknown-key rejection)', () => {
     const cfg = loadAgentsConfig(FULL_EXAMPLE);
+    expect(cfg).not.toBeNull();
+    if (!cfg) throw new Error('expected config');
     expect(cfg.workspace.board_id).toBe(42);
     expect(cfg.workspace.scope_jql).toBe('labels = ai-pipeline');
     // forward-compat keys parsed, not required elsewhere
@@ -38,8 +40,10 @@ describe('config forward-compatibility (T041 / FR-039)', () => {
 
   it('boots + seeds: board_id → column, scope_jql → settings', async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppConfigModule] }).compile();
-    const { workspaceId } = await moduleRef.get(ConfigSeeder).seed();
+    const result = await moduleRef.get(ConfigSeeder).seed();
     await moduleRef.close();
+    if (!result) throw new Error('expected a seed result');
+    const { workspaceId } = result;
 
     const [ws] = await h.db.select().from(schema.workspaces);
     expect(ws.jiraBoardId).toBe(42);

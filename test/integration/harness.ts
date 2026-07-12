@@ -35,9 +35,36 @@ function ensureTestJwtSecret(): void {
   }
 }
 
+/**
+ * Feature 005: BRIGADIR_CREDENTIALS_KEY is a hard boot requirement for both
+ * apps (AES-256-GCM credentials at rest, FR-023) — same posture as
+ * BRIGADIR_JWT_SECRET. Supply one fixed 32-byte test key here (one place), so
+ * every suite that boots BackendAppModule/WorkerAppModule resolves it at boot.
+ */
+function ensureTestCredentialsKey(): void {
+  if (!process.env.BRIGADIR_CREDENTIALS_KEY) {
+    // 32 bytes, base64 (deterministic, test-only).
+    process.env.BRIGADIR_CREDENTIALS_KEY = Buffer.alloc(32, 7).toString('base64');
+  }
+}
+
+/**
+ * Feature 005: BRIGADIR_DASHBOARD_TOKEN is boot-required by the backend (the
+ * DashboardModule guard provider is fail-fast). Every suite that boots
+ * BackendAppModule needs it, so it is supplied here in one place.
+ */
+export const TEST_DASHBOARD_TOKEN = 'test-integration-dashboard-token';
+function ensureTestDashboardToken(): void {
+  if (!process.env.BRIGADIR_DASHBOARD_TOKEN) {
+    process.env.BRIGADIR_DASHBOARD_TOKEN = TEST_DASHBOARD_TOKEN;
+  }
+}
+
 /** Create a fresh database on the shared Postgres, apply committed migrations from scratch. */
 export async function startDatabase(): Promise<DbHarness> {
   ensureTestJwtSecret();
+  ensureTestCredentialsKey();
+  ensureTestDashboardToken();
   const adminUrl = inject('PG_ADMIN_URL');
   const dbName = `test_${randomBytes(6).toString('hex')}`;
 

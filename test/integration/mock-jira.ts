@@ -68,6 +68,12 @@ export interface MockJira {
   ): void;
   setStatus(key: string, status: string): void;
   setCategory(status: string, category: StatusCategoryKey): void;
+  /** feature 005: require a specific email:apiToken on /myself (else 401 — token_invalid). */
+  expectAuth(email: string, apiToken: string): void;
+  /** feature 005: display name returned by GET /rest/api/3/myself. */
+  setBotDisplayName(name: string): void;
+  /** feature 005: arm a one-shot 500 on the next project-statuses fetch (→ 502 upstream). */
+  arm500OnStatuses(): void;
   addBlockedByLink(key: string, blockerKey: string): void;
   /** feature 004 (T114): set this issue's epic (parent) key. */
   setEpic(key: string, epicKey: string): void;
@@ -99,6 +105,9 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
   const armed409 = new Set<string>();
   let armed429Seconds: number | null = null;
   let activeSprintId: number | null = null;
+  let expectedAuthHeader: string | null = null; // feature 005: /myself auth check
+  let botDisplayName = 'BRIGADIR Bot';
+  let armed500Statuses = false;
 
   const catOf = (status: string): StatusCategoryKey => category[status] ?? 'indeterminate';
 
@@ -268,6 +277,32 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
         },
       });
     }),
+
+    // --- feature 005: identity (wizard Verify) ---
+    http.get(`${baseUrl}/rest/api/3/myself`, ({ request }) => {
+      if (expectedAuthHeader && request.headers.get('Authorization') !== expectedAuthHeader) {
+        return HttpResponse.json({ errorMessages: ['Unauthorized'] }, { status: 401 });
+      }
+      return HttpResponse.json({ displayName: botDisplayName });
+    }),
+
+    // --- feature 005: project statuses (grouped by issue type; flattened client-side) ---
+    http.get(`${baseUrl}/rest/api/3/project/:key/statuses`, () => {
+      if (armed500Statuses) {
+        armed500Statuses = false;
+        return HttpResponse.json({ errorMessages: ['boom'] }, { status: 500 });
+      }
+      const statuses = Object.keys(category).map((name) => ({
+        id: `s-${name}`,
+        name,
+        statusCategory: { key: catOf(name) },
+      }));
+      // Two issue-type groups repeating the same statuses → exercises de-dup by id.
+      return HttpResponse.json([
+        { id: '1', name: 'Task', statuses },
+        { id: '2', name: 'Bug', statuses },
+      ]);
+    }),
   );
 
   let idSeq = 10000;
@@ -296,6 +331,15 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
     },
     setCategory(status, cat) {
       category[status] = cat;
+    },
+    expectAuth(email, apiToken) {
+      expectedAuthHeader = `Basic ${Buffer.from(`${email}:${apiToken}`).toString('base64')}`;
+    },
+    setBotDisplayName(name) {
+      botDisplayName = name;
+    },
+    arm500OnStatuses() {
+      armed500Statuses = true;
     },
     addBlockedByLink(key, blockerKey) {
       const issue = issues.get(key);
@@ -346,6 +390,9 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
       armed409.clear();
       armed429Seconds = null;
       activeSprintId = null;
+      expectedAuthHeader = null;
+      botDisplayName = 'BRIGADIR Bot';
+      armed500Statuses = false;
       for (const k of Object.keys(category)) {
         if (!(k in DEFAULT_CATEGORY)) delete category[k];
         else category[k] = DEFAULT_CATEGORY[k];

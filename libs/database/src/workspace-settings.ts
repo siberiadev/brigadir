@@ -1,5 +1,9 @@
 import { eq, sql } from 'drizzle-orm';
-import { WorkspaceSettingsSchema, type WorkspaceSettings } from '@brigadir/contracts';
+import {
+  WorkspaceSettingsSchema,
+  type WorkspaceSettings,
+  type WorkspaceRepository,
+} from '@brigadir/contracts';
 import type { BrigadirDb } from './drizzle.constants';
 import * as schema from './schema';
 
@@ -41,6 +45,17 @@ export async function patchWorkspaceSettings(
 
 export async function getScopeJql(db: Db, workspaceId: string): Promise<string | undefined> {
   return (await getWorkspaceSettings(db, workspaceId)).scope_jql;
+}
+
+/**
+ * The workspace's ordered repository list (feature 005; first = default). An
+ * absent/empty `repositories` blob yields `[]`.
+ */
+export async function getRepositories(
+  db: Db,
+  workspaceId: string,
+): Promise<WorkspaceRepository[]> {
+  return (await getWorkspaceSettings(db, workspaceId)).repositories ?? [];
 }
 
 export interface ReconcileState {

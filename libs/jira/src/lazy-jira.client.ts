@@ -1,30 +1,54 @@
-import type { ADFDoc, JiraIssue, JiraTransition, JiraBoardType, JiraFeatureContext } from '@brigadir/contracts';
+import type {
+  ADFDoc,
+  JiraIssue,
+  JiraTransition,
+  JiraBoardType,
+  JiraFeatureContext,
+  BoardStatus,
+} from '@brigadir/contracts';
 import type { JiraClient } from './jira-client.interface';
 
 /**
+ * What the resolver returns on each resolution: a cheap credential
+ * `fingerprint` and a `build()` that constructs the real client. The fingerprint
+ * is read cheaply every call; the (more expensive) `build()` runs only when the
+ * fingerprint changed.
+ */
+export interface ResolvedClientSource {
+  fingerprint: string;
+  build: () => JiraClient;
+}
+
+/**
  * A JiraClient that defers building the real client until the FIRST call
- * (Constitution lazy resource resolution). Boot stays credential-free: the DI
- * factory constructs only this wrapper; the `workspaces` row and its decrypted
- * credentials are read the first time a Jira operation actually runs, and the
- * resolved client is memoized. A failed resolution is NOT memoized, so a later
- * call retries once the workspace/credentials exist (e.g. after config seed).
+ * (Constitution lazy resource resolution) and — feature 005, R6 — rebuilds it
+ * when the workspace credentials change (token rotation).
  *
- * This is what lets the worker boot without any Jira credentials — the reconcile
- * pass resolves the client lazily, and a credential-less boot never crashes.
+ * The write-once memo was a rotation-invalidation hole: a rotated (possibly
+ * compromised) token left the memoized client authenticating with the OLD
+ * credentials, and the memo lives in the *worker* while rotation happens in the
+ * *backend* — a cross-process problem. The fix: on each call the resolver
+ * returns a cheap credential fingerprint (a hash of the `jira_credentials`
+ * bytes); the built client is memoized alongside it and REUSED while the
+ * fingerprint is unchanged, and REBUILT the moment it changes. Both processes
+ * re-read the row, so a rotation takes effect on the next Jira call in each.
+ *
+ * A failed resolution is NOT memoized, so a later call retries once the
+ * workspace/credentials exist (credential-free boot preserved).
  */
 export class LazyJiraClient implements JiraClient {
-  private delegate: Promise<JiraClient> | undefined;
+  private memo: { fingerprint: string; client: JiraClient } | undefined;
 
-  constructor(private readonly resolver: () => Promise<JiraClient>) {}
+  constructor(private readonly resolver: () => Promise<ResolvedClientSource>) {}
 
-  private client(): Promise<JiraClient> {
-    if (!this.delegate) {
-      this.delegate = this.resolver().catch((err: unknown) => {
-        this.delegate = undefined; // allow a later retry once creds exist
-        throw err;
-      });
+  private async client(): Promise<JiraClient> {
+    const { fingerprint, build } = await this.resolver();
+    if (this.memo && this.memo.fingerprint === fingerprint) {
+      return this.memo.client; // unchanged creds → reuse (keeps rate-limiter state)
     }
-    return this.delegate;
+    const client = build(); // first use OR rotation → (re)build
+    this.memo = { fingerprint, client };
+    return client;
   }
 
   async searchUpdated(jql: string, fields: string[]): Promise<JiraIssue[]> {
@@ -41,6 +65,12 @@ export class LazyJiraClient implements JiraClient {
   }
   async getFeatureContext(issueKey: string): Promise<JiraFeatureContext> {
     return (await this.client()).getFeatureContext(issueKey);
+  }
+  async getMyself(): Promise<{ displayName: string }> {
+    return (await this.client()).getMyself();
+  }
+  async getProjectStatuses(projectKey: string): Promise<BoardStatus[]> {
+    return (await this.client()).getProjectStatuses(projectKey);
   }
   async transitionTo(issueKey: string, targetStatusName: string): Promise<void> {
     return (await this.client()).transitionTo(issueKey, targetStatusName);

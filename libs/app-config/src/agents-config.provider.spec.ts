@@ -7,6 +7,8 @@ const FIX = (name: string): string => join(process.cwd(), 'test', 'fixtures', na
 describe('loadAgentsConfig — fail-fast provider (T015)', () => {
   it('loads and validates a good config, applying schema defaults', () => {
     const cfg = loadAgentsConfig(FIX('agents.valid.yaml'));
+    expect(cfg).not.toBeNull();
+    if (!cfg) throw new Error('expected config');
     expect(cfg.workspace.project_key).toBe('BRIG');
     expect(cfg.executors['mock-exec'].type).toBe('mock');
     expect(cfg.agents).toHaveLength(1);
@@ -15,15 +17,8 @@ describe('loadAgentsConfig — fail-fast provider (T015)', () => {
     expect(cfg.agents[0].max_attempts).toBe(2);
   });
 
-  it('throws naming the file path when the file is missing', () => {
-    let err: unknown;
-    try {
-      loadAgentsConfig(FIX('does-not-exist.yaml'));
-    } catch (e) {
-      err = e;
-    }
-    expect(err).toBeInstanceOf(AgentsConfigError);
-    expect((err as Error).message).toContain('does-not-exist.yaml');
+  it('returns null when the file is absent (yaml optional, FR-019)', () => {
+    expect(loadAgentsConfig(FIX('does-not-exist.yaml'))).toBeNull();
   });
 
   it('throws with the offending field path on a missing required field', () => {

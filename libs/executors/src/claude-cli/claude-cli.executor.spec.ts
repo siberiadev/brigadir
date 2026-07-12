@@ -58,6 +58,9 @@ function makeGroup() {
 function fakeDb(executorConfig: unknown, behavior: unknown) {
   return {
     select: () => ({
+      // Two select shapes: the run-config load (innerJoin chain) and the
+      // feature-005 workspace-settings read (plain where().limit() — returns
+      // empty settings so these tests keep resolving repos via the yaml path).
       from: () => ({
         innerJoin: () => ({
           innerJoin: () => ({
@@ -65,6 +68,9 @@ function fakeDb(executorConfig: unknown, behavior: unknown) {
               limit: () => Promise.resolve([{ executorConfig, behavior, workspaceId: 'ws-1' }]),
             }),
           }),
+        }),
+        where: () => ({
+          limit: () => Promise.resolve([{ settings: {} }]),
         }),
       }),
     }),

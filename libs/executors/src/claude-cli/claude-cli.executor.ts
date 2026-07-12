@@ -21,6 +21,39 @@ import { buildFeatureContextSection } from './feature-context';
 
 const STDERR_TAIL_BYTES = 16 * 1024;
 
+/**
+ * Repository source of truth (feature 005): workspace settings.repositories
+ * (what the wizard/settings screen writes — DB wins) beats the legacy
+ * agents.yaml workspace.repositories[], kept as fallback for yaml-imported
+ * setups whose settings blob predates the wizard. Empty name = the workspace
+ * default (first entry, FR-004/FR-008). Pure — unit-tested directly.
+ */
+export function pickWorkspaceRepository(
+  dbRepos: { name: string; git_url: string; default_branch: string }[],
+  yamlRepos: { name: string; url: string; default_branch: string }[],
+  repoName: string,
+  yamlLoaded: boolean,
+): WorktreeRepo {
+  if (dbRepos.length > 0) {
+    const entry = repoName ? dbRepos.find((r) => r.name === repoName) : dbRepos[0];
+    if (!entry) {
+      throw new Error(
+        `workspace has no repository named "${repoName}" in settings.repositories (linter should have caught this)`,
+      );
+    }
+    return { name: entry.name, url: entry.git_url, defaultBranch: entry.default_branch };
+  }
+
+  const entry = repoName ? yamlRepos.find((r) => r.name === repoName) : yamlRepos[0];
+  if (!entry) {
+    throw new Error(
+      `no repository "${repoName || '(default)'}" found: workspace settings has no repositories and ` +
+        (yamlLoaded ? 'agents.yaml does not define it either' : 'no agents.yaml is loaded'),
+    );
+  }
+  return { name: entry.name, url: entry.url, defaultBranch: entry.default_branch };
+}
+
 class StderrTail {
   private buf = '';
 
@@ -65,7 +98,11 @@ export class ClaudeCliExecutor implements AgentExecutor {
 
   constructor(
     @Inject(DRIZZLE) private readonly db: BrigadirDb,
-    @Inject(AGENTS_CONFIG) private readonly agentsConfig: AgentsConfig,
+    // Feature 005: AGENTS_CONFIG is optional (null on a DB-only boot). The
+    // claude_cli executor still resolves its repository from the yaml at
+    // run-time (DB-authoritative repo config is future work); a run with no
+    // yaml throws a clear error rather than crashing at boot.
+    @Inject(AGENTS_CONFIG) private readonly agentsConfig: AgentsConfig | null,
     @Inject(JIRA_CLIENT) private readonly jira: JiraClient,
   ) {}
 
@@ -342,21 +379,39 @@ export class ClaudeCliExecutor implements AgentExecutor {
     const behavior = (row.behavior ?? {}) as { allowed_tools?: string[]; branch_prefix?: string };
     const runtimeConfig = resolveClaudeCliConfig(rawConfig, behavior.allowed_tools ?? []);
 
-    const repoEntry = this.agentsConfig.workspace.repositories?.find(
-      (r) => r.name === runtimeConfig.repository,
-    );
-    if (!repoEntry) {
-      throw new Error(
-        `workspace has no repository named "${runtimeConfig.repository}" (boot validation should have caught this)`,
-      );
-    }
+    const repo = await this.resolveRepository(row.workspaceId, runtimeConfig.repository);
 
     return {
       runtimeConfig,
-      repo: { name: repoEntry.name, url: repoEntry.url, defaultBranch: repoEntry.default_branch },
+      repo,
       branchPrefix: behavior.branch_prefix ?? 'run',
       workspaceId: row.workspaceId,
     };
+  }
+
+  /**
+   * Repository source of truth (feature 005): `workspaces.settings.repositories`
+   * (what the wizard/settings screen writes — DB wins) first; the legacy
+   * `agents.yaml` workspace.repositories[] as fallback for yaml-imported setups
+   * whose settings blob predates the wizard. Empty name = the workspace default
+   * (first entry, FR-004/FR-008).
+   */
+  private async resolveRepository(workspaceId: string, repoName: string): Promise<WorktreeRepo> {
+    const [ws] = await this.db
+      .select({ settings: schema.workspaces.settings })
+      .from(schema.workspaces)
+      .where(eq(schema.workspaces.id, workspaceId))
+      .limit(1);
+    const settings = (ws?.settings ?? {}) as {
+      repositories?: { name: string; git_url: string; default_branch: string }[];
+    };
+
+    return pickWorkspaceRepository(
+      settings.repositories ?? [],
+      this.agentsConfig?.workspace.repositories ?? [],
+      repoName,
+      this.agentsConfig !== null,
+    );
   }
 
   async healthCheck(): Promise<{ ok: boolean; detail?: string }> {

@@ -90,13 +90,30 @@ export const JiraCredentialsSchema = z
 export type JiraCredentials = z.infer<typeof JiraCredentialsSchema>;
 
 /**
+ * A git repository the workspace operates on (feature 005). Lives in the
+ * `workspaces.settings` blob as an ordered list — index 0 is the default an
+ * agent inherits when its own `repository` is empty (FR-004/FR-008).
+ */
+export const WorkspaceRepositorySchema = z
+  .object({
+    name: z.string().min(1),
+    git_url: z.string().min(1),
+    default_branch: z.string().min(1),
+  })
+  .strict();
+export type WorkspaceRepository = z.infer<typeof WorkspaceRepositorySchema>;
+
+/**
  * `workspaces.settings` blob (data-model.md). All optional; absent = defaults.
  * scope_jql is the global ingest filter (FR-038); the reconcile object carries
- * the high-water mark and last-seen active sprint id (FR-014, FR-032).
+ * the high-water mark and last-seen active sprint id (FR-014, FR-032). Feature
+ * 005 adds the ordered `repositories` list (first = default).
  */
 export const WorkspaceSettingsSchema = z
   .object({
     scope_jql: z.string().min(1).optional(),
+    // Ordered; first = the default repository agents inherit (feature 005).
+    repositories: z.array(WorkspaceRepositorySchema).optional(),
     // iteration-1 seed leftovers (deprecated single-repo fields) tolerated:
     repo: z.string().optional(),
     default_branch: z.string().optional(),

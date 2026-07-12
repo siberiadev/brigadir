@@ -20,6 +20,16 @@ export const EXECUTOR_TYPES = [
   'deepseek_api',
 ] as const;
 
+/**
+ * The fixed registry of executor types the worker can actually RUN this
+ * iteration → the source of the provisioned `run.<type>` queue set (feature 005,
+ * R4/FR-018). Distinct from `EXECUTOR_TYPES` (the full config union, which still
+ * lists not-yet-implemented types); only these get a BullMQ queue, so the queue
+ * set no longer depends on `agents.yaml`. This is the "static structure" the
+ * QueuesModule reads at composition time (Constitution lazy-resolution carve-out).
+ */
+export const RUN_QUEUE_EXECUTOR_TYPES = ['mock', 'claude_cli'] as const;
+
 /** A git repository the workspace can operate on (validated now, consumed in iteration 3). */
 export const RepositoryConfigSchema = z
   .object({

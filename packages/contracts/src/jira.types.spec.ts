@@ -18,6 +18,31 @@ describe('WorkspaceSettingsSchema (T036)', () => {
     const res = WorkspaceSettingsSchema.safeParse({ reconcile: { high_water_mark: 'not-a-date' } });
     expect(res.success).toBe(false);
   });
+
+  it('parses an ordered repositories list (feature 005, first = default)', () => {
+    const res = WorkspaceSettingsSchema.safeParse({
+      repositories: [
+        { name: 'api', git_url: 'git@github.com:acme/api.git', default_branch: 'main' },
+        { name: 'web', git_url: 'git@github.com:acme/web.git', default_branch: 'develop' },
+      ],
+    });
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.repositories?.[0].name).toBe('api'); // ordered: first = default
+    }
+  });
+
+  it('still parses iteration-1 seed leftovers (repo/default_branch — forward-compat)', () => {
+    const res = WorkspaceSettingsSchema.safeParse({ repo: 'legacy', default_branch: 'main' });
+    expect(res.success).toBe(true);
+  });
+
+  it('rejects a repository missing git_url', () => {
+    const res = WorkspaceSettingsSchema.safeParse({
+      repositories: [{ name: 'api', default_branch: 'main' }],
+    });
+    expect(res.success).toBe(false);
+  });
 });
 
 describe('JiraCredentialsSchema (T036)', () => {

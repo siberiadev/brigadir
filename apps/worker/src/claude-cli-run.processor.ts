@@ -95,9 +95,14 @@ export class ClaudeCliRunProcessor extends WorkerHost {
     const timeoutMs = timeoutMsOverride ?? loaded.timeoutMinutes * 60_000;
     const timeoutTimer = setTimeout(() => controller.abort('timeout'), timeoutMs);
     const cancelPoll = setInterval(() => {
-      void this.isStillActive(runId).then((active) => {
-        if (!active) controller.abort('cancelled');
-      });
+      void this.isStillActive(runId)
+        .then((active) => {
+          if (!active) controller.abort('cancelled');
+        })
+        // Best-effort poll: a transient DB error (e.g. the pool closing during
+        // shutdown/teardown) must not become an unhandled rejection — the run
+        // continues and the next tick (or the run finishing) settles it.
+        .catch(() => {});
     }, loaded.cancelPollMs);
 
     let result: ExecutorResult;

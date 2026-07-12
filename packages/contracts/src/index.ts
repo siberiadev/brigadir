@@ -5,3 +5,5 @@ export * from './trigger-event.schema';
 export * from './jira.types';
 export * from './run-token';
 export * from './resolve-human-task.schema';
+export * from './dashboard.schema';
+export * from './agent-linter';

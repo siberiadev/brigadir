@@ -1,6 +1,6 @@
 import { Global, Module, DynamicModule } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
-import { loadAgentsConfig } from '@brigadir/app-config';
+import { RUN_QUEUE_EXECUTOR_TYPES } from '@brigadir/contracts';
 import {
   RECONCILE_QUEUE,
   runQueueName,
@@ -19,7 +19,11 @@ import {
  * Timing matters here: `register()` runs at MODULE IMPORT time (decorator
  * argument), so anything it reads must not depend on env set later.
  * - Queue NAMES are composition-time by design (registerQueue/@Processor need
- *   static names) — loadAgentsConfig() at import is accepted and documented.
+ *   static names). The source of the `run.<type>` set is the fixed
+ *   `RUN_QUEUE_EXECUTOR_TYPES` registry (@brigadir/contracts) — NOT the yaml
+ *   (feature 005, R4/FR-018). This severed the worker's last composition-time
+ *   `loadAgentsConfig()` read, so `agents.yaml` is fully optional at boot for
+ *   both processes; the registry is static structure (lazy-resolution carve-out).
  * - The Redis CONNECTION must be lazy: `forRootAsync` defers
  *   buildRedisConnection() to Nest context init, so `REDIS_URL` set in test
  *   beforeAll (or by the process manager) is honored. With eager `forRoot`
@@ -29,9 +33,7 @@ import {
 @Module({})
 export class QueuesModule {
   static register(): DynamicModule {
-    const config = loadAgentsConfig();
-    const executorTypes = [...new Set(Object.values(config.executors).map((e) => e.type))];
-    const runQueues = executorTypes.map(runQueueName);
+    const runQueues = RUN_QUEUE_EXECUTOR_TYPES.map(runQueueName);
     const allQueues = [...runQueues, RECONCILE_QUEUE];
 
     return {

@@ -1,4 +1,5 @@
 import { Module, DynamicModule, Logger } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import { JIRA_CLIENT } from './jira-client.interface';
 import { BasicAuthJiraClient } from './basic-auth-jira.client';
@@ -6,6 +7,9 @@ import { LazyJiraClient } from './lazy-jira.client';
 import { decodeJiraCredentials } from './credentials.codec';
 import { JiraAuthError } from './jira.errors';
 import { WorkspaceConnectionService } from './workspace-connection.service';
+import { credentialsKeyProvider, BRIGADIR_CREDENTIALS_KEY } from './credentials-key.provider';
+import { JiraClientFactory } from './jira-client-factory';
+import { StatusesService } from './statuses.service';
 
 /**
  * JiraModule (contracts.md C5 / research D2).
@@ -34,6 +38,12 @@ export class JiraModule {
       module: JiraModule,
       global: true,
       providers: [
+        // BRIGADIR_CREDENTIALS_KEY is a HARD boot requirement for BOTH apps
+        // (FR-023): declared as a module provider so it is instantiated eagerly
+        // at context init — a missing/mis-sized key fails the boot of the
+        // backend AND the worker, never a running key-less plaintext regime.
+        // Env is read INSIDE the useFactory (runtime), not at composition.
+        credentialsKeyProvider,
         {
           provide: JIRA_CLIENT,
           inject: [DRIZZLE],
@@ -50,20 +60,44 @@ export class JiraModule {
               if (!ws) {
                 throw new JiraAuthError('no workspace configured — cannot build a Jira client');
               }
-              const creds = decodeJiraCredentials(ws.credentials as Buffer);
-              logger.log(`Jira client resolved for ${ws.siteUrl} (lazy, first-use)`);
-              return new BasicAuthJiraClient({
-                baseUrl: ws.siteUrl,
-                email: creds.email,
-                apiToken: creds.api_token,
-                maxRps: Number(process.env.JIRA_MAX_RPS ?? 5),
-                concurrency: Number(process.env.JIRA_MAX_CONCURRENCY ?? 8),
-              });
+              // Cheap credential fingerprint (feature 005, R6): a hash of the
+              // site URL + credential bytes. When a token is rotated the bytes
+              // change, so the fingerprint changes and LazyJiraClient rebuilds
+              // the client on the next call — the stale (possibly compromised)
+              // token never keeps authenticating via the memo. Single-workspace
+              // `.limit(1)` preserved (multi-workspace keying noted, not built).
+              const credBytes = Buffer.from(ws.credentials as Buffer);
+              const fingerprint = createHash('sha256')
+                .update(ws.siteUrl)
+                .update(credBytes)
+                .digest('hex');
+              return {
+                fingerprint,
+                build: () => {
+                  const creds = decodeJiraCredentials(credBytes);
+                  logger.log(`Jira client (re)built for ${ws.siteUrl} (fingerprint ${fingerprint.slice(0, 8)})`);
+                  return new BasicAuthJiraClient({
+                    baseUrl: ws.siteUrl,
+                    email: creds.email,
+                    apiToken: creds.api_token,
+                    maxRps: Number(process.env.JIRA_MAX_RPS ?? 5),
+                    concurrency: Number(process.env.JIRA_MAX_CONCURRENCY ?? 8),
+                  });
+                },
+              };
             }),
         },
         WorkspaceConnectionService,
+        JiraClientFactory,
+        StatusesService,
       ],
-      exports: [JIRA_CLIENT, WorkspaceConnectionService],
+      exports: [
+        JIRA_CLIENT,
+        BRIGADIR_CREDENTIALS_KEY,
+        WorkspaceConnectionService,
+        JiraClientFactory,
+        StatusesService,
+      ],
     };
   }
 }

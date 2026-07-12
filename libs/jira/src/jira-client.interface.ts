@@ -1,4 +1,11 @@
-import type { ADFDoc, JiraIssue, JiraTransition, JiraBoardType, JiraFeatureContext } from '@brigadir/contracts';
+import type {
+  ADFDoc,
+  JiraIssue,
+  JiraTransition,
+  JiraBoardType,
+  JiraFeatureContext,
+  BoardStatus,
+} from '@brigadir/contracts';
 
 /**
  * The single typed surface for Jira (contracts.md C1). `BasicAuthJiraClient`
@@ -18,6 +25,14 @@ export interface JiraClient {
   getTransitions(issueKey: string): Promise<JiraTransition[]>;
   /** GET /issue/{key}?fields=parent,issuelinks — epic + linked issues, statuses only (feature 004, FR-026). */
   getFeatureContext(issueKey: string): Promise<JiraFeatureContext>;
+  /** GET /rest/api/3/myself — the authenticated bot identity (feature 005, wizard Verify). */
+  getMyself(): Promise<{ displayName: string }>;
+  /**
+   * GET /rest/api/3/project/{projectKey}/statuses — the project's statuses,
+   * flattened across issue types and de-duped by status id into a flat,
+   * column-less list (feature 005, R3 / FR-011).
+   */
+  getProjectStatuses(projectKey: string): Promise<BoardStatus[]>;
 
   // --- mutations (serialized per issue key) ---
   /** Discover→match-by-name→POST; TTL cache; 409 retry once; NoTransitionPath. */
