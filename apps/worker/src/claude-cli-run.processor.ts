@@ -1,5 +1,5 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Inject, Logger } from '@nestjs/common';
+import { Inject, Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import { Worker, type Job } from 'bullmq';
 import { desc, eq } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
@@ -9,6 +9,7 @@ import { RunsService, mapExitStatusToRunStatus } from '@brigadir/runs';
 import { ExecutorRegistry, type ExecutorResult, type RunContext } from '@brigadir/executors';
 import { PipelineService } from '@brigadir/pipeline';
 import { signRunToken } from '@brigadir/contracts';
+import { applyExecutorConcurrency } from './executor-concurrency';
 
 interface LoadedRun {
   runId: string;
@@ -43,11 +44,14 @@ const DEFAULT_CALLBACK_BASE_URL = 'http://localhost:3000/api/callbacks';
  * `running`" (Principle I), no new channel.
  */
 @Processor(runQueueName('claude_cli'), {
+  // Static fallback only — the real limit is executors.concurrency_limit,
+  // applied at bootstrap (executor-concurrency.ts; decorator args cannot
+  // read the DB, CLAUDE.md rule #1).
   concurrency: 2,
   maxStalledCount: 0,
   settings: { backoffStrategy },
 })
-export class ClaudeCliRunProcessor extends WorkerHost {
+export class ClaudeCliRunProcessor extends WorkerHost implements OnApplicationBootstrap {
   private readonly logger = new Logger(ClaudeCliRunProcessor.name);
 
   constructor(
@@ -58,6 +62,10 @@ export class ClaudeCliRunProcessor extends WorkerHost {
     private readonly pipeline: PipelineService,
   ) {
     super();
+  }
+
+  async onApplicationBootstrap(): Promise<void> {
+    await applyExecutorConcurrency(this.db, this.worker, 'claude_cli', this.logger);
   }
 
   async process(job: Job<{ runId: string }>): Promise<void> {

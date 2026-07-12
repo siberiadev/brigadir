@@ -1,5 +1,5 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Inject, Logger } from '@nestjs/common';
+import { Inject, Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import { Worker, type Job } from 'bullmq';
 import { eq } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
@@ -7,6 +7,7 @@ import { runQueueName, backoffStrategy } from '@brigadir/queues';
 import { RunsService, mapExitStatusToRunStatus } from '@brigadir/runs';
 import { ExecutorRegistry, type ExecutorResult, type RunContext } from '@brigadir/executors';
 import { PipelineService } from '@brigadir/pipeline';
+import { applyExecutorConcurrency } from './executor-concurrency';
 
 interface LoadedRun {
   runId: string;
@@ -29,11 +30,13 @@ interface LoadedRun {
  * `maxStalledCount: 0` (spec §0.5 — runs are non-idempotent, never silently re-run).
  */
 @Processor(runQueueName('mock'), {
+  // Static fallback only — the real limit is executors.concurrency_limit,
+  // applied at bootstrap (executor-concurrency.ts).
   concurrency: 2,
   maxStalledCount: 0,
   settings: { backoffStrategy },
 })
-export class RunProcessor extends WorkerHost {
+export class RunProcessor extends WorkerHost implements OnApplicationBootstrap {
   private readonly logger = new Logger(RunProcessor.name);
 
   constructor(
@@ -43,6 +46,10 @@ export class RunProcessor extends WorkerHost {
     private readonly pipeline: PipelineService,
   ) {
     super();
+  }
+
+  async onApplicationBootstrap(): Promise<void> {
+    await applyExecutorConcurrency(this.db, this.worker, 'mock', this.logger);
   }
 
   async process(job: Job<{ runId: string }>): Promise<void> {
