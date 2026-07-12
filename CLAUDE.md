@@ -8,6 +8,7 @@
 - `docs/spec.md` — детальное ТЗ (эндпоинты, таблицы, поведение модулей)
 - `docs/architecture.md` — схема БД (§3, реализована as-is), AgentExecutor (§4), callback-протокол (§5), ReportSchema (§6)
 - `docs/progress.md` — журнал итераций; новые итерации дописываются туда
+- `docs/local-setup.md` — локальный запуск (dev-режим, compose, секреты, грабли)
 - `.specify/memory/constitution.md` — обязательные принципы; проверяется гейтами spec-kit
 
 ## Команды
