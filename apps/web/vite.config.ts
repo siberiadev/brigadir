@@ -9,6 +9,9 @@ export default defineConfig({
   plugins: [vue()],
   resolve: {
     alias: {
+      // '@' -> ./src, so SFCs can `@use '@/styles/variables' as *;` and TS/Vue
+      // imports can use '@/...' without long relative paths.
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
       // The only RUNTIME value the web app pulls from contracts is the shared
       // linter. Import it from its TS SOURCE module (ESM, deps: types only) so
       // rollup can trace it and we avoid the CJS barrel — whose `export *` would
@@ -29,5 +32,12 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
+  },
+  css: {
+    preprocessorOptions: {
+      // Use Dart Sass's modern API — silences the legacy-js-api deprecation
+      // warning and is the path forward before Dart Sass 2.0 drops the old one.
+      scss: { api: 'modern' },
+    },
   },
 });

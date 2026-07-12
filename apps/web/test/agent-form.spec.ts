@@ -81,7 +81,7 @@ describe('AgentForm — statuses + linter mirror', () => {
 
     // Submitting → server 422 keeps it pinned.
     await wrapper.find('[data-test="name-input"]').setValue('Impl');
-    await wrapper.find('[data-test="save-button"]').trigger('click');
+    await (wrapper.vm as unknown as { submit: () => Promise<void> }).submit();
     await flush();
     expect(wrapper.find('[data-test="status-success-error"]').exists()).toBe(true);
   });
@@ -104,7 +104,7 @@ describe('AgentForm — statuses + linter mirror', () => {
     let saved = false;
     server.use(http.post('/api/agents', () => { saved = true; return HttpResponse.json(sampleAgent, { status: 201 }); }));
     await wrapper.find('[data-test="name-input"]').setValue('Impl2');
-    await wrapper.find('[data-test="save-button"]').trigger('click');
+    await (wrapper.vm as unknown as { submit: () => Promise<void> }).submit();
     await flush();
     expect(saved).toBe(true);
   });
@@ -132,7 +132,7 @@ describe('AgentForm — statuses + linter mirror', () => {
       }),
     );
     await wrapper.find('[data-test="name-input"]').setValue('Cyc');
-    await wrapper.find('[data-test="save-button"]').trigger('click');
+    await (wrapper.vm as unknown as { submit: () => Promise<void> }).submit();
     await flush();
     expect(saved).toBe(true);
   });

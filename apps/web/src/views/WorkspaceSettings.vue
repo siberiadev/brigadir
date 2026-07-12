@@ -77,9 +77,7 @@ async function saveSettings() {
 </script>
 
 <template>
-  <section v-if="workspace" class="settings">
-    <h2>Settings — {{ workspace.name }}</h2>
-
+  <div v-if="workspace" class="settings">
     <el-card class="block">
       <template #header>
         <div class="card-head">
@@ -163,11 +161,11 @@ async function saveSettings() {
         </el-button>
       </div>
     </el-card>
-  </section>
+  </div>
   <el-empty v-else description="Workspace not found" />
 </template>
 
-<style scoped>
+<style scoped lang="scss">
 .settings {
   max-width: 640px;
 }

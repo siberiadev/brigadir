@@ -4,36 +4,32 @@ import type { VueWrapper } from '@vue/test-utils';
 import { server } from './server';
 import { mountWithProviders, flush } from './mount';
 import { sampleVerify } from './handlers';
-import WorkspaceWizard from '../src/components/WorkspaceWizard/WorkspaceWizard.vue';
+import WorkspaceForm from '../src/components/WorkspaceForm/WorkspaceForm.vue';
 
 /**
- * T151 — Wizard step-2 Verify (US1). msw fakes `/api/*`; we drive the wizard and
- * assert rendered state (identity, field-pinned errors, the value posted).
+ * T151 (re-homed) — flat WorkspaceForm Verify (US1). The former wizard collapsed
+ * to one screen: Verify is inline, Create lives in the hosting FormDialog footer
+ * and is driven by the exposed submit()/canSubmit. msw fakes `/api/*`; we drive
+ * the form and assert rendered state (identity, field-pinned errors, the value
+ * posted) plus the canSubmit gate that replaces the old step gating.
  */
+
+type Exposed = { submit: () => Promise<void>; canSubmit: boolean };
+const exposed = (wrapper: VueWrapper) => wrapper.vm as unknown as Exposed;
 
 // Element Plus el-input forwards attrs (inheritAttrs: false) onto the inner
 // <input>, so the data-test hook lands directly on the input element.
-async function goToConnectionStep(wrapper: VueWrapper) {
-  await wrapper.find('[data-test="name-input"]').setValue('Acme');
-  await wrapper.find('[data-test="next-button"]').trigger('click');
-  await flush();
-}
-
 async function fillConnection(wrapper: VueWrapper, board = '42') {
+  await wrapper.find('[data-test="name-input"]').setValue('Acme');
   await wrapper.find('[data-test="site-url-input"]').setValue('https://acme.atlassian.net');
   await wrapper.find('[data-test="email-input"]').setValue('bot@acme.com');
   await wrapper.find('[data-test="token-input"]').setValue('tok-123');
   await wrapper.find('[data-test="board-input"]').setValue(board);
 }
 
-function nextButtonDisabled(wrapper: VueWrapper): boolean {
-  return (wrapper.find('[data-test="next-button"]').element as HTMLButtonElement).disabled;
-}
-
-describe('WorkspaceWizard step 2 — Verify', () => {
-  it('renders resolved identity and enables Next on a valid token+board (US1 #1)', async () => {
-    const wrapper = mountWithProviders(WorkspaceWizard);
-    await goToConnectionStep(wrapper);
+describe('WorkspaceForm — Verify', () => {
+  it('renders resolved identity and enables Create (canSubmit) on a valid token+board (US1 #1)', async () => {
+    const wrapper = mountWithProviders(WorkspaceForm);
     await fillConnection(wrapper);
 
     await wrapper.find('[data-test="verify-button"]').trigger('click');
@@ -44,10 +40,10 @@ describe('WorkspaceWizard step 2 — Verify', () => {
     expect(identity.text()).toContain(sampleVerify.bot_display_name);
     expect(identity.text()).toContain(sampleVerify.project_key);
     expect(identity.text()).toContain('kanban');
-    expect(nextButtonDisabled(wrapper)).toBe(false);
+    expect(exposed(wrapper).canSubmit).toBe(true);
   });
 
-  it('pins a token_invalid 422 to the token field and keeps Next disabled (US1 #3)', async () => {
+  it('pins a token_invalid 422 to the token field and keeps Create disabled (US1 #3)', async () => {
     server.use(
       http.post('/api/workspaces/verify', () =>
         HttpResponse.json(
@@ -70,15 +66,14 @@ describe('WorkspaceWizard step 2 — Verify', () => {
       ),
     );
 
-    const wrapper = mountWithProviders(WorkspaceWizard);
-    await goToConnectionStep(wrapper);
+    const wrapper = mountWithProviders(WorkspaceForm);
     await fillConnection(wrapper);
     await wrapper.find('[data-test="verify-button"]').trigger('click');
     await flush();
 
     expect(wrapper.find('[data-test="verify-identity"]').exists()).toBe(false);
     expect(wrapper.text()).toContain('Token could not be verified.');
-    expect(nextButtonDisabled(wrapper)).toBe(true);
+    expect(exposed(wrapper).canSubmit).toBe(false);
   });
 
   it('surfaces a board-distinct message for a board_forbidden 422 (US1 #4)', async () => {
@@ -104,8 +99,7 @@ describe('WorkspaceWizard step 2 — Verify', () => {
       ),
     );
 
-    const wrapper = mountWithProviders(WorkspaceWizard);
-    await goToConnectionStep(wrapper);
+    const wrapper = mountWithProviders(WorkspaceForm);
     await fillConnection(wrapper);
     await wrapper.find('[data-test="verify-button"]').trigger('click');
     await flush();
@@ -113,7 +107,7 @@ describe('WorkspaceWizard step 2 — Verify', () => {
     // The board error shows; it is NOT phrased as a token failure.
     expect(wrapper.text()).toContain('Board is not accessible');
     expect(wrapper.text()).not.toContain('Token could not be verified.');
-    expect(nextButtonDisabled(wrapper)).toBe(true);
+    expect(exposed(wrapper).canSubmit).toBe(false);
   });
 
   it('sends the pasted board value verbatim to /verify (server extracts the id, US1 #2)', async () => {
@@ -127,8 +121,7 @@ describe('WorkspaceWizard step 2 — Verify', () => {
       }),
     );
 
-    const wrapper = mountWithProviders(WorkspaceWizard);
-    await goToConnectionStep(wrapper);
+    const wrapper = mountWithProviders(WorkspaceForm);
     await fillConnection(wrapper, pastedUrl);
     await wrapper.find('[data-test="verify-button"]').trigger('click');
     await flush();
@@ -146,16 +139,13 @@ describe('WorkspaceWizard step 2 — Verify', () => {
       }),
     );
 
-    const wrapper = mountWithProviders(WorkspaceWizard);
-    await goToConnectionStep(wrapper);
+    const wrapper = mountWithProviders(WorkspaceForm);
     await fillConnection(wrapper);
     await wrapper.find('[data-test="verify-button"]').trigger('click');
     await flush();
-    // advance to repositories
-    await wrapper.find('[data-test="next-button"]').trigger('click');
-    await flush();
-    // create (repositories left blank → filtered out)
-    await wrapper.find('[data-test="create-button"]').trigger('click');
+    // Create is driven by the footer via the exposed submit() (repositories left
+    // blank → filtered out).
+    await exposed(wrapper).submit();
     await flush();
 
     expect(createBody).toBeDefined();

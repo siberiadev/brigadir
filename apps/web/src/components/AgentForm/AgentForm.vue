@@ -20,7 +20,7 @@ const props = defineProps<{
   agent?: AgentResponse | null;
   repositories: WorkspaceRepository[];
 }>();
-const emit = defineEmits<{ saved: [warnings: ErrorIssue[]]; close: [] }>();
+const emit = defineEmits<{ saved: [warnings: ErrorIssue[]] }>();
 
 const isEdit = computed(() => props.agent != null);
 
@@ -185,6 +185,10 @@ async function runTest() {
     testRunResult.value = (err as Error)?.message ?? 'Test run failed.';
   }
 }
+
+// The Cancel/Save buttons live in the hosting FormDialog footer (AgentsList),
+// so we expose the imperative bits the footer drives.
+defineExpose({ submit, saving });
 </script>
 
 <template>
@@ -332,13 +336,6 @@ async function runTest() {
       {{ generalError }}
     </el-alert>
 
-    <div class="actions">
-      <el-button data-test="cancel-button" @click="emit('close')">Cancel</el-button>
-      <el-button type="primary" data-test="save-button" :loading="saving" @click="submit">
-        {{ isEdit ? 'Save' : 'Create agent' }}
-      </el-button>
-    </div>
-
     <!-- Test-run by ticket key (edit only) -->
     <el-divider v-if="isEdit" />
     <div v-if="isEdit" class="test-run">
@@ -356,7 +353,7 @@ async function runTest() {
   </el-form>
 </template>
 
-<style scoped>
+<style scoped lang="scss">
 .agent-form {
   max-width: 640px;
 }
@@ -376,11 +373,6 @@ async function runTest() {
   font-size: 12px;
   color: var(--el-color-warning);
   margin-top: 4px;
-}
-.actions {
-  display: flex;
-  gap: 12px;
-  margin-top: 16px;
 }
 .test-run {
   display: flex;

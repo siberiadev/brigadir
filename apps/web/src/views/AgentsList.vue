@@ -5,6 +5,7 @@ import type { AgentResponse, ErrorIssue } from '@brigadir/contracts';
 import { useAgents, useDeleteAgent } from '../composables/useAgents';
 import { useWorkspaces } from '../composables/useWorkspaces';
 import AgentForm from '../components/AgentForm/AgentForm.vue';
+import FormDialog from '../components/FormDialog.vue';
 
 const props = defineProps<{ id: string }>();
 
@@ -19,6 +20,7 @@ const deleteAgent = useDeleteAgent(props.id);
 
 const showForm = ref(false);
 const editing = ref<AgentResponse | null>(null);
+const agentFormRef = ref<InstanceType<typeof AgentForm>>();
 
 function openCreate() {
   editing.value = null;
@@ -49,25 +51,35 @@ async function onDelete(agent: AgentResponse) {
   <section>
     <div class="header-row">
       <h2>Agents — {{ workspace?.name ?? id }}</h2>
-      <el-button v-if="!showForm" type="primary" data-test="new-agent" @click="openCreate">
+      <el-button type="primary" data-test="new-agent" @click="openCreate">
         New agent
       </el-button>
     </div>
 
-    <div v-if="showForm">
-      <h3>{{ editing ? 'Edit agent' : 'New agent' }}</h3>
+    <FormDialog v-model="showForm" :title="editing ? 'Edit agent' : 'New agent'">
       <AgentForm
+        v-if="showForm"
+        ref="agentFormRef"
         :key="editing?.id ?? 'new'"
         :workspace-id="id"
         :agent="editing"
         :repositories="repositories"
         @saved="onSaved"
-        @close="showForm = false"
       />
-    </div>
+      <template #footer>
+        <el-button data-test="cancel-button" @click="showForm = false">Cancel</el-button>
+        <el-button
+          type="primary"
+          data-test="save-button"
+          :loading="agentFormRef?.saving"
+          @click="agentFormRef?.submit()"
+        >
+          {{ editing ? 'Save' : 'Create agent' }}
+        </el-button>
+      </template>
+    </FormDialog>
 
     <el-table
-      v-else
       v-loading="agentsQuery.isLoading.value"
       :data="agentsQuery.data.value ?? []"
       data-test="agents-table"
@@ -90,7 +102,7 @@ async function onDelete(agent: AgentResponse) {
   </section>
 </template>
 
-<style scoped>
+<style scoped lang="scss">
 .header-row {
   display: flex;
   justify-content: space-between;

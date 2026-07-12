@@ -1,18 +1,41 @@
 <script setup lang="ts">
-import { RouterLink } from 'vue-router';
+import { ref } from 'vue';
+import { RouterLink, useRouter } from 'vue-router';
 import { useWorkspaces } from '../composables/useWorkspaces';
 import CredentialBadge from '../components/CredentialBadge.vue';
+import FormDialog from '../components/FormDialog.vue';
+import WorkspaceForm from '../components/WorkspaceForm/WorkspaceForm.vue';
+import WorkspaceSettings from './WorkspaceSettings.vue';
 
 const { data: workspaces, isLoading, isError, error } = useWorkspaces();
+const router = useRouter();
+
+// --- create workspace (flat form in a modal) ---
+const showCreate = ref(false);
+const workspaceFormRef = ref<InstanceType<typeof WorkspaceForm>>();
+function onCreated(id: string) {
+  showCreate.value = false;
+  router.push(`/workspaces/${id}/agents`);
+}
+
+// --- edit workspace (settings in a modal; each block keeps its own actions) ---
+const showSettings = ref(false);
+const settingsId = ref('');
+const settingsName = ref('');
+function openSettings(row: { id: string; name: string }) {
+  settingsId.value = row.id;
+  settingsName.value = row.name;
+  showSettings.value = true;
+}
 </script>
 
 <template>
   <section>
     <div class="header-row">
       <h2>Workspaces</h2>
-      <RouterLink to="/workspaces/new">
-        <el-button type="primary" data-test="new-workspace">New workspace</el-button>
-      </RouterLink>
+      <el-button type="primary" data-test="new-workspace" @click="showCreate = true">
+        New workspace
+      </el-button>
     </div>
 
     <el-alert v-if="isError" type="error" :closable="false" data-test="workspaces-error">
@@ -33,16 +56,36 @@ const { data: workspaces, isLoading, isError, error } = useWorkspaces();
           <RouterLink :to="`/workspaces/${row.id}/agents`">
             <el-button link type="primary">Agents</el-button>
           </RouterLink>
-          <RouterLink :to="`/workspaces/${row.id}/settings`">
-            <el-button link type="primary">Settings</el-button>
-          </RouterLink>
+          <el-button link type="primary" @click="openSettings(row)">Settings</el-button>
         </template>
       </el-table-column>
     </el-table>
+
+    <!-- Create workspace -->
+    <FormDialog v-model="showCreate" title="New workspace">
+      <WorkspaceForm v-if="showCreate" ref="workspaceFormRef" @created="onCreated" />
+      <template #footer>
+        <el-button data-test="cancel-button" @click="showCreate = false">Cancel</el-button>
+        <el-button
+          type="primary"
+          data-test="create-button"
+          :loading="workspaceFormRef?.saving"
+          :disabled="!workspaceFormRef?.canSubmit"
+          @click="workspaceFormRef?.submit()"
+        >
+          Create workspace
+        </el-button>
+      </template>
+    </FormDialog>
+
+    <!-- Edit workspace (settings) — no shared footer; blocks carry their own buttons -->
+    <FormDialog v-model="showSettings" :title="`Settings — ${settingsName}`">
+      <WorkspaceSettings v-if="showSettings" :key="settingsId" :id="settingsId" />
+    </FormDialog>
   </section>
 </template>
 
-<style scoped>
+<style scoped lang="scss">
 .header-row {
   display: flex;
   justify-content: space-between;

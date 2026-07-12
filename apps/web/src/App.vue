@@ -50,7 +50,9 @@ function saveToken() {
   </el-container>
 </template>
 
-<style scoped>
+<style scoped lang="scss">
+@use '@/styles/variables' as *;
+
 .token-gate {
   display: flex;
   justify-content: center;
@@ -66,7 +68,7 @@ function saveToken() {
   border-bottom: 1px solid var(--el-border-color);
 }
 .brand {
-  font-weight: 700;
+  font-weight: $font-weight-bold;
 }
 .app-nav {
   display: flex;

@@ -1,0 +1,23 @@
+// Global stylesheet entry point for the BRIGADIR dashboard.
+//
+// Imported once from src/main.ts *after* element-plus/dist/index.css so our
+// base rules and the --el-font-family override win by cascade order.
+// The Ubuntu @font-face declarations themselves are pulled in via @fontsource
+// JS imports in main.ts (the canonical @fontsource usage, resolved by Vite).
+
+@use 'variables' as *;
+@use 'normalize';
+
+// Apply Ubuntu everywhere, including inside Element Plus components — EP reads
+// its font from the --el-font-family custom property, so overriding it here
+// propagates to every el-* component.
+:root {
+  --el-font-family: #{$font-family-base};
+}
+
+body {
+  font-family: $font-family-base;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
