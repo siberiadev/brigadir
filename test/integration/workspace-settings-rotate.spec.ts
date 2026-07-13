@@ -130,6 +130,53 @@ describe('workspace settings + rotation + expiry badge (T141)', () => {
     expect(settings.branch_prefix).toBe('feat');
   });
 
+  // --- feature 008 (FR-014): additive read-only response fields ---
+
+  it('toResponse maps bot_email (decoded email only) + branch_prefix + scope_jql, api_token absent', async () => {
+    const id = await seedWorkspace(new Date(Date.now() + 100 * DAY));
+    await db.db
+      .update(schema.workspaces)
+      .set({ settings: { branch_prefix: 'feature', scope_jql: 'labels = ai-pipeline' } })
+      .where(eq(schema.workspaces.id, id));
+
+    const list = await (await fetch(`${url}/api/workspaces`, { headers })).json();
+    const ws = list.find((w: { id: string }) => w.id === id);
+    expect(ws.bot_email).toBe('old@acme.io'); // decoded .email ONLY
+    expect(ws.branch_prefix).toBe('feature');
+    expect(ws.scope_jql).toBe('labels = ai-pipeline');
+    // credentials NEVER serialized
+    expect(ws.api_token).toBeUndefined();
+    expect(ws.jira_api_token).toBeUndefined();
+  });
+
+  it('a settings blob lacking branch_prefix/scope_jql yields null (no throw, no default)', async () => {
+    const id = await seedWorkspace(new Date(Date.now() + 100 * DAY)); // settings = {} (default)
+
+    const list = await (await fetch(`${url}/api/workspaces`, { headers })).json();
+    const ws = list.find((w: { id: string }) => w.id === id);
+    expect(ws.branch_prefix).toBeNull();
+    expect(ws.scope_jql).toBeNull();
+    expect(ws.bot_email).toBe('old@acme.io');
+  });
+
+  it('an undecodable credentials blob → bot_email null and the endpoint still returns 200 (fail-safe)', async () => {
+    const [ws] = await db.db
+      .insert(schema.workspaces)
+      .values({
+        name: 'placeholder-creds',
+        jiraSiteUrl: 'https://acme.atlassian.net',
+        jiraProjectKey: 'JUNK',
+        jiraCredentials: Buffer.from('placeholder-jira-credentials'), // unrecognized envelope
+      })
+      .returning({ id: schema.workspaces.id });
+
+    const res = await fetch(`${url}/api/workspaces`, { headers });
+    expect(res.status).toBe(200); // one corrupt row must never 500 the list
+    const list = await res.json();
+    const row = list.find((w: { id: string }) => w.id === ws.id);
+    expect(row.bot_email).toBeNull();
+  });
+
   it('credential_status badges at 30/7/expired thresholds', async () => {
     const warn30 = await seedWorkspace(new Date(Date.now() + 25 * DAY));
     const warn7 = await seedWorkspace(new Date(Date.now() + 5 * DAY));

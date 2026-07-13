@@ -7,6 +7,13 @@
 // The dialog is teleported to <body> (append-to-body), so a footer rendered
 // here lands outside the form component's own subtree — form bodies stay
 // dialog-agnostic and expose an imperative submit() the parent wires up.
+//
+// `destroy-on-close` (FR-013): the slotted body fully UNMOUNTS on close and
+// re-mounts fresh on each open. Without it, reopening a dialog while the prior
+// instance's close transition was still running rendered an empty title+footer
+// shell (the reused body node never re-initialized). Dismissal rules are
+// unchanged — close only via the X, ESC, or an explicit footer button; never on
+// an outside click (`:close-on-click-modal="false"`).
 withDefaults(
   defineProps<{
     modelValue: boolean;
@@ -26,6 +33,7 @@ defineEmits<{ 'update:modelValue': [value: boolean] }>();
     :width="width"
     :close-on-click-modal="false"
     append-to-body
+    destroy-on-close
     @update:model-value="$emit('update:modelValue', $event)"
   >
     <slot />

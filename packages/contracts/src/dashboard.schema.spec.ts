@@ -46,6 +46,46 @@ describe('dashboard schemas (T119)', () => {
     }
   });
 
+  it('parses a valid workspace response with the additive read-only fields (008/FR-014)', () => {
+    const base = {
+      id: 'ws-1',
+      name: 'Acme',
+      jira_site_url: 'https://acme.atlassian.net',
+      project_key: 'BRIG',
+      board_id: 42,
+      board_type: 'kanban' as const,
+      expires_at: '2027-07-12T00:00:00.000Z',
+      credential_status: 'ok' as const,
+      repositories: [],
+      bot_email: 'bot@acme.io',
+      branch_prefix: 'feature',
+      scope_jql: 'labels = ai',
+      enabled: true,
+      created_at: '2026-07-12T00:00:00.000Z',
+      updated_at: '2026-07-12T00:00:00.000Z',
+    };
+    const ok = WorkspaceResponseSchema.safeParse(base);
+    expect(ok.success).toBe(true);
+    if (ok.success) {
+      expect(ok.data.bot_email).toBe('bot@acme.io');
+      expect(ok.data.branch_prefix).toBe('feature');
+      expect(ok.data.scope_jql).toBe('labels = ai');
+      // The shape has NO credential key (Principle V).
+      expect('api_token' in ok.data).toBe(false);
+      expect('jira_api_token' in ok.data).toBe(false);
+    }
+
+    // Legacy rows (created before prefix/scope were persisted, or an undecodable
+    // credential blob) surface `null` for all three — never a default injection.
+    const legacy = WorkspaceResponseSchema.safeParse({
+      ...base,
+      bot_email: null,
+      branch_prefix: null,
+      scope_jql: null,
+    });
+    expect(legacy.success).toBe(true);
+  });
+
   it('the Workspace/Verify response schemas never expose credentials', () => {
     // Structural guarantee: parsing strips unknown keys / rejects extras.
     const ws = WorkspaceResponseSchema.safeParse({

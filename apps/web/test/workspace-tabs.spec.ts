@@ -9,6 +9,7 @@ import WorkspaceList from '../src/views/WorkspaceList.vue';
 import '../src/views/WorkspacePage.vue';
 import '../src/views/AgentsList.vue';
 import '../src/views/Runs.vue';
+import '../src/views/WorkspaceSettings.vue';
 
 /**
  * Feature 007 — Workspace Tabs Navigation. These component tests drive the app's
@@ -115,10 +116,13 @@ describe('WorkspaceTabs — unknown-tab fallback & settings precedence (US2)', (
     expect(router.currentRoute.value.path).toBe('/workspaces/ws-1/agents');
   });
 
-  it('keeps /settings resolving to workspace-settings ahead of the nested catch-all (R1)', async () => {
+  it('resolves /settings to the nested settings tab ahead of the catch-all (008/R1)', async () => {
     const { router } = await mountApp('/workspaces/ws-1/agents');
 
-    expect(router.resolve('/workspaces/ws-1/settings').name).toBe('workspace-settings');
+    // Feature 008 retired the standalone page: the deep-link now resolves to the
+    // nested `settings` tab child, declared before `:catchAll` so it is not
+    // swallowed by the unknown-tab redirect.
+    expect(router.resolve('/workspaces/ws-1/settings').name).toBe('settings');
   });
 });
 
@@ -170,13 +174,13 @@ describe('WorkspaceList — list stays focused on lifecycle actions (US3)', () =
     expect(router.currentRoute.value.path).toBe('/');
   });
 
-  it('clicking Settings navigates to the workspace-settings page, not the agents tab', async () => {
+  it('clicking Settings navigates to the settings tab, not the agents tab (008)', async () => {
     const { wrapper, router } = await mountList();
 
     await wrapper.find('[data-test="open-settings-ws-1"]').trigger('click');
-    await settle(() => router.currentRoute.value.name === 'workspace-settings');
+    await settle(() => router.currentRoute.value.name === 'settings');
 
-    expect(router.currentRoute.value.name).toBe('workspace-settings');
+    expect(router.currentRoute.value.name).toBe('settings');
     expect(router.currentRoute.value.name).not.toBe('agents');
   });
 });

@@ -28,9 +28,31 @@ export const sampleWorkspace: WorkspaceResponse = {
   expires_at: '2027-07-12T00:00:00.000Z',
   credential_status: 'ok',
   repositories: [{ name: 'api', git_url: 'git@github.com:acme/api.git', default_branch: 'main' }],
+  // Feature 008 (FR-014): the additive read-only fields the Settings tab renders
+  // and its edit modals seed from.
+  bot_email: 'bot@acme.io',
+  branch_prefix: 'feature',
+  scope_jql: 'labels = ai-pipeline',
   enabled: true,
   created_at: '2026-07-12T00:00:00.000Z',
   updated_at: '2026-07-12T00:00:00.000Z',
+};
+
+/**
+ * A legacy/degraded workspace: null board + expiry + bot_email + config, no
+ * repositories. Drives the FR-015 placeholder assertions (Settings tab must
+ * render "Not configured" / "No expiry" / em-dash / "No repositories configured"
+ * rather than blank or broken rows).
+ */
+export const nullableWorkspace: WorkspaceResponse = {
+  ...sampleWorkspace,
+  board_id: null,
+  board_type: null,
+  expires_at: null,
+  bot_email: null,
+  branch_prefix: null,
+  scope_jql: null,
+  repositories: [],
 };
 
 export const sampleVerify: VerifyResponse = {

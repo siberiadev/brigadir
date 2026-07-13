@@ -33,7 +33,7 @@ Web app in the pnpm monorepo:
 **Purpose**: Confirm the working surface; no new dependencies (Vue 3.5 / Router 4.5 / Element
 Plus 2.9 / vue-query 5 / Zod already present).
 
-- [ ] T001 Confirm branch `008-workspace-settings-tab` is checked out and establish a green
+- [X] T001 Confirm branch `008-workspace-settings-tab` is checked out and establish a green
   baseline: run `pnpm --filter @brigadir/web test`, `pnpm --filter @brigadir/contracts test`,
   `pnpm --filter @brigadir/backend test` and note current pass state (no code change).
 
@@ -48,11 +48,11 @@ fields into every frontend test.
 **⚠️ CRITICAL**: US1 and US2 render/seed from `bot_email` / `branch_prefix` / `scope_jql`;
 they cannot be correctly implemented or tested until these fields exist end-to-end.
 
-- [ ] T002 [P] Extend `WorkspaceResponseSchema` in `packages/contracts/src/dashboard.schema.ts`:
+- [X] T002 [P] Extend `WorkspaceResponseSchema` in `packages/contracts/src/dashboard.schema.ts`:
   add `bot_email: z.string().nullable()`, `branch_prefix: z.string().nullable()`,
   `scope_jql: z.string().nullable()` (keep `.strict()`; `WorkspaceRotateRequest` /
   `WorkspaceSettingsRequest` / `WorkspaceCreateRequest` UNCHANGED).
-- [ ] T003 Map the three fields in `apps/backend/src/dashboard/workspaces.controller.ts`
+- [X] T003 Map the three fields in `apps/backend/src/dashboard/workspaces.controller.ts`
   `toResponse()`: `branch_prefix: settings.branch_prefix ?? null`,
   `scope_jql: settings.scope_jql ?? null`, and `bot_email` from
   `decodeJiraCredentials(row.jiraCredentials).email ?? null` (import `decodeJiraCredentials`
@@ -61,10 +61,10 @@ they cannot be correctly implemented or tested until these fields exist end-to-e
   unrecognized/corrupt blob (seen live in 005 with placeholder credentials) — wrap it in
   try/catch and return `bot_email: null` on failure so one bad row can never 500 the
   workspaces list/detail. Depends on T002.
-- [ ] T004 [P] Contract test in `packages/contracts/src/dashboard.schema.spec.ts`: a valid
+- [X] T004 [P] Contract test in `packages/contracts/src/dashboard.schema.spec.ts`: a valid
   response parses with `bot_email` / `branch_prefix` / `scope_jql`; assert the shape has NO
   `api_token` / `jira_api_token` key; assert `null` is accepted for all three (legacy rows).
-- [ ] T005 [P] Backend response-mapping test for `workspaces.controller` `toResponse` (alongside
+- [X] T005 [P] Backend response-mapping test for `workspaces.controller` `toResponse` (alongside
   the existing dashboard controller tests in `apps/backend/src/dashboard/`): given a workspace
   with persisted `branch_prefix`/`scope_jql` and encoded credentials → returns those values +
   decoded `bot_email`, and the serialized object has no `api_token`; a workspace whose settings
@@ -72,7 +72,7 @@ they cannot be correctly implemented or tested until these fields exist end-to-e
   workspace whose credentials blob is NOT decodable (placeholder/corrupt bytes) → `bot_email`
   is `null` and the endpoint still returns 200 (checkpoint addition — decode is fail-safe).
   Depends on T003.
-- [ ] T006 Extend the workspace fixture in `apps/web/test/handlers.ts` (and `mount.ts` seed if
+- [X] T006 Extend the workspace fixture in `apps/web/test/handlers.ts` (and `mount.ts` seed if
   applicable) so the workspaces list/detail handler returns `bot_email`, `branch_prefix`,
   `scope_jql`, and include a null-valued variant for the FR-015 placeholder assertions.
   Depends on T002.
@@ -94,7 +94,7 @@ default repo tagged; null board/expiry/bot_email/repos render placeholders.
 
 ### Tests for User Story 1
 
-- [ ] T007 [P] [US1] In `apps/web/test/workspace-settings.spec.ts`, assert US1: Settings is the
+- [X] T007 [P] [US1] In `apps/web/test/workspace-settings.spec.ts`, assert US1: Settings is the
   3rd tab; the Jira block (`settings-jira-block`) and config block (`settings-config-block`)
   render as read-only `el-descriptions` with NO editable `input`/`el-input` in the read-only
   view; `config-repo-default-tag` present on the first repo; `settings-executors-block` shows
@@ -104,13 +104,13 @@ default repo tagged; null board/expiry/bot_email/repos render placeholders.
 
 ### Implementation for User Story 1
 
-- [ ] T008 [US1] Register the nested `settings` child in `apps/web/src/router/index.ts` under
+- [X] T008 [US1] Register the nested `settings` child in `apps/web/src/router/index.ts` under
   `/workspaces/:id`, declared **before** the `:catchAll(.*)*` redirect child:
   `{ path: 'settings', name: 'settings', component: () => import('../views/WorkspaceSettings.vue'), props: true }`
   (the retire of the old top-level route happens in US3/T016).
-- [ ] T009 [US1] Add `{ name: 'settings', label: 'Settings' }` (third) to the `tabs` array in
+- [X] T009 [US1] Add `{ name: 'settings', label: 'Settings' }` (third) to the `tabs` array in
   `apps/web/src/views/WorkspacePage.vue`.
-- [ ] T010 [US1] Rewrite the read-only surface of `apps/web/src/views/WorkspaceSettings.vue`:
+- [X] T010 [US1] Rewrite the read-only surface of `apps/web/src/views/WorkspaceSettings.vue`:
   replace the inline Jira `el-form` with a read-only Jira `el-descriptions`
   (`data-test="settings-jira-block"`: `jira-site`, `jira-project`, `jira-board`,
   `jira-bot-email`, `jira-token-expiry`, `credential-status` via existing `CredentialBadge`),
@@ -139,7 +139,7 @@ cancel → unchanged.
 
 ### Tests for User Story 2
 
-- [ ] T011 [P] [US2] Extend `apps/web/test/workspace-settings.spec.ts` for US2: clicking
+- [X] T011 [P] [US2] Extend `apps/web/test/workspace-settings.spec.ts` for US2: clicking
   `edit-jira-connection` opens the connection modal with `rotate-email` seeded from `bot_email`;
   submitting via `reconnect-button` closes the modal and the Jira block reflects the change.
   Clicking `edit-config` opens the config modal seeded with the persisted `branch-prefix` /
@@ -149,19 +149,19 @@ cancel → unchanged.
 
 ### Implementation for User Story 2
 
-- [ ] T012 [P] [US2] Create `apps/web/src/components/ConnectionForm/ConnectionForm.vue`: extract
+- [X] T012 [P] [US2] Create `apps/web/src/components/ConnectionForm/ConnectionForm.vue`: extract
   the reconnect/re-verify body from the old `WorkspaceSettings.vue` (email `rotate-email`, new
   token `rotate-token`, expiry `rotate-expiry`, inline `rotate-error`). Props
   `{ workspaceId: string, botEmail: string | null }`; seed `jira_email` from `botEmail`; wrap
   `useRotateConnection`; `defineExpose({ submit, saving })`; emit `saved` on success; retain the
   re-verify-failure behavior (surface error, keep working connection). Mirror `ExecutorForm`.
-- [ ] T013 [P] [US2] Create `apps/web/src/components/ConfigForm/ConfigForm.vue`: extract the
+- [X] T013 [P] [US2] Create `apps/web/src/components/ConfigForm/ConfigForm.vue`: extract the
   branch-prefix / advanced scope-jql / repositories editor (`branch-prefix`, `toggle-advanced`,
   `scope-jql`, `repo-row-<i>` + name/url/branch/remove, `add-repo`). Props
   `{ workspaceId: string, branchPrefix: string | null, scopeJql: string | null, repositories }`;
   seed all inputs from props (empty prefix when null — NOT `feat`); wrap `useUpdateSettings`;
   `defineExpose({ submit, saving })`; emit `saved`. Mirror `ExecutorForm`.
-- [ ] T014 [US2] Wire the Edit modals into `apps/web/src/views/WorkspaceSettings.vue`: add
+- [X] T014 [US2] Wire the Edit modals into `apps/web/src/views/WorkspaceSettings.vue`: add
   `edit-jira-connection` and `edit-config` buttons on the read-only blocks, each opening a
   `FormDialog` hosting `ConnectionForm` / `ConfigForm` (seeded from the cached
   `WorkspaceResponse`: `botEmail`, `branchPrefix`, `scopeJql`, `repositories`). On `saved`:
@@ -183,7 +183,7 @@ action → route `settings` active, tab content shown, no standalone page; `/wor
 
 ### Tests for User Story 3
 
-- [ ] T015 [P] [US3] Add router assertions (in `apps/web/test/workspace-settings.spec.ts` or a
+- [X] T015 [P] [US3] Add router assertions (in `apps/web/test/workspace-settings.spec.ts` or a
   routing spec) using a real memory-history router built from the app routes: direct visit to
   `/workspaces/:id/settings` resolves route name `settings` with the Settings tab active and the
   read-only content rendered; the `WorkspaceList` Settings action navigates to route `settings`;
@@ -192,11 +192,11 @@ action → route `settings` active, tab content shown, no standalone page; `/wor
 
 ### Implementation for User Story 3
 
-- [ ] T016 [US3] In `apps/web/src/router/index.ts` remove the top-level
+- [X] T016 [US3] In `apps/web/src/router/index.ts` remove the top-level
   `{ name: 'workspace-settings', path: '/workspaces/:id/settings' }` route (retire the
   standalone page) and update the stale comments; verify the nested `settings` child (T008)
   precedes `:catchAll(.*)*` so the deep-link resolves to the tab.
-- [ ] T017 [US3] Repoint the Settings action in `apps/web/src/views/WorkspaceList.vue` to push
+- [X] T017 [US3] Repoint the Settings action in `apps/web/src/views/WorkspaceList.vue` to push
   `{ name: 'settings', params: { id } }` (was `workspace-settings`).
 
 **Checkpoint**: Deep-links and the list action land on the Settings tab; no standalone page.
@@ -213,13 +213,13 @@ the second modal renders its form body, not an empty title+footer shell.
 
 ### Tests for User Story 4
 
-- [ ] T018 [P] [US4] Regression test (in `apps/web/test/workspace-settings.spec.ts`): open an
+- [X] T018 [P] [US4] Regression test (in `apps/web/test/workspace-settings.spec.ts`): open an
   Edit modal, close it, and reopen an Edit modal within the close-animation window; assert the
   reopened modal's form body fields are present (zero empty-shell — SC-004).
 
 ### Implementation for User Story 4
 
-- [ ] T019 [US4] Add `destroy-on-close` to the `el-dialog` in
+- [X] T019 [US4] Add `destroy-on-close` to the `el-dialog` in
   `apps/web/src/components/FormDialog.vue` so the slotted body fully unmounts on close and
   re-mounts fresh on each open; preserve all dismissal rules (`:close-on-click-modal="false"`,
   close only via X / ESC / footer). Benefits all three edit modals + the create-workspace modal.
@@ -230,12 +230,12 @@ the second modal renders its form body, not an empty title+footer shell.
 
 ## Phase 7: Polish & Cross-Cutting Concerns
 
-- [ ] T020 [P] Run the full gate suite: `pnpm typecheck && pnpm lint && pnpm test`, plus
+- [X] T020 [P] Run the full gate suite: `pnpm typecheck && pnpm lint && pnpm test`, plus
   `pnpm --filter @brigadir/web test`, `pnpm --filter @brigadir/contracts test`,
   `pnpm --filter @brigadir/backend test` — all green.
-- [ ] T021 [P] Execute the `quickstart.md` manual validation pass (read-only tab, both Edit
+- [X] T021 [P] Execute the `quickstart.md` manual validation pass (read-only tab, both Edit
   round-trips, deep-link + back/forward, reopen race, nullable degradation).
-- [ ] T022 Append the iteration-8 entry to `docs/progress.md` (Settings tab, additive
+- [X] T022 Append the iteration-8 entry to `docs/progress.md` (Settings tab, additive
   `WorkspaceResponse` fields, FormDialog reopen-race fix) per the journal cadence.
 
 ---

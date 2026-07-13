@@ -237,3 +237,83 @@ the 48 web msw component tests (38 pre-existing + 10 new). `apps/web/**` is
 ESLint-ignored by the Nest-oriented root config (covered by vue-tsc). `git diff`
 confined to `apps/web/` + `specs/007-workspace-tabs-navigation/` — no
 `packages/contracts`, backend, worker, or `drizzle/` changes (FR-014, SC-006).
+
+## Iteration 8 — Workspace Settings Tab (feature 008)
+
+### What shipped
+
+A third router-driven tab **Settings** (after **Agents | Runs**) on the
+workspace page. The tab renders the workspace configuration as **read-only
+`el-descriptions` blocks** — not forms with disabled fields — in three sections:
+a **Jira connection** block (site, project, board, bot email, token expiry,
+credential badge), a **configuration** block (default branch prefix, advanced
+scope filter, repositories with the first tagged **Default**), and the existing
+**executors** admin section (table + create/edit/delete modals, kept verbatim,
+FR-009). Each editable block carries an **Edit** button that opens the
+corresponding form body inside the shared `FormDialog`; the modals **seed from
+the persisted `WorkspaceResponse`** and, on save, close and let vue-query
+invalidation refresh the blocks in place (FR-007). Cancel/close sends no request
+(FR-008). Every nullable value degrades to a placeholder — "Not configured" /
+"No expiry" / em-dash / "No repositories configured", no phantom default marker
+(FR-015).
+
+The standalone settings page is **retired**: `/workspaces/:id/settings` is now a
+nested `settings` tab child of `WorkspacePage`, declared **before** the
+`:catchAll` redirect so the shipped deep-link resolves to the tab and is not
+swallowed by the unknown-tab fallback. The list's Settings action and the
+`WorkspaceList` row action now push `{ name: 'settings' }`; the top-level
+`workspace-settings` route is gone (the iteration-7 precedence guard test was
+updated to assert the deep-link resolves to `settings`).
+
+The inline forms from the old `WorkspaceSettings.vue` were extracted into two
+dialog-agnostic bodies mirroring `ExecutorForm` — `ConnectionForm`
+(reconnect/re-verify, seeded from `bot_email`, keeps the working connection on a
+re-verify failure) and `ConfigForm` (branch prefix / scope JQL / repositories,
+seeded from persisted values). Both `defineExpose({ submit, saving })` and emit
+`saved`; the hosting `FormDialog` footer drives `submit()`.
+
+### The two defects fixed alongside
+
+1. **Settings seeded from hard-coded defaults** (FR-014). The old standalone form
+   seeded `branch_prefix`/`scope_jql` from `feat`/`""` because `GET /api/workspaces`
+   never serialized them, so re-saving could silently overwrite a customized
+   prefix. The **single additive, non-breaking** contract change adds
+   `bot_email` / `branch_prefix` / `scope_jql` (all **nullable**) to
+   `WorkspaceResponse` (`.strict()` kept). `toResponse` maps `branch_prefix` /
+   `scope_jql` from the `settings` jsonb and `bot_email` from the decoded
+   credential **email only** (`api_token` discarded, never serialized —
+   Principle V). Decode is **fail-safe**: `decodeJiraCredentials` throws on a
+   corrupt/placeholder blob (seen live in iteration 5), so it is wrapped in
+   try/catch → `bot_email: null`; one bad row can never 500 the list/detail.
+   A contract test asserts the three fields present and `api_token` absent; three
+   integration cases assert the decoded email, the nullable/legacy degradation,
+   and the corrupt-blob 200 fail-safe.
+2. **FormDialog reopen race** (FR-013). Reopening a `FormDialog` while the prior
+   instance's close transition was still running rendered an empty title+footer
+   shell. Fixed with `destroy-on-close` on the inner `el-dialog` so the slotted
+   body fully unmounts on close and re-mounts fresh on each open; all dismissal
+   rules preserved (no close on outside click; close only via X / ESC / footer).
+   Benefits all three edit modals + the create-workspace modal. A regression test
+   opens → closes → reopens within the close window and asserts the body fields
+   are present.
+
+### Tests
+
+`apps/web/test/workspace-settings.spec.ts` was rewritten (10 cases): read-only
+blocks with no editable inputs + default-repo tag + FR-015 placeholders (US1);
+both Edit-modal round-trips seeded from persisted values — the config seed
+assertion verifies the value equals the **stored** prefix, not `feat` (US2); the
+`/settings` deep-link resolving to route `settings` with the tab content, no
+`workspace-settings` route remaining, and the unknown-tab→agents fallback (US3);
+and the FormDialog reopen-race regression (US4). Modal content is queried on
+`document.body` (Element Plus dialogs teleport via `append-to-body`). A nullable
+workspace fixture was added to `test/handlers.ts`. The three additive fields got
+a `packages/contracts` schema test and three `test/integration` response-mapping
+cases.
+
+All gates green: `pnpm typecheck` (+ `pnpm --filter @brigadir/web typecheck`),
+`pnpm lint`, `pnpm test` (contracts 57, unit 190), the 53 web component tests,
+and `pnpm test:integration` (60 files / 184 tests — re-run because `toResponse`
+changed). The only backend/contract change is the additive `WorkspaceResponse`
+extension + its `toResponse` mapping; no DB migration, no run/callback pipeline
+change, no new endpoint (SC-005).

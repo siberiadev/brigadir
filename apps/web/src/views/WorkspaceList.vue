@@ -24,9 +24,9 @@ function openWorkspace(row: { id: string }) {
   router.push({ name: 'agents', params: { id: row.id } });
 }
 
-// --- edit workspace (settings is a page, reached from the row action) ---
+// --- edit workspace (settings is now the nested tab, reached from the row action) ---
 function openSettings(row: { id: string }) {
-  router.push({ name: 'workspace-settings', params: { id: row.id } });
+  router.push({ name: 'settings', params: { id: row.id } });
 }
 
 // --- enable/pause a workspace inline (US5) ---

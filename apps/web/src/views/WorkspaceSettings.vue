@@ -1,15 +1,25 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
-import type { ExecutorResponse, WorkspaceRepository } from '@brigadir/contracts';
-import { useWorkspaces, useRotateConnection, useUpdateSettings } from '../composables/useWorkspaces';
+import type { ExecutorResponse } from '@brigadir/contracts';
+import { useWorkspaces } from '../composables/useWorkspaces';
 import { useExecutors, useDeleteExecutor } from '../composables/useExecutors';
 import { ApiError } from '../api/client';
-import { defaultExpiry } from '../utils/date';
 import CredentialBadge from '../components/CredentialBadge.vue';
 import ExecutorForm from '../components/ExecutorForm/ExecutorForm.vue';
+import ConnectionForm from '../components/ConnectionForm/ConnectionForm.vue';
+import ConfigForm from '../components/ConfigForm/ConfigForm.vue';
 import FormDialog from '../components/FormDialog.vue';
 
+/**
+ * Workspace Settings tab (feature 008). Renders the workspace configuration as
+ * READ-ONLY `el-descriptions` blocks — Jira connection, configuration, and the
+ * existing executors admin (kept verbatim, FR-009). Each editable block carries
+ * an Edit button that opens the corresponding form body (ConnectionForm /
+ * ConfigForm) inside the shared FormDialog; the modals SEED from the persisted
+ * `WorkspaceResponse` (FR-014) and, on save, close + let vue-query refresh the
+ * blocks in place (FR-007). Nullable values degrade to placeholders (FR-015).
+ */
 const props = defineProps<{ id: string }>();
 
 const workspacesQuery = useWorkspaces();
@@ -17,68 +27,32 @@ const workspace = computed(() =>
   (workspacesQuery.data.value ?? []).find((w) => w.id === props.id),
 );
 
-// --- token rotation (PUT /jira-connection re-verifies live, server-side) ---
-const rotate = useRotateConnection(props.id);
-const rotation = reactive({ jira_email: '', jira_api_token: '' });
-const rotationExpiry = ref<Date>(defaultExpiry());
-const rotationError = ref('');
+const tokenExpiry = computed(() => {
+  const iso = workspace.value?.expires_at;
+  return iso ? new Date(iso).toLocaleDateString() : 'No expiry';
+});
+const board = computed(() => {
+  const ws = workspace.value;
+  if (!ws || ws.board_id == null || !ws.board_type) return 'Not configured';
+  return `#${ws.board_id} · ${ws.board_type}`;
+});
 
-async function reconnect() {
-  rotationError.value = '';
-  try {
-    await rotate.mutateAsync({
-      jira_email: rotation.jira_email,
-      jira_api_token: rotation.jira_api_token,
-      expires_at: rotationExpiry.value.toISOString(),
-    });
-    rotation.jira_api_token = '';
-    ElMessage.success('Connection updated.');
-  } catch (err) {
-    // A re-verify failure keeps the OLD credentials (server retains them); we
-    // surface the message inline and leave the displayed connection intact.
-    if (err instanceof ApiError) {
-      rotationError.value = err.issueFor('jira_api_token')?.message ?? err.message;
-    } else {
-      rotationError.value = (err as Error)?.message ?? 'Reconnect failed.';
-    }
-  }
+// --- edit modals ---
+const showConnection = ref(false);
+const showConfig = ref(false);
+const connectionFormRef = ref<InstanceType<typeof ConnectionForm>>();
+const configFormRef = ref<InstanceType<typeof ConfigForm>>();
+
+function onConnectionSaved() {
+  showConnection.value = false;
+  ElMessage.success('Connection updated.');
 }
-
-// --- settings (scope_jql / branch_prefix / repositories) ---
-// The workspace response exposes repositories but not scope_jql/branch_prefix,
-// so those start from sensible defaults (persisted on save; take effect next pass).
-const settings = reactive({ scope_jql: '', branch_prefix: 'feat' });
-const repositories = ref<WorkspaceRepository[]>([]);
-const showAdvanced = ref(false);
-
-watch(
-  workspace,
-  (ws) => {
-    if (ws) repositories.value = ws.repositories.map((r) => ({ ...r }));
-  },
-  { immediate: true },
-);
-
-const updateSettings = useUpdateSettings(props.id);
-
-function addRepository() {
-  repositories.value.push({ name: '', git_url: '', default_branch: 'main' });
-}
-function removeRepository(index: number) {
-  repositories.value.splice(index, 1);
-}
-
-async function saveSettings() {
-  const repos = repositories.value.filter((r) => r.name && r.git_url && r.default_branch);
-  await updateSettings.mutateAsync({
-    scope_jql: settings.scope_jql || undefined,
-    branch_prefix: settings.branch_prefix || undefined,
-    repositories: repos,
-  });
+function onConfigSaved() {
+  showConfig.value = false;
   ElMessage.success('Settings saved — effective on the next poller pass.');
 }
 
-// --- executors admin (US4) ---
+// --- executors admin (kept verbatim from feature 006) ---
 const executorsQuery = useExecutors(props.id);
 const deleteExecutor = useDeleteExecutor(props.id);
 const showExecutorForm = ref(false);
@@ -111,89 +85,80 @@ async function onDeleteExecutor(ex: ExecutorResponse) {
 
 <template>
   <div v-if="workspace" class="settings">
+    <!-- Jira connection (read-only) -->
     <div class="block">
       <div class="block-head">
         <h3>Jira connection</h3>
-        <CredentialBadge :status="workspace.credential_status" />
-      </div>
-      <p class="hint">
-        Site <strong>{{ workspace.jira_site_url }}</strong> · project
-        <strong>{{ workspace.project_key }}</strong>
-        <template v-if="workspace.expires_at">
-          · token expires {{ new Date(workspace.expires_at).toLocaleDateString() }}
-        </template>
-      </p>
-
-      <el-form label-position="top">
-        <el-form-item label="Bot email">
-          <el-input v-model="rotation.jira_email" data-test="rotate-email" />
-        </el-form-item>
-        <el-form-item label="New API token">
-          <el-input v-model="rotation.jira_api_token" type="password" data-test="rotate-token" />
-        </el-form-item>
-        <el-form-item label="Token expiry">
-          <el-date-picker v-model="rotationExpiry" type="date" data-test="rotate-expiry" />
-        </el-form-item>
-      </el-form>
-
-      <div v-if="rotationError" class="field-error" data-test="rotate-error">{{ rotationError }}</div>
-
-      <el-button
-        type="primary"
-        data-test="reconnect-button"
-        :loading="rotate.isPending.value"
-        @click="reconnect"
-      >
-        Reconnect (re-verify)
-      </el-button>
-    </div>
-
-    <div class="block">
-      <h3>Configuration</h3>
-      <el-form label-position="top">
-        <el-form-item label="Default branch prefix">
-          <el-input v-model="settings.branch_prefix" data-test="branch-prefix" />
-        </el-form-item>
-
-        <el-divider>
-          <el-button link data-test="toggle-advanced" @click="showAdvanced = !showAdvanced">
-            {{ showAdvanced ? 'Hide' : 'Show' }} advanced
-          </el-button>
-        </el-divider>
-        <el-form-item v-if="showAdvanced" label="Scope JQL (advanced)">
-          <el-input v-model="settings.scope_jql" data-test="scope-jql" />
-        </el-form-item>
-      </el-form>
-
-      <h4>Repositories (first = default)</h4>
-      <div
-        v-for="(repo, i) in repositories"
-        :key="i"
-        class="repo-row"
-        :data-test="`repo-row-${i}`"
-      >
-        <el-input v-model="repo.name" placeholder="name" :data-test="`repo-name-${i}`" />
-        <el-input v-model="repo.git_url" placeholder="git@…" :data-test="`repo-url-${i}`" />
-        <el-input v-model="repo.default_branch" placeholder="main" :data-test="`repo-branch-${i}`" />
-        <el-button link type="danger" :data-test="`repo-remove-${i}`" @click="removeRepository(i)">
-          Remove
-        </el-button>
-      </div>
-      <el-button data-test="add-repo" @click="addRepository">Add repository</el-button>
-
-      <div class="actions">
         <el-button
           type="primary"
-          data-test="save-settings"
-          :loading="updateSettings.isPending.value"
-          @click="saveSettings"
+          link
+          data-test="edit-jira-connection"
+          @click="showConnection = true"
         >
-          Save settings
+          Edit
         </el-button>
       </div>
+      <el-descriptions :column="1" border data-test="settings-jira-block">
+        <el-descriptions-item label="Site">
+          <span data-test="jira-site">{{ workspace.jira_site_url }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="Project">
+          <span data-test="jira-project">{{ workspace.project_key }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="Board">
+          <span data-test="jira-board">{{ board }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="Bot email">
+          <span data-test="jira-bot-email">{{ workspace.bot_email ?? '—' }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="Token expiry">
+          <span data-test="jira-token-expiry">{{ tokenExpiry }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="Credential status">
+          <span data-test="credential-status">
+            <CredentialBadge :status="workspace.credential_status" />
+          </span>
+        </el-descriptions-item>
+      </el-descriptions>
     </div>
 
+    <!-- Configuration (read-only) -->
     <div class="block">
+      <div class="block-head">
+        <h3>Configuration</h3>
+        <el-button type="primary" link data-test="edit-config" @click="showConfig = true">
+          Edit
+        </el-button>
+      </div>
+      <el-descriptions :column="1" border data-test="settings-config-block">
+        <el-descriptions-item label="Default branch prefix">
+          <span data-test="config-branch-prefix">{{ workspace.branch_prefix ?? 'Default (feat)' }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="Scope filter (advanced)">
+          <span data-test="config-scope-jql">{{ workspace.scope_jql ?? 'None' }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="Repositories">
+          <span v-if="!workspace.repositories.length" data-test="config-repos-empty">
+            No repositories configured
+          </span>
+          <div v-else class="repo-list">
+            <div
+              v-for="(repo, i) in workspace.repositories"
+              :key="i"
+              class="repo-line"
+              :data-test="`config-repo-${i}`"
+            >
+              <span class="repo-name">{{ repo.name }}</span>
+              <span class="repo-url">{{ repo.git_url }}</span>
+              <el-tag v-if="i === 0" size="small" data-test="config-repo-default-tag">Default</el-tag>
+            </div>
+          </div>
+        </el-descriptions-item>
+      </el-descriptions>
+    </div>
+
+    <!-- Executors admin (unchanged, FR-009) -->
+    <div class="block" data-test="settings-executors-block">
       <div class="block-head">
         <h3>Executors</h3>
         <el-button type="primary" data-test="new-executor" @click="openCreateExecutor">
@@ -232,6 +197,53 @@ async function onDeleteExecutor(ex: ExecutorResponse) {
       </el-table>
     </div>
 
+    <!-- Edit: Jira connection -->
+    <FormDialog v-model="showConnection" title="Edit Jira connection">
+      <ConnectionForm
+        v-if="showConnection"
+        ref="connectionFormRef"
+        :workspace-id="id"
+        :bot-email="workspace.bot_email"
+        @saved="onConnectionSaved"
+      />
+      <template #footer>
+        <el-button data-test="connection-cancel" @click="showConnection = false">Cancel</el-button>
+        <el-button
+          type="primary"
+          data-test="reconnect-button"
+          :loading="connectionFormRef?.saving"
+          @click="connectionFormRef?.submit()"
+        >
+          Reconnect (re-verify)
+        </el-button>
+      </template>
+    </FormDialog>
+
+    <!-- Edit: configuration -->
+    <FormDialog v-model="showConfig" title="Edit configuration">
+      <ConfigForm
+        v-if="showConfig"
+        ref="configFormRef"
+        :workspace-id="id"
+        :branch-prefix="workspace.branch_prefix"
+        :scope-jql="workspace.scope_jql"
+        :repositories="workspace.repositories"
+        @saved="onConfigSaved"
+      />
+      <template #footer>
+        <el-button data-test="config-cancel" @click="showConfig = false">Cancel</el-button>
+        <el-button
+          type="primary"
+          data-test="save-settings"
+          :loading="configFormRef?.saving"
+          @click="configFormRef?.submit()"
+        >
+          Save settings
+        </el-button>
+      </template>
+    </FormDialog>
+
+    <!-- Executor create/edit -->
     <FormDialog v-model="showExecutorForm" :title="editingExecutor ? 'Edit executor' : 'New executor'">
       <ExecutorForm
         v-if="showExecutorForm"
@@ -239,7 +251,7 @@ async function onDeleteExecutor(ex: ExecutorResponse) {
         :key="editingExecutor?.id ?? 'new'"
         :workspace-id="id"
         :executor="editingExecutor"
-        :repositories="repositories"
+        :repositories="workspace.repositories"
         @saved="onExecutorSaved"
       />
       <template #footer>
@@ -274,26 +286,26 @@ async function onDeleteExecutor(ex: ExecutorResponse) {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  margin-bottom: 12px;
 }
 .block-head h3 {
   margin-bottom: 0;
 }
-.hint {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
+.repo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
-.field-error {
-  font-size: 12px;
-  color: var(--el-color-danger);
-  margin: 8px 0;
-}
-.repo-row {
+.repo-line {
   display: flex;
   gap: 8px;
   align-items: center;
-  margin-bottom: 8px;
 }
-.actions {
-  margin-top: 16px;
+.repo-name {
+  font-weight: 600;
+}
+.repo-url {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 </style>

@@ -12,6 +12,7 @@ import {
   StatusesService,
   StatusesUnavailable,
   encodeJiraCredentials,
+  decodeJiraCredentials,
 } from '@brigadir/jira';
 import {
   WorkspaceVerifyRequestSchema,
@@ -218,11 +219,33 @@ export class WorkspacesController {
       expires_at: row.jiraCredentialExpiresAt ? row.jiraCredentialExpiresAt.toISOString() : null,
       credential_status: deriveCredentialStatus(row.jiraCredentialExpiresAt),
       repositories: settings.repositories ?? [],
+      // Feature 008 (FR-014): the additive, non-breaking read-only fields the
+      // Settings tab renders and seeds its edit modals from. Only `.email` is
+      // surfaced — `api_token` is discarded, never serialized (Principle V).
+      bot_email: this.decodeBotEmail(row.jiraCredentials),
+      branch_prefix: settings.branch_prefix ?? null,
+      scope_jql: settings.scope_jql ?? null,
       // Absent flag ⇒ enabled (data-model additive item 2; only `false` pauses).
       enabled: settings.enabled !== false,
       created_at: row.createdAt.toISOString(),
       updated_at: row.updatedAt.toISOString(),
     };
+  }
+
+  /**
+   * Decode ONLY the bot email from the credential blob for the read-only
+   * Settings view (FR-014). `decodeJiraCredentials` THROWS on an unrecognized or
+   * corrupt envelope (seen live in iteration 5 with placeholder credentials);
+   * the list/detail endpoint must never 500 on one bad row, so decode is
+   * fail-safe → `null`. `api_token` is discarded and never serialized.
+   */
+  private decodeBotEmail(blob: Buffer | Uint8Array | null): string | null {
+    if (!blob) return null;
+    try {
+      return decodeJiraCredentials(blob).email ?? null;
+    } catch {
+      return null;
+    }
   }
 }
 

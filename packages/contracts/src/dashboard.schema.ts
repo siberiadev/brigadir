@@ -96,6 +96,15 @@ export const WorkspaceResponseSchema = z
     expires_at: z.string().nullable(),
     credential_status: CredentialStatusSchema,
     repositories: z.array(WorkspaceRepositorySchema),
+    // Feature 008 (FR-014): the single additive, non-breaking extension. The
+    // Settings tab's read-only blocks render these and its edit modals SEED from
+    // them (killing the `feat`/`""` hard-coded-default footgun). All three are
+    // nullable (legacy rows created before prefix/scope were persisted → null).
+    // `bot_email` surfaces ONLY the decoded credential `.email`; `api_token` is
+    // NEVER a key of this shape (Principle V).
+    bot_email: z.string().nullable(),
+    branch_prefix: z.string().nullable(),
+    scope_jql: z.string().nullable(),
     // Feature 006 (US5): the enabled/pause flag surfaced so the settings toggle
     // reflects persisted state. Absent settings ⇒ treated as enabled (true).
     enabled: z.boolean(),
