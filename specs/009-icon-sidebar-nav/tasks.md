@@ -134,11 +134,11 @@ token is cleared, the gate is shown, and `app-sidebar` is no longer rendered.
 
 > Write this FIRST; it fails until T012 wires the emit.
 
-- [ ] T011 [US3] Add the "sign out" describe block to `apps/web/test/app-sidebar.spec.ts`: activating `sidebar-sign-out` (trigger `click`, jsdom-safe) clears the auth token, renders the full-screen token gate, and leaves `app-sidebar` absent from the tree; also assert the `sidebar-sign-out` tooltip reads "Sign out" (FR-012, SC-005, US3 scenarios 1–3)
+- [X] T011 [US3] Add the "sign out" describe block to `apps/web/test/app-sidebar.spec.ts`: activating `sidebar-sign-out` (trigger `click`, jsdom-safe) clears the auth token, renders the full-screen token gate, and leaves `app-sidebar` absent from the tree; also assert the `sidebar-sign-out` tooltip reads "Sign out" (FR-012, SC-005, US3 scenarios 1–3)
 
 ### Implementation for User Story 3
 
-- [ ] T012 [US3] Wire sign-out in `apps/web/src/components/AppSidebar.vue`: the bottom-pinned `sidebar-sign-out` icon emits `sign-out` on click (visually separated from the nav items); `App.vue` already handles `@sign-out="auth.clear()"` from T004 — keep `AppSidebar` presentational, no direct store access (contracts §Events, FR-003/012)
+- [X] T012 [US3] Wire sign-out in `apps/web/src/components/AppSidebar.vue`: the bottom-pinned `sidebar-sign-out` icon emits `sign-out` on click (visually separated from the nav items); `App.vue` already handles `@sign-out="auth.clear()"` from T004 — keep `AppSidebar` presentational, no direct store access (contracts §Events, FR-003/012)
 
 **Checkpoint**: Sign out from the rail clears the token and drops back to the gate
 with no sidebar.
@@ -157,11 +157,11 @@ set a token → `app-sidebar` appears alongside main content.
 
 > Write this FIRST; it passes once T004's gate/shell split and T014's guard hold.
 
-- [ ] T013 [US4] Add the "pre-auth gate" describe block to `apps/web/test/app-sidebar.spec.ts`: with no session token, `App.vue` renders the full-screen token gate and `app-sidebar` does NOT exist; after setting a valid token (via the auth store / token input), the shell re-renders and `app-sidebar` appears (FR-013, SC-004, US4 scenarios 1–2)
+- [X] T013 [US4] Add the "pre-auth gate" describe block to `apps/web/test/app-sidebar.spec.ts`: with no session token, `App.vue` renders the full-screen token gate and `app-sidebar` does NOT exist; after setting a valid token (via the auth store / token input), the shell re-renders and `app-sidebar` appears (FR-013, SC-004, US4 scenarios 1–2)
 
 ### Implementation for User Story 4
 
-- [ ] T014 [US4] Confirm/tighten the render gate in `apps/web/src/App.vue`: the `v-if="!auth.token"` gate branch renders no `AppSidebar`, and `AppSidebar` lives ONLY in the authenticated `v-else` branch (structure established in T004) — ensure the T013 assertions hold with no sidebar leakage into the gate (FR-013)
+- [X] T014 [US4] Confirm/tighten the render gate in `apps/web/src/App.vue`: the `v-if="!auth.token"` gate branch renders no `AppSidebar`, and `AppSidebar` lives ONLY in the authenticated `v-else` branch (structure established in T004) — ensure the T013 assertions hold with no sidebar leakage into the gate (FR-013)
 
 **Checkpoint**: The rail never leaks into the unauthenticated screen; all four
 stories independently pass.

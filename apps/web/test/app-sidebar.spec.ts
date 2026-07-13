@@ -158,3 +158,41 @@ describe('AppSidebar — open-count badge (US2)', () => {
     expect(badge(wrapper).props('hidden')).toBe(true);
   });
 });
+
+describe('AppSidebar — sign out (US3)', () => {
+  it('clears the token and drops back to the sidebar-free gate (FR-012, SC-005)', async () => {
+    const { wrapper } = await mountAuthedApp('/');
+
+    // The sign-out control names itself "Sign out".
+    expect(tooltips(wrapper).some((t) => t.content === 'Sign out')).toBe(true);
+    expect(wrapper.find('[data-test="app-sidebar"]').exists()).toBe(true);
+
+    await wrapper.find('[data-test="sidebar-sign-out"]').trigger('click');
+    await settle(() => !wrapper.find('[data-test="app-sidebar"]').exists());
+
+    // Token gone → full-screen gate, no rail.
+    expect(wrapper.find('[data-test="app-sidebar"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="token-input"]').exists()).toBe(true);
+  });
+});
+
+describe('AppSidebar — pre-auth gate has no sidebar (US4)', () => {
+  it('renders the full-screen gate with NO sidebar until a token is set (FR-013, SC-004)', async () => {
+    // No token: the gate is shown and the rail must be absent.
+    server.use(http.get('/api/human-tasks/count', () => HttpResponse.json({ open: 0 })));
+    const wrapper = mountWithProviders(App, { routes, initialPath: '/' });
+    await wrapper.vm.$router.isReady();
+    await flush();
+
+    expect(wrapper.find('[data-test="token-input"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="app-sidebar"]').exists()).toBe(false);
+
+    // Enter a valid token → the shell re-renders and the sidebar appears.
+    await wrapper.find('[data-test="token-input"]').setValue('a-token');
+    await wrapper.find('[data-test="token-submit"]').trigger('click');
+    await settle(() => wrapper.find('[data-test="app-sidebar"]').exists());
+
+    expect(wrapper.find('[data-test="app-sidebar"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="token-input"]').exists()).toBe(false);
+  });
+});
