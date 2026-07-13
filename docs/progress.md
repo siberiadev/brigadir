@@ -169,7 +169,8 @@ same day: PipelineService / HumanTaskService / ResumeService moved off the
 global LIMIT-1 Jira client onto per-workspace `forWorkspace` resolution (the
 write-path half of multi-workspace, missed by the 006 spec's US5 scope).
 
-**Deferred to iteration 10 step 0 (decision 2026-07-13)**: the write-path live
+**Deferred to iteration 11 step 0 (decision 2026-07-13; renumbered from 10 when
+iteration 10 "Platform Settings + глобальные executors" was inserted)**: the write-path live
 scenarios — agent-via-UI + mock test-run with a real Jira transition/comment
 (gates T158/T070), the first live `claude_cli` run (T091), and the callback
 run request_human → queue → resume (T117) — plus journal gate entries
@@ -388,3 +389,55 @@ Frontend-only (FR-015): the diff is confined to `apps/web/src/App.vue`,
 authoritative gates green: `pnpm --filter @brigadir/web typecheck` (strict
 props/events), `pnpm --filter @brigadir/web test` (67 web component tests, the
 14 new alongside the existing 53), and root `pnpm lint`.
+
+## Iteration 10 — Platform Settings + Global Executors (done outside spec-kit, decision 2026-07-13)
+
+### What shipped
+
+Executors moved from workspace scope to **platform scope**, retrospectively
+fixing the model: an executor is PHYSICAL capacity (the `claude` CLI on the
+host, a subscription or API key), and the system already treated it that way —
+one `run.<type>` BullMQ queue per type for the whole platform, and the worker's
+`applyExecutorConcurrency` summing `concurrency_limit` per type across all
+workspaces. The workspace scoping was inherited from the agents.yaml era and
+the config knob lied about its scope; this iteration makes the model honest.
+
+- **Schema (migration 0003 + `REVIEW-0003_platform_executors.md` + architecture
+  §3)**: `executors.workspace_id` (FK column) dropped; `executors_workspace_name`
+  replaced by a GLOBAL `UNIQUE(name)` (`executors_name`). Defensive dedupe:
+  colliding names are suffixed with an id fragment (row ids never change, so
+  `agents.executor_id` needs no rewrite; zero rows touched on the live DB).
+  Existing rows are kept; a leftover `repository` key in `config` is ignored.
+- **`repository` moved to the AGENT**: run-time resolution for `claude_cli` is
+  `agents.behavior.repository` (new OPTIONAL key in the existing behavior
+  jsonb — no agents DDL) → else the run workspace's default repository (first
+  `settings.repositories` entry; legacy yaml fallback kept). Stripped from the
+  executor typed config (`executor.schema.ts`), the ExecutorForm, and seeding.
+- **API**: workspace-scoped `/api/workspaces/:id/executors` replaced by global
+  `/api/executors` (GET/POST/PUT/DELETE, same bearer guard, same typed per-type
+  validation, global name-conflict 409, delete-guard 409 `executor_in_use`
+  counting referencing agents across ALL workspaces, secrets never serialized).
+  Workspace creation no longer seeds executors; one global TYPE-scoped backfill
+  at backend bootstrap inserts a type's default only when no executor of that
+  type exists at all (`claude` claude_cli / `mock` mock, both concurrency 2).
+- **UI**: new platform **Settings** surface — lucide `Settings` gear in the
+  70px rail (above Sign out, tooltip "Settings", active for `/settings/*`);
+  `/settings` → `/settings/executors`; the page has its own left sub-navigation
+  (single "Executors" item now, trivially extensible to General/Users/Usage).
+  The Executors section is REMOVED from the workspace Settings tab (Jira
+  connection + Configuration remain). AgentForm gained an optional Repository
+  select (workspace repositories + explicit "workspace default" empty option,
+  persisted into `behavior.repository`); its executor picker now lists the
+  global executors.
+
+### Tests
+
+Integration (testcontainers + mock-jira): global executors CRUD + name-conflict
++ cross-workspace delete guard + global type-scoped backfill + migration 0003
+(from scratch via the harness chain AND stepwise 0000–0002 with pre-seeded
+multi-workspace data, asserting kept rows/stable ids/dedup-suffix) + claude_cli
+repository resolution (behavior wins → workspace default → clear error when
+both missing). Web (msw): settings page + sub-nav, gear icon active state +
+tooltip, executor form without repository, agent form repository select +
+global executor picker; existing executor-scoped fixtures/specs updated for the
+new endpoint shapes.

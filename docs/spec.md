@@ -220,6 +220,14 @@ POST /api/workspaces                      # {name, jira_site_url, jira_email, ji
 PUT  /api/workspaces/:id/jira-connection  # переподключение/ротация токена (та же валидация)
 GET  /api/workspaces/:id/statuses         # статусы проекта из Jira — для селектов в форме агента
 
+# executors (ПЛАТФОРМЕННЫЕ, решение 2026-07-13: executor — физическая мощность,
+# не настройка workspace; админка — страница Settings /settings/executors)
+GET    /api/executors
+POST   /api/executors                     # typed-config по типу; имя глобально уникально (409)
+PUT    /api/executors/:id
+DELETE /api/executors/:id                 # 409 executor_in_use, если на него ссылаются агенты
+                                          # ЛЮБОГО workspace
+
 # agents (CRUD в UI с Phase 1)
 GET    /api/agents?workspace=
 POST   /api/agents                        # {name, instruction, executor_id, trigger_status,
