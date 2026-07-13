@@ -169,7 +169,7 @@ same day: PipelineService / HumanTaskService / ResumeService moved off the
 global LIMIT-1 Jira client onto per-workspace `forWorkspace` resolution (the
 write-path half of multi-workspace, missed by the 006 spec's US5 scope).
 
-**Deferred to iteration 9 step 0 (decision 2026-07-13)**: the write-path live
+**Deferred to iteration 10 step 0 (decision 2026-07-13)**: the write-path live
 scenarios — agent-via-UI + mock test-run with a real Jira transition/comment
 (gates T158/T070), the first live `claude_cli` run (T091), and the callback
 run request_human → queue → resume (T117) — plus journal gate entries
