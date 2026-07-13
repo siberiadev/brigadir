@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Component } from 'vue';
 import { useRoute, type RouteLocationRaw } from 'vue-router';
-import { LayoutGrid, Inbox, LogOut } from 'lucide-vue-next';
+import { LayoutGrid, Inbox, LogOut, Settings } from 'lucide-vue-next';
 
 /**
  * Icon rail (feature 009). PURE presentational: it takes the open-human-task
@@ -77,6 +77,17 @@ const route = useRoute();
       </el-tooltip>
     </nav>
     <div class="sidebar-bottom">
+      <!-- Platform Settings (2026-07-13): pinned above Sign out, active for /settings/*. -->
+      <el-tooltip content="Settings" placement="right">
+        <RouterLink
+          to="/settings"
+          class="nav-item"
+          :class="{ 'is-active': route.path.startsWith('/settings') }"
+          data-test="nav-settings"
+        >
+          <Settings class="nav-icon" />
+        </RouterLink>
+      </el-tooltip>
       <el-tooltip content="Sign out" placement="right">
         <button
           type="button"
@@ -121,6 +132,10 @@ const route = useRoute();
 }
 .sidebar-bottom {
   margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: $space-md;
 }
 // Shared icon-button chrome for nav links + the sign-out control.
 .nav-item {

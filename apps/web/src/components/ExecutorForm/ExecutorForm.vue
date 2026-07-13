@@ -1,22 +1,17 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue';
-import type {
-  ExecutorCreateRequest,
-  ExecutorResponse,
-  ExecutorType,
-  WorkspaceRepository,
-} from '@brigadir/contracts';
+import type { ExecutorCreateRequest, ExecutorResponse, ExecutorType } from '@brigadir/contracts';
 import { useCreateExecutor, useUpdateExecutor } from '../../composables/useExecutors';
 import { ApiError } from '../../api/client';
 
-// Typed per-type executor config form (US4), driven by the shared
-// `executor.schema` union — the field set switches on `type` (mock carries only
-// concurrency; claude_cli carries the CLI runtime fields). Mirrors AgentForm:
-// a dialog-agnostic body exposing submit()/saving for the hosting FormDialog.
+// Typed per-type executor config form, PLATFORM-scoped (2026-07-13): executors
+// are global capacity, so there is no workspace context and no repository field
+// (a run's repository is the agent's behavior.repository, else the workspace
+// default). Driven by the shared `executor.schema` union — the field set
+// switches on `type`. Mirrors AgentForm: a dialog-agnostic body exposing
+// submit()/saving for the hosting FormDialog.
 const props = defineProps<{
-  workspaceId: string;
   executor?: ExecutorResponse | null;
-  repositories: WorkspaceRepository[];
 }>();
 const emit = defineEmits<{ saved: [] }>();
 
@@ -30,7 +25,6 @@ const form = reactive({
   // claude_cli fields
   model: (cfg.model as string | undefined) ?? 'claude-sonnet-5',
   cli_path: (cfg.cli_path as string | undefined) ?? 'claude',
-  repository: (cfg.repository as string | undefined) ?? '',
   use_callback_channel: (cfg.use_callback_channel as boolean | undefined) ?? true,
   keep_failed_worktrees: (cfg.keep_failed_worktrees as boolean | undefined) ?? false,
   max_turns: (cfg.max_turns as number | undefined) ?? 30,
@@ -39,8 +33,8 @@ const form = reactive({
 const fieldErrors = reactive<Record<string, string>>({});
 const generalError = ref('');
 
-const create = useCreateExecutor(props.workspaceId);
-const update = useUpdateExecutor(props.workspaceId);
+const create = useCreateExecutor();
+const update = useUpdateExecutor();
 const saving = computed(() => create.isPending.value || update.isPending.value);
 
 function buildRequest(): ExecutorCreateRequest {
@@ -52,7 +46,6 @@ function buildRequest(): ExecutorCreateRequest {
     name: form.name,
     model: form.model,
     cli_path: form.cli_path,
-    repository: form.repository,
     use_callback_channel: form.use_callback_channel,
     keep_failed_worktrees: form.keep_failed_worktrees,
     max_turns: form.max_turns,
@@ -110,17 +103,6 @@ defineExpose({ submit, saving });
           <el-input v-model="form.cli_path" data-test="executor-cli-path" />
         </el-form-item>
       </div>
-
-      <el-form-item label="Repository" :error="fieldErrors.repository">
-        <el-select
-          v-model="form.repository"
-          clearable
-          placeholder="workspace default"
-          data-test="executor-repository"
-        >
-          <el-option v-for="r in repositories" :key="r.name" :label="r.name" :value="r.name" />
-        </el-select>
-      </el-form-item>
 
       <div class="two-col">
         <el-form-item label="Max turns">

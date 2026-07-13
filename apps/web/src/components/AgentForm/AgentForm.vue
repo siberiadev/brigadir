@@ -32,10 +32,10 @@ const statusesUnavailable = computed(() => statusesQuery.isError.value);
 const statusById = computed(() => new Map(boardStatuses.value.map((s) => [s.name, s.id])));
 
 const agentsQuery = useAgents(props.workspaceId);
-// Executors now come from the real CRUD surface (feature 006, FR-023): the
-// picker shows NAMES + a type badge, never a raw UUID, and defaults to the
-// workspace's claude_cli executor.
-const executorsQuery = useExecutors(props.workspaceId);
+// Executors are PLATFORM-scoped (2026-07-13): the picker lists the global
+// executors — NAMES + a type badge, never a raw UUID — and defaults to a
+// claude_cli executor.
+const executorsQuery = useExecutors();
 const executorOptions = computed(() => executorsQuery.data.value?.items ?? []);
 
 const a = props.agent;
@@ -52,7 +52,9 @@ const form = reactive({
   timeout_minutes: a?.timeout_minutes ?? 45,
   max_budget_usd: a?.max_budget_usd ?? null,
   max_attempts: a?.max_attempts ?? 2,
-  repository: '',
+  // The run's repository is the AGENT's choice (behavior.repository); '' = the
+  // workspace default repo, resolved at run time.
+  repository: (a?.behavior?.repository as string | undefined) ?? '',
   branch_prefix: (a?.behavior?.branch_prefix as string | undefined) ?? '',
   allowed_tools: (a?.behavior?.allowed_tools as string[] | undefined) ?? [],
   required_checks: (a?.behavior?.required_checks as string[] | undefined) ?? [],
@@ -138,9 +140,9 @@ function buildRequest(): AgentWriteRequest {
     timeout_minutes: form.timeout_minutes,
     max_budget_usd: form.max_budget_usd,
     max_attempts: form.max_attempts,
-    repository: form.repository || null,
     behavior: {
       branch_prefix: form.branch_prefix || null,
+      repository: form.repository || null,
       allowed_tools: form.allowed_tools,
       required_checks: form.required_checks,
       use_callback_channel: form.use_callback_channel,
@@ -308,8 +310,9 @@ defineExpose({ submit, saving });
       </el-form-item>
     </div>
 
-    <el-form-item label="Repository (empty = workspace default)">
+    <el-form-item label="Repository">
       <el-select v-model="form.repository" clearable data-test="repository-select">
+        <el-option label="workspace default" value="" data-test="repository-default-option" />
         <el-option v-for="r in repositories" :key="r.name" :label="r.name" :value="r.name" />
       </el-select>
     </el-form-item>

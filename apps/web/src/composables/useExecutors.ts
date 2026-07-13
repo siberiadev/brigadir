@@ -4,39 +4,39 @@ import { executorsApi } from '../api/executors';
 
 const api = executorsApi();
 
-export function executorsKey(workspaceId: string) {
-  return ['executors', workspaceId] as const;
+/** One global cache entry — executors are PLATFORM-scoped (2026-07-13). */
+export function executorsKey() {
+  return ['executors'] as const;
 }
 
-/** Workspace executors (US4). Feeds both the admin list and the agent picker. */
-export function useExecutors(workspaceId: string) {
+/** Platform executors. Feeds both the Settings admin list and the agent picker. */
+export function useExecutors() {
   return useQuery({
-    queryKey: executorsKey(workspaceId),
-    queryFn: () => api.list(workspaceId),
+    queryKey: executorsKey(),
+    queryFn: () => api.list(),
   });
 }
 
-export function useCreateExecutor(workspaceId: string) {
+export function useCreateExecutor() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: ExecutorCreateRequest) => api.create(workspaceId, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: executorsKey(workspaceId) }),
+    mutationFn: (body: ExecutorCreateRequest) => api.create(body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: executorsKey() }),
   });
 }
 
-export function useUpdateExecutor(workspaceId: string) {
+export function useUpdateExecutor() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, body }: { id: string; body: ExecutorUpdateRequest }) =>
-      api.update(workspaceId, id, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: executorsKey(workspaceId) }),
+    mutationFn: ({ id, body }: { id: string; body: ExecutorUpdateRequest }) => api.update(id, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: executorsKey() }),
   });
 }
 
-export function useDeleteExecutor(workspaceId: string) {
+export function useDeleteExecutor() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api.remove(workspaceId, id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: executorsKey(workspaceId) }),
+    mutationFn: (id: string) => api.remove(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: executorsKey() }),
   });
 }
