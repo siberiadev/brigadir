@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import { RouterLink, useRouter } from 'vue-router';
+import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import type { WorkspaceResponse } from '@brigadir/contracts';
 import { useWorkspaces, useSetWorkspaceEnabled } from '../composables/useWorkspaces';
 import CredentialBadge from '../components/CredentialBadge.vue';
 import FormDialog from '../components/FormDialog.vue';
 import WorkspaceForm from '../components/WorkspaceForm/WorkspaceForm.vue';
-import WorkspaceSettings from './WorkspaceSettings.vue';
 
 const { data: workspaces, isLoading, isError, error } = useWorkspaces();
 const router = useRouter();
@@ -20,14 +19,14 @@ function onCreated(id: string) {
   router.push(`/workspaces/${id}/agents`);
 }
 
-// --- edit workspace (settings in a modal; each block keeps its own actions) ---
-const showSettings = ref(false);
-const settingsId = ref('');
-const settingsName = ref('');
-function openSettings(row: { id: string; name: string }) {
-  settingsId.value = row.id;
-  settingsName.value = row.name;
-  showSettings.value = true;
+// --- open a workspace by clicking its row body (not an action control) ---
+function openWorkspace(row: { id: string }) {
+  router.push({ name: 'agents', params: { id: row.id } });
+}
+
+// --- edit workspace (settings is a page, reached from the row action) ---
+function openSettings(row: { id: string }) {
+  router.push({ name: 'workspace-settings', params: { id: row.id } });
 }
 
 // --- enable/pause a workspace inline (US5) ---
@@ -60,7 +59,14 @@ async function togglePause(row: WorkspaceResponse) {
       {{ (error as Error)?.message ?? 'Failed to load workspaces.' }}
     </el-alert>
 
-    <el-table v-else v-loading="isLoading" :data="workspaces ?? []" data-test="workspaces-table">
+    <el-table
+      v-else
+      v-loading="isLoading"
+      :data="workspaces ?? []"
+      data-test="workspaces-table"
+      class="workspaces-table"
+      @row-click="openWorkspace"
+    >
       <el-table-column prop="name" label="Name" />
       <el-table-column prop="project_key" label="Project" />
       <el-table-column prop="board_type" label="Board" />
@@ -78,19 +84,22 @@ async function togglePause(row: WorkspaceResponse) {
       </el-table-column>
       <el-table-column label="">
         <template #default="{ row }">
-          <RouterLink :to="`/workspaces/${row.id}/agents`">
-            <el-button link type="primary">Agents</el-button>
-          </RouterLink>
-          <RouterLink :to="`/workspaces/${row.id}/runs`">
-            <el-button link type="primary">Runs</el-button>
-          </RouterLink>
-          <el-button link type="primary" @click="openSettings(row)">Settings</el-button>
+          <!-- @click.stop: the row-body click opens the workspace (FR-003); a
+               row action must perform only its own action, never navigate (FR-004). -->
+          <el-button
+            link
+            type="primary"
+            :data-test="`open-settings-${row.id}`"
+            @click.stop="openSettings(row)"
+          >
+            Settings
+          </el-button>
           <el-button
             link
             :type="row.enabled ? 'warning' : 'success'"
             :loading="pendingId === row.id"
             :data-test="`toggle-pause-${row.id}`"
-            @click="togglePause(row)"
+            @click.stop="togglePause(row)"
           >
             {{ row.enabled ? 'Pause' : 'Start' }}
           </el-button>
@@ -114,11 +123,6 @@ async function togglePause(row: WorkspaceResponse) {
         </el-button>
       </template>
     </FormDialog>
-
-    <!-- Edit workspace (settings) — no shared footer; blocks carry their own buttons -->
-    <FormDialog v-model="showSettings" :title="`Settings — ${settingsName}`">
-      <WorkspaceSettings v-if="showSettings" :key="settingsId" :id="settingsId" />
-    </FormDialog>
   </section>
 </template>
 
@@ -127,5 +131,8 @@ async function togglePause(row: WorkspaceResponse) {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+.workspaces-table {
+  cursor: pointer;
 }
 </style>

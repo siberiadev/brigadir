@@ -177,3 +177,63 @@ T071/T092/T118/T159 and the T055 checkbox. They need a sacrificial board
 ticket and run at the start of the migration iteration, where live agent runs
 happen anyway. All static gates (`pnpm typecheck && pnpm lint && pnpm test`,
 the web package's `vue-tsc`, 38 msw component tests, 181 integration) green.
+
+## Iteration 7 — Workspace Tabs Navigation (feature 007)
+
+### What shipped
+
+Frontend-only rework of the workspace-level navigation in `apps/web`. A
+workspace is now a **page with two router-driven tabs — Agents | Runs** rather
+than two per-row action buttons. Clicking a workspace **row** in `WorkspaceList`
+opens that workspace on the Agents tab; a shared, reusable `WorkspaceTabs`
+component (`components/WorkspaceTabs/`) switches the body below by pushing a
+named route, so the **URL is the single source of truth for the active tab** —
+active state is a `computed` over `useRoute().name`, there is no local
+active-tab ref (FR-008).
+
+`/workspaces/:id` became a parent route rendering the new `WorkspacePage`
+(`<WorkspaceTabs>` + `<router-view>`), with children `agents`/`runs` kept at the
+**verbatim** shipped paths `/workspaces/:id/agents` and `/workspaces/:id/runs`
+(FR-009 — every existing deep-link from run cards / human queue / navbar
+resolves unchanged), an empty-path redirect to Agents (default tab, FR-006), and
+a nested `:catchAll(.*)*` redirect for unknown tabs → Agents (FR-012).
+`AgentsList.vue` and `Runs.vue` are reused **as-is** as the two tab bodies — zero
+changes inside them (FR-011).
+
+`WorkspaceList` lost the Agents/Runs `RouterLink` buttons (FR-001) and gained an
+`@row-click` that navigates to the workspace (FR-003); the retained Settings and
+Start/Pause row actions carry `@click.stop` so a row action never also triggers
+row navigation (FR-004). Settings now **navigates to the `workspace-settings`
+page** (its own top-level route) instead of opening the inline dialog — the
+orphaned settings `FormDialog` and its state were removed. (This is the one
+deliberate departure from the spec's "Settings opens the dialog as before"
+wording: the accepted iteration-7 decision routes Settings to the settings
+page; the tab test asserts the route becomes `workspace-settings`.)
+
+### Route precedence guard (research R1)
+
+The top-level static `/workspaces/:id/settings` (`workspace-settings`) must
+out-rank the nested `:catchAll` redirect so `/settings` is not swallowed. A
+component test asserts `router.resolve('/workspaces/:id/settings').name ===
+'workspace-settings'` against the **real** exported routes, so a future route
+reorder can't silently regress it.
+
+### Tests
+
+New `apps/web/test/workspace-tabs.spec.ts` (10 cases) drives the app's **real**
+routes through the memory-history harness: tab switch Agents⇄Runs with
+URL-reflected active tab, row-click navigation, both shipped deep-links,
+back/forward across tabs, unknown-tab→Agents fallback, settings precedence, no
+Agents/Runs buttons on rows, and that Start/Pause and Settings row actions
+don't wrongly navigate. `test/mount.ts` gained optional `routes`/`initialPath`
+(memory router seeded before install so vue-router's install navigation targets
+`initialPath`); the change is additive — the ~12 existing specs pass no `routes`
+and keep the single catch-all stub. Element Plus `el-tabs`/`el-table` events are
+driven via `$emit` (the jsdom-safe convention the 006 runs-table spec already
+uses).
+
+All gates green: `pnpm --filter @brigadir/web typecheck` (vue-tsc strict) and
+the 48 web msw component tests (38 pre-existing + 10 new). `apps/web/**` is
+ESLint-ignored by the Nest-oriented root config (covered by vue-tsc). `git diff`
+confined to `apps/web/` + `specs/007-workspace-tabs-navigation/` — no
+`packages/contracts`, backend, worker, or `drizzle/` changes (FR-014, SC-006).
