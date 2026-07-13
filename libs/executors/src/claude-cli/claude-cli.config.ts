@@ -9,14 +9,19 @@ export type ClaudeCliExecutorConfig = Extract<ExecutorConfig, { type: 'claude_cl
  * What's actually stored in `executors.config` (the DB jsonb column) at
  * runtime — the discriminant `type` and shared `concurrency` live in their
  * own columns, so the jsonb blob is everything else in the branch.
+ * `repository` is NOT part of the executor config (platform-scoped executors,
+ * 2026-07-13): a run's repository comes from `agents.behavior.repository`,
+ * else the run workspace's default; a leftover key in old rows is ignored.
  */
-export type ClaudeCliExecutorConfigInput = Omit<ClaudeCliExecutorConfig, 'type' | 'concurrency'>;
+export type ClaudeCliExecutorConfigInput = Omit<
+  ClaudeCliExecutorConfig,
+  'type' | 'concurrency' | 'repository'
+>;
 
 /** Fully-defaulted runtime shape the executor consumes — no optional fields left. */
 export interface ClaudeCliRuntimeConfig {
   model: string;
   cliPath: string;
-  repository: string;
   allowedTools: string[];
   keepFailedWorktrees: boolean;
   worktreeRoot: string;
@@ -41,7 +46,6 @@ export function resolveClaudeCliConfig(
   return {
     model: raw.model,
     cliPath: raw.cliPath,
-    repository: raw.repository,
     allowedTools:
       raw.allowedTools && raw.allowedTools.length > 0 ? raw.allowedTools : [...agentAllowedTools],
     keepFailedWorktrees: raw.keepFailedWorktrees,

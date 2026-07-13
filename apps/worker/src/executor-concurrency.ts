@@ -11,7 +11,11 @@ import { type BrigadirDb, schema } from '@brigadir/database';
  * static fallback and the real limit is applied here at bootstrap, when the
  * worker instance exists. Several executors of one type (e.g. a subscription
  * runner + a team API-key runner) share the type's queue, so the worker's slot
- * count is their SUM. No rows → the decorator default stands.
+ * count is their SUM. Executors are PLATFORM-scoped (migration 0003,
+ * 2026-07-13), so this sum is honestly global — it always was operationally
+ * (one `run.<type>` queue per type for the whole platform); the former
+ * workspace scoping of the rows was the lie. No rows → the decorator default
+ * stands.
  *
  * Called at bootstrap AND on a periodic timer (feature 006, FR-025): editing a
  * limit re-applies to the live worker within ~15 s with no restart. The DB is

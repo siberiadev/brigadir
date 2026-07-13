@@ -22,6 +22,16 @@ import { buildFeatureContextSection } from './feature-context';
 const STDERR_TAIL_BYTES = 16 * 1024;
 
 /**
+ * Which repository NAME a run asks for (platform-scoped executors,
+ * 2026-07-13): the executor is platform capacity and carries no repository, so
+ * the choice is the AGENT's — `behavior.repository` when set, else '' (= the
+ * run workspace's default repository). Pure — unit-tested directly.
+ */
+export function resolveRepositoryName(behavior: { repository?: unknown }): string {
+  return typeof behavior.repository === 'string' ? behavior.repository : '';
+}
+
+/**
  * Repository source of truth (feature 005): workspace settings.repositories
  * (what the wizard/settings screen writes — DB wins) beats the legacy
  * agents.yaml workspace.repositories[], kept as fallback for yaml-imported
@@ -84,12 +94,12 @@ function runFailed(result: ExecutorResult): boolean {
  * `result.result`-text fallback exists, by design).
  *
  * `RunContext` (frozen, FR-001) carries only the generic run shape; the
- * claude_cli-specific instance config (model/cliPath/repository/allowedTools/
+ * claude_cli-specific instance config (model/cliPath/allowedTools/
  * worktree roots/kill+cancel timing) has no home there, so this executor
  * looks it up itself via `ctx.runId` — the same DB-lookup pattern
- * `MockExecutor` already uses for its scenario. `AGENTS_CONFIG` resolves the
- * `repository` name to an actual git URL (workspace.repositories[], static
- * process config, not a secret).
+ * `MockExecutor` already uses for its scenario. The repository NAME comes from
+ * `agents.behavior.repository` (else the workspace default); workspace
+ * settings — or legacy `AGENTS_CONFIG` — resolve it to an actual git URL.
  */
 @Injectable()
 export class ClaudeCliExecutor implements AgentExecutor {
@@ -376,10 +386,16 @@ export class ClaudeCliExecutor implements AgentExecutor {
     }
 
     const rawConfig = row.executorConfig as ClaudeCliExecutorConfigInput;
-    const behavior = (row.behavior ?? {}) as { allowed_tools?: string[]; branch_prefix?: string };
+    const behavior = (row.behavior ?? {}) as {
+      allowed_tools?: string[];
+      branch_prefix?: string;
+      repository?: string;
+    };
     const runtimeConfig = resolveClaudeCliConfig(rawConfig, behavior.allowed_tools ?? []);
 
-    const repo = await this.resolveRepository(row.workspaceId, runtimeConfig.repository);
+    // Platform-scoped executors (2026-07-13): the repository is the AGENT's
+    // choice (behavior.repository), else the run workspace's default repo.
+    const repo = await this.resolveRepository(row.workspaceId, resolveRepositoryName(behavior));
 
     return {
       runtimeConfig,
