@@ -52,24 +52,42 @@ async function onDeleteExecutor(ex: ExecutorResponse) {
       </el-button>
     </div>
 
+    <!-- Named runner profiles (2026-07-14): Type → Model → Name → limits → key → enabled. -->
     <el-table
       v-loading="executorsQuery.isLoading.value"
       :data="executorsQuery.data.value?.items ?? []"
       data-test="executors-table"
     >
-      <el-table-column label="Name">
-        <template #default="{ row }">
-          <span data-test="executor-name-cell">{{ row.name }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="Type">
+      <el-table-column label="Type" width="110">
         <template #default="{ row }">
           <el-tag size="small" :type="row.type === 'claude_cli' ? 'primary' : 'info'">
             {{ row.type }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="concurrency_limit" label="Concurrency" width="120" />
+      <el-table-column label="Model">
+        <template #default="{ row }">
+          <span data-test="executor-model-cell">{{ row.config.model ?? '—' }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="Name">
+        <template #default="{ row }">
+          <span data-test="executor-name-cell">{{ row.name }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column prop="max_parallel_runs" label="Max parallel runs" width="150" />
+      <el-table-column label="API key" width="100">
+        <template #default="{ row }">
+          <span data-test="executor-api-key-cell">{{ row.has_api_key ? 'set' : '—' }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="Enabled" width="100">
+        <template #default="{ row }">
+          <el-tag size="small" :type="row.enabled ? 'success' : 'info'" data-test="executor-enabled-cell">
+            {{ row.enabled ? 'enabled' : 'disabled' }}
+          </el-tag>
+        </template>
+      </el-table-column>
       <el-table-column label="">
         <template #default="{ row }">
           <el-button link type="primary" :data-test="`executor-edit-${row.id}`" @click="openEditExecutor(row)">
@@ -108,7 +126,7 @@ async function onDeleteExecutor(ex: ExecutorResponse) {
 
 <style scoped lang="scss">
 .block {
-  max-width: 640px;
+  max-width: 960px;
 }
 .block h3 {
   margin: 0;
