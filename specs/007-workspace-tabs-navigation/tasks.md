@@ -91,11 +91,11 @@ description: "Task list for Workspace Tabs Navigation"
 
 **Goal**: Remove the per-row Agents and Runs buttons; keep Settings and Start/Pause with unchanged behavior; ensure activating a row action does **not** also navigate into the workspace.
 
-**Independent Test**: Render `WorkspaceList` — no Agents/Runs buttons on any row; Settings still opens the settings dialog; clicking `toggle-pause-<id>` toggles pause and does **not** change the route to the workspace page.
+**Independent Test**: Render `WorkspaceList` — no Agents/Runs buttons on any row; Settings still navigates to the workspace-settings route (a page, not a dialog); clicking `toggle-pause-<id>` toggles pause and does **not** change the route to the workspace page.
 
 ### Tests for User Story 3 (write first — must FAIL before T015) ⚠️
 
-- [ ] T014 [US3] Add the button-removal and action-no-navigation tests to `apps/web/test/workspace-tabs.spec.ts` (or `workspace-list.spec.ts`): assert no Agents/Runs button text or `RouterLink`s render in `workspaces-table` rows (FR-001); with the real router mounted, click `toggle-pause-<id>` and assert the route did **not** navigate to `/workspaces/<id>/agents` (FR-004); click Settings and assert it opens the settings dialog without navigating. Confirm the FR-004 assertion FAILS before `@click.stop` is added (T015).
+- [ ] T014 [US3] Add the button-removal and action-no-navigation tests to `apps/web/test/workspace-tabs.spec.ts` (or `workspace-list.spec.ts`): assert no Agents/Runs button text or `RouterLink`s render in `workspaces-table` rows (FR-001); with the real router mounted, click `toggle-pause-<id>` and assert the route did **not** navigate to `/workspaces/<id>/agents` (FR-004); click Settings and assert the route becomes the workspace-settings route and NOT the agents route (Settings navigates to a settings PAGE — the @click.stop only prevents the row handler from ALSO firing). Confirm the FR-004 assertion FAILS before `@click.stop` is added (T015).
 
 ### Implementation for User Story 3
 
