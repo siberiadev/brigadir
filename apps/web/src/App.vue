@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router';
+import { RouterView, useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from './stores/auth';
 import { useHumanTaskCount } from './composables/useHumanTasks';
+import AppSidebar from './components/AppSidebar.vue';
 
 // Runtime token gate: the shared dashboard bearer is entered here (kept in
 // sessionStorage), never compiled into the bundle (research R1 / Constitution V).
@@ -17,6 +18,8 @@ function saveToken() {
 }
 
 // Live open-task badge (US1) — polled only once authenticated (no bearer in a URL).
+// Passed down to AppSidebar as `openCount`; the query itself STAYS here (FR-014)
+// because the 006 landing watch below consumes the same source.
 const authed = computed(() => !!auth.token);
 const countQuery = useHumanTaskCount(authed);
 const openCount = computed(() => countQuery.data.value?.open ?? 0);
@@ -55,29 +58,12 @@ watch(
     </el-card>
   </div>
 
-  <el-container v-else class="app-shell">
-    <el-header class="app-header">
-      <span class="brand">BRIGADIR</span>
-      <nav class="app-nav">
-        <RouterLink to="/">Workspaces</RouterLink>
-        <RouterLink to="/human-queue" class="queue-link" data-test="nav-human-queue">
-          <el-badge
-            :value="openCount"
-            :hidden="openCount === 0"
-            :max="99"
-            type="danger"
-            data-test="queue-badge"
-          >
-            Human queue
-          </el-badge>
-        </RouterLink>
-      </nav>
-      <el-button link type="info" @click="auth.clear()">Sign out</el-button>
-    </el-header>
-    <el-main>
+  <div v-else class="app-shell">
+    <AppSidebar :open-count="openCount" @sign-out="auth.clear()" />
+    <main class="app-main">
       <RouterView />
-    </el-main>
-  </el-container>
+    </main>
+  </div>
 </template>
 
 <style scoped lang="scss">
@@ -91,18 +77,10 @@ watch(
 .token-card {
   width: 360px;
 }
-.app-header {
-  display: flex;
-  align-items: center;
-  gap: 24px;
-  border-bottom: 1px solid var(--el-border-color);
-}
-.brand {
-  font-weight: $font-weight-bold;
-}
-.app-nav {
-  display: flex;
-  gap: 16px;
-  flex: 1;
+// The sidebar is `position: fixed` at 70px; offset the main region by exactly the
+// rail width so nothing renders under it (research R5 / SC-006).
+.app-main {
+  margin-left: 70px;
+  padding: $space-lg;
 }
 </style>

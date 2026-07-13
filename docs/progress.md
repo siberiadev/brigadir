@@ -317,3 +317,74 @@ and `pnpm test:integration` (60 files / 184 tests — re-run because `toResponse
 changed). The only backend/contract change is the additive `WorkspaceResponse`
 extension + its `toResponse` mapping; no DB migration, no run/callback pipeline
 change, no new endpoint (SC-005).
+
+## Iteration 9 — Icon Sidebar Navigation (feature 009)
+
+### What shipped
+
+The top navigation **header** in `App.vue` is replaced by a fixed, ~70px-wide
+left **icon rail** (`components/AppSidebar.vue`). Top to bottom it renders: a
+compact wordless "B" brand mark, icon-only nav items (Workspaces → `LayoutGrid`,
+Human queue → `Inbox`) each wrapped in a right-placed `el-tooltip`, and a
+bottom-pinned Sign out (`LogOut`) icon. Icons come from the one new frontend
+dependency, **`lucide-vue-next`** (the iteration-9-sanctioned package), imported
+by tree-shakable named imports (`LayoutGrid`/`Inbox`/`LogOut`) — no global
+registration in `main.ts`.
+
+`AppSidebar` is deliberately **pure presentational**: it takes `openCount:
+number` as a prop and emits `sign-out` — no store access and no count query
+inside. `App.vue` stays the shell that owns everything stateful: the
+`useHumanTaskCount` query, the `authed` gate, `openCount`, and the **006 landing
+`watch` are retained verbatim** (FR-014). The badge that used to sit on the
+header text link now rides the Human queue icon as an `el-badge` with
+`:value="openCount"`, `:max="99"`, `:hidden="openCount === 0"`, `type="danger"`
+— same cap/hidden-at-zero behavior, migrated not rewritten. Workspaces carries
+no badge.
+
+**Layout**: the rail is `position: fixed` left, full viewport height; the
+authenticated main region is offset by `margin-left: 70px` so nothing renders
+under the rail (SC-006). The **pre-auth token gate stays full-screen with no
+sidebar** — `AppSidebar` lives only in the authenticated `v-else` branch; the
+`v-if="!auth.token"` gate is untouched and rail-free (FR-013). Sign out flows up
+as an emit and `App.vue` handles `@sign-out="auth.clear()"`, dropping back to the
+gate.
+
+**Active state** derives from the live route path inside the sidebar: Workspaces
+is active on `/` **or** `/workspaces/*` (a prefix test covers the 007
+agents/runs/settings deep sub-routes without enumerating child names); Human
+queue on `/human-queue`; any other path (e.g. the run card `/runs/:id`)
+highlights **nothing** (FR-006/FR-007). The marker is a consistent `is-active`
+class on both nav items.
+
+### Tests
+
+New `apps/web/test/app-sidebar.spec.ts` (14 cases) drives the app's **real**
+routes through the memory-history harness. It mounts `App.vue` (the shell,
+seeding a token so the rail renders and pinning the count endpoint to `open: 0`
+so the 006 landing watch never redirects `/` mid-test) for the shell cases, and
+mounts the presentational `AppSidebar` directly with an `openCount` prop for the
+badge cases:
+
+- **Rendering + tooltips (US1)** — rail with brand + both nav icons + sign out,
+  no top header (`.app-nav`/`ElHeader` gone); each icon in a `placement="right"`
+  tooltip named exactly "Workspaces" / "Human queue" / "Sign out" (asserted on
+  the `ElTooltip` `content`/`placement` props, no real hover).
+- **Active highlight (US2)** — `is-active` on Workspaces at `/`,
+  `/workspaces/ws-1/agents`, `/workspaces/ws-1/settings`; on Human queue at
+  `/human-queue`; NEITHER at `/runs/r-1`.
+- **Badge (US2)** — value shown at `openCount > 0`, `99+` cap for a large value,
+  no visible badge at `0`, badge only on Human queue, and update-on-prop-change.
+- **Sign out (US3)** — `trigger('click')` on the rail control clears the token,
+  shows the full-screen gate, and leaves `app-sidebar` absent.
+- **Pre-auth gate (US4)** — no token → full-screen gate, no rail; entering a
+  token re-renders the shell and the rail appears.
+
+### Gates
+
+Frontend-only (FR-015): the diff is confined to `apps/web/src/App.vue`,
+`apps/web/src/components/AppSidebar.vue`, `apps/web/package.json`,
+`apps/web/test/app-sidebar.spec.ts` (+ the `pnpm-lock.yaml` entry for
+`lucide-vue-next`) — no backend, contract, schema, or endpoint change. All
+authoritative gates green: `pnpm --filter @brigadir/web typecheck` (strict
+props/events), `pnpm --filter @brigadir/web test` (67 web component tests, the
+14 new alongside the existing 53), and root `pnpm lint`.

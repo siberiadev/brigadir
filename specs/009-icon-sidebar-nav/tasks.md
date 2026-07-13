@@ -46,7 +46,7 @@ Web frontend workspace `@brigadir/web` at `apps/web/`:
 
 **Purpose**: Land the one new frontend dependency the whole feature needs.
 
-- [ ] T001 Add `lucide-vue-next` to `apps/web/package.json` dependencies and install it (`pnpm --filter @brigadir/web add lucide-vue-next` from repo root, then `pnpm install`); confirm the lockfile updates and `import { LayoutGrid, Inbox, LogOut } from 'lucide-vue-next'` resolves under strict TS (research R1)
+- [X] T001 Add `lucide-vue-next` to `apps/web/package.json` dependencies and install it (`pnpm --filter @brigadir/web add lucide-vue-next` from repo root, then `pnpm install`); confirm the lockfile updates and `import { LayoutGrid, Inbox, LogOut } from 'lucide-vue-next'` resolves under strict TS (research R1)
 
 **Checkpoint**: Dependency available — the sidebar component can import lucide glyphs.
 
@@ -61,9 +61,9 @@ sidebar and the spec file can mount the real routes.
 
 **⚠️ CRITICAL**: Complete this phase before starting any user story phase.
 
-- [ ] T002 [P] Scaffold `apps/web/test/app-sidebar.spec.ts`: import `{ routes }` from `../src/router`, static-import the lazy view modules to warm the module cache (`WorkspacePage.vue`, `AgentsList.vue`, `Runs.vue`, `WorkspaceSettings.vue`, `WorkspaceList.vue` — the `workspace-tabs.spec.ts` pattern), and add `mountApp(initialPath)` + `settle(predicate)` helpers using `mountWithProviders(AppRoot, { routes, initialPath })` where `AppRoot` mounts `App.vue`; leave `describe` blocks empty for the per-story tests
-- [ ] T003 Create `apps/web/src/components/AppSidebar.vue` skeleton as a PURE presentational component: declare `defineProps<{ openCount: number }>()` and `defineEmits<{ (e: 'sign-out'): void }>()`, named lucide imports (`LayoutGrid`, `Inbox`, `LogOut`), the static two-item `NavItem` array from data-model.md (`workspaces` → `LayoutGrid`/`'/'`, `human-queue` → `Inbox`/`'/human-queue'`), and the root `<aside data-test="app-sidebar">` with empty brand / nav / bottom-pinned sign-out regions — no `App.vue` coupling, no count query inside (contracts/app-sidebar.md Props/Events)
-- [ ] T004 Rework `apps/web/src/App.vue` shell: KEEP the `v-if="!auth.token"` branch a full-screen token gate WITHOUT any sidebar; in the authenticated `v-else` branch render `<AppSidebar :open-count="openCount" @sign-out="auth.clear()" />` as a `position: fixed` left rail ~70px wide × full viewport height plus a main region offset by `margin-left` equal to the rail width (nothing under the rail); KEEP `authed`, `countQuery` (`useHumanTaskCount`), `openCount`, and the 006 landing `watch` in `App.vue` unchanged; REMOVE the old `el-header` / `.app-nav` / inline `el-badge` / inline Sign out button (FR-001/002/011/013/014, research R5)
+- [X] T002 [P] Scaffold `apps/web/test/app-sidebar.spec.ts`: import `{ routes }` from `../src/router`, static-import the lazy view modules to warm the module cache (`WorkspacePage.vue`, `AgentsList.vue`, `Runs.vue`, `WorkspaceSettings.vue`, `WorkspaceList.vue` — the `workspace-tabs.spec.ts` pattern), and add `mountApp(initialPath)` + `settle(predicate)` helpers using `mountWithProviders(AppRoot, { routes, initialPath })` where `AppRoot` mounts `App.vue`; leave `describe` blocks empty for the per-story tests
+- [X] T003 Create `apps/web/src/components/AppSidebar.vue` skeleton as a PURE presentational component: declare `defineProps<{ openCount: number }>()` and `defineEmits<{ (e: 'sign-out'): void }>()`, named lucide imports (`LayoutGrid`, `Inbox`, `LogOut`), the static two-item `NavItem` array from data-model.md (`workspaces` → `LayoutGrid`/`'/'`, `human-queue` → `Inbox`/`'/human-queue'`), and the root `<aside data-test="app-sidebar">` with empty brand / nav / bottom-pinned sign-out regions — no `App.vue` coupling, no count query inside (contracts/app-sidebar.md Props/Events)
+- [X] T004 Rework `apps/web/src/App.vue` shell: KEEP the `v-if="!auth.token"` branch a full-screen token gate WITHOUT any sidebar; in the authenticated `v-else` branch render `<AppSidebar :open-count="openCount" @sign-out="auth.clear()" />` as a `position: fixed` left rail ~70px wide × full viewport height plus a main region offset by `margin-left` equal to the rail width (nothing under the rail); KEEP `authed`, `countQuery` (`useHumanTaskCount`), `openCount`, and the 006 landing `watch` in `App.vue` unchanged; REMOVE the old `el-header` / `.app-nav` / inline `el-badge` / inline Sign out button (FR-001/002/011/013/014, research R5)
 
 **Checkpoint**: Authenticated shell renders `AppSidebar` beside offset content; the
 gate stays sidebar-free; the spec file can mount the app at any real route.
@@ -85,11 +85,11 @@ top nav header exists.
 
 > Write these FIRST against the `data-test` contract; they fail until T006 lands.
 
-- [ ] T005 [US1] Add the "rendering + tooltips" describe block to `apps/web/test/app-sidebar.spec.ts`: mounting the authed shell shows `app-sidebar` containing `sidebar-brand`, `nav-workspaces`, `nav-human-queue`, and `sidebar-sign-out`; NO top nav header (the old `.app-nav` is gone); each of the three icons is wrapped in an `el-tooltip` with `placement="right"` whose content is exactly "Workspaces" / "Human queue" / "Sign out" (assert on the rendered tooltip content/aria surface, no real hover) (contracts §Tooltip, SC-001/007)
+- [X] T005 [US1] Add the "rendering + tooltips" describe block to `apps/web/test/app-sidebar.spec.ts`: mounting the authed shell shows `app-sidebar` containing `sidebar-brand`, `nav-workspaces`, `nav-human-queue`, and `sidebar-sign-out`; NO top nav header (the old `.app-nav` is gone); each of the three icons is wrapped in an `el-tooltip` with `placement="right"` whose content is exactly "Workspaces" / "Human queue" / "Sign out" (assert on the rendered tooltip content/aria surface, no real hover) (contracts §Tooltip, SC-001/007)
 
 ### Implementation for User Story 1
 
-- [ ] T006 [US1] Fill `apps/web/src/components/AppSidebar.vue` nav render: `sidebar-brand` compact "B" mark at top; `nav-workspaces` and `nav-human-queue` as `RouterLink` (`to` from the `NavItem` array) each wrapping its lucide icon inside an `el-tooltip placement="right"` with the item `label`; the bottom-pinned `sidebar-sign-out` `LogOut` icon inside an `el-tooltip placement="right"` content "Sign out" (click behavior deferred to US3); icons only, no visible text labels (FR-003/004/005, research R2)
+- [X] T006 [US1] Fill `apps/web/src/components/AppSidebar.vue` nav render: `sidebar-brand` compact "B" mark at top; `nav-workspaces` and `nav-human-queue` as `RouterLink` (`to` from the `NavItem` array) each wrapping its lucide icon inside an `el-tooltip placement="right"` with the item `label`; the bottom-pinned `sidebar-sign-out` `LogOut` icon inside an `el-tooltip placement="right"` content "Sign out" (click behavior deferred to US3); icons only, no visible text labels (FR-003/004/005, research R2)
 
 **Checkpoint**: The sidebar renders and routes; hover tooltips name each icon. MVP
 navigation surface is functional and independently testable.
@@ -109,13 +109,13 @@ drive `openCount` > 0 → badge shows the value; `openCount` large → "99+"; `o
 
 > Write these FIRST; they fail until T009/T010 land.
 
-- [ ] T007 [US2] Add the "active highlight" describe block to `apps/web/test/app-sidebar.spec.ts`: mount at `/`, `/workspaces/ws-1/agents`, and `/workspaces/ws-1/settings` → `nav-workspaces` marked active and `nav-human-queue` not; at `/human-queue` → the reverse; at `/runs/r-1` (no-match run card) → NEITHER active; assert on the component's chosen active marker (`is-active` class or `data-active="true"`), consistent across both items (FR-006/007, SC-002, edge cases "deep sub-routes" + "no matching section")
-- [ ] T008 [US2] Add the "badge" describe block to `apps/web/test/app-sidebar.spec.ts`: with `openCount` > 0 (via mocked count endpoint or seeded query) `queue-badge` shows the value; a large value renders the "99+" cap; `openCount === 0` (and pre-first-poll → 0) renders NO visible badge; updating the mocked/seeded value updates the badge (FR-008/009/010, SC-003, US2 scenario 5, edge cases ">99" + "not yet loaded")
+- [X] T007 [US2] Add the "active highlight" describe block to `apps/web/test/app-sidebar.spec.ts`: mount at `/`, `/workspaces/ws-1/agents`, and `/workspaces/ws-1/settings` → `nav-workspaces` marked active and `nav-human-queue` not; at `/human-queue` → the reverse; at `/runs/r-1` (no-match run card) → NEITHER active; assert on the component's chosen active marker (`is-active` class or `data-active="true"`), consistent across both items (FR-006/007, SC-002, edge cases "deep sub-routes" + "no matching section")
+- [X] T008 [US2] Add the "badge" describe block to `apps/web/test/app-sidebar.spec.ts`: with `openCount` > 0 (via mocked count endpoint or seeded query) `queue-badge` shows the value; a large value renders the "99+" cap; `openCount === 0` (and pre-first-poll → 0) renders NO visible badge; updating the mocked/seeded value updates the badge (FR-008/009/010, SC-003, US2 scenario 5, edge cases ">99" + "not yet loaded")
 
 ### Implementation for User Story 2
 
-- [ ] T009 [US2] Implement active state in `apps/web/src/components/AppSidebar.vue` from `useRoute().path`: Workspaces active when `path === '/' || path.startsWith('/workspaces')`; Human queue active when `path === '/human-queue'`; any other path highlights nothing; apply the marker (`is-active` class / `data-active`) consistently on both `nav-workspaces` and `nav-human-queue` (FR-006/007, research R3, data-model `isActive`)
-- [ ] T010 [US2] Add the badge to `nav-human-queue` in `apps/web/src/components/AppSidebar.vue`: `el-badge` with `data-test="queue-badge"`, `:value="openCount"`, `:max="99"`, `:hidden="openCount === 0"`, `type="danger"` wrapping the Human queue icon — the same cap/hidden behavior migrated off the header link; Workspaces carries no badge (FR-008/009/010, research R4, data-model `OpenTaskBadge`)
+- [X] T009 [US2] Implement active state in `apps/web/src/components/AppSidebar.vue` from `useRoute().path`: Workspaces active when `path === '/' || path.startsWith('/workspaces')`; Human queue active when `path === '/human-queue'`; any other path highlights nothing; apply the marker (`is-active` class / `data-active`) consistently on both `nav-workspaces` and `nav-human-queue` (FR-006/007, research R3, data-model `isActive`)
+- [X] T010 [US2] Add the badge to `nav-human-queue` in `apps/web/src/components/AppSidebar.vue`: `el-badge` with `data-test="queue-badge"`, `:value="openCount"`, `:max="99"`, `:hidden="openCount === 0"`, `type="danger"` wrapping the Human queue icon — the same cap/hidden behavior migrated off the header link; Workspaces carries no badge (FR-008/009/010, research R4, data-model `OpenTaskBadge`)
 
 **Checkpoint**: Orientation (active highlight) and the live open-count badge both work
 on the sidebar; US1 + US2 together form a faithful replacement of the header nav.
@@ -134,11 +134,11 @@ token is cleared, the gate is shown, and `app-sidebar` is no longer rendered.
 
 > Write this FIRST; it fails until T012 wires the emit.
 
-- [ ] T011 [US3] Add the "sign out" describe block to `apps/web/test/app-sidebar.spec.ts`: activating `sidebar-sign-out` (trigger `click`, jsdom-safe) clears the auth token, renders the full-screen token gate, and leaves `app-sidebar` absent from the tree; also assert the `sidebar-sign-out` tooltip reads "Sign out" (FR-012, SC-005, US3 scenarios 1–3)
+- [X] T011 [US3] Add the "sign out" describe block to `apps/web/test/app-sidebar.spec.ts`: activating `sidebar-sign-out` (trigger `click`, jsdom-safe) clears the auth token, renders the full-screen token gate, and leaves `app-sidebar` absent from the tree; also assert the `sidebar-sign-out` tooltip reads "Sign out" (FR-012, SC-005, US3 scenarios 1–3)
 
 ### Implementation for User Story 3
 
-- [ ] T012 [US3] Wire sign-out in `apps/web/src/components/AppSidebar.vue`: the bottom-pinned `sidebar-sign-out` icon emits `sign-out` on click (visually separated from the nav items); `App.vue` already handles `@sign-out="auth.clear()"` from T004 — keep `AppSidebar` presentational, no direct store access (contracts §Events, FR-003/012)
+- [X] T012 [US3] Wire sign-out in `apps/web/src/components/AppSidebar.vue`: the bottom-pinned `sidebar-sign-out` icon emits `sign-out` on click (visually separated from the nav items); `App.vue` already handles `@sign-out="auth.clear()"` from T004 — keep `AppSidebar` presentational, no direct store access (contracts §Events, FR-003/012)
 
 **Checkpoint**: Sign out from the rail clears the token and drops back to the gate
 with no sidebar.
@@ -157,11 +157,11 @@ set a token → `app-sidebar` appears alongside main content.
 
 > Write this FIRST; it passes once T004's gate/shell split and T014's guard hold.
 
-- [ ] T013 [US4] Add the "pre-auth gate" describe block to `apps/web/test/app-sidebar.spec.ts`: with no session token, `App.vue` renders the full-screen token gate and `app-sidebar` does NOT exist; after setting a valid token (via the auth store / token input), the shell re-renders and `app-sidebar` appears (FR-013, SC-004, US4 scenarios 1–2)
+- [X] T013 [US4] Add the "pre-auth gate" describe block to `apps/web/test/app-sidebar.spec.ts`: with no session token, `App.vue` renders the full-screen token gate and `app-sidebar` does NOT exist; after setting a valid token (via the auth store / token input), the shell re-renders and `app-sidebar` appears (FR-013, SC-004, US4 scenarios 1–2)
 
 ### Implementation for User Story 4
 
-- [ ] T014 [US4] Confirm/tighten the render gate in `apps/web/src/App.vue`: the `v-if="!auth.token"` gate branch renders no `AppSidebar`, and `AppSidebar` lives ONLY in the authenticated `v-else` branch (structure established in T004) — ensure the T013 assertions hold with no sidebar leakage into the gate (FR-013)
+- [X] T014 [US4] Confirm/tighten the render gate in `apps/web/src/App.vue`: the `v-if="!auth.token"` gate branch renders no `AppSidebar`, and `AppSidebar` lives ONLY in the authenticated `v-else` branch (structure established in T004) — ensure the T013 assertions hold with no sidebar leakage into the gate (FR-013)
 
 **Checkpoint**: The rail never leaks into the unauthenticated screen; all four
 stories independently pass.
@@ -172,8 +172,8 @@ stories independently pass.
 
 **Purpose**: Record the iteration and run the authoritative gates.
 
-- [ ] T015 [P] Append an iteration-9 entry to `docs/progress.md`: header→icon-sidebar migration, the new `AppSidebar.vue` presentational component (props/events/data-test surface), `App.vue` shell rework (gate stays sidebar-free; 70px fixed rail + `margin-left` content; count query + 006 landing watch retained), badge move onto the Human queue icon, the single new `lucide-vue-next` dependency, and the `app-sidebar.spec.ts` cases + all-green gates
-- [ ] T016 Run the authoritative gates per quickstart.md from repo root: `pnpm --filter @brigadir/web typecheck` (strict props/events) and `pnpm --filter @brigadir/web test` (the new spec passes alongside the existing web specs), plus root `pnpm lint`; confirm the diff touches only `apps/web/src/App.vue`, `apps/web/src/components/AppSidebar.vue`, `apps/web/package.json`, `apps/web/test/app-sidebar.spec.ts`, and `docs/progress.md` — no backend/contract/schema change (FR-015, SC-001..007)
+- [X] T015 [P] Append an iteration-9 entry to `docs/progress.md`: header→icon-sidebar migration, the new `AppSidebar.vue` presentational component (props/events/data-test surface), `App.vue` shell rework (gate stays sidebar-free; 70px fixed rail + `margin-left` content; count query + 006 landing watch retained), badge move onto the Human queue icon, the single new `lucide-vue-next` dependency, and the `app-sidebar.spec.ts` cases + all-green gates
+- [X] T016 Run the authoritative gates per quickstart.md from repo root: `pnpm --filter @brigadir/web typecheck` (strict props/events) and `pnpm --filter @brigadir/web test` (the new spec passes alongside the existing web specs), plus root `pnpm lint`; confirm the diff touches only `apps/web/src/App.vue`, `apps/web/src/components/AppSidebar.vue`, `apps/web/package.json`, `apps/web/test/app-sidebar.spec.ts`, and `docs/progress.md` — no backend/contract/schema change (FR-015, SC-001..007)
 
 ---
 
