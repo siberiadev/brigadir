@@ -1,6 +1,6 @@
 # Feature Specification: Workspace Tabs Navigation
 
-**Feature Branch**: `claude/workspace-tabs-navigation-c6fhio`
+**Feature Branch**: `main` (spec merged via PR #1; branch squashed and deleted)
 
 **Created**: 2026-07-13
 
@@ -91,7 +91,7 @@ what delivers the value; this story is the cleanup that accompanies it.
 
 **Independent Test**: Open the workspace list and confirm no Agents or Runs
 buttons appear on any row, while Settings and Start/Pause remain and still open
-the settings dialog and toggle the pause state respectively.
+the settings view and toggle the pause state respectively.
 
 **Acceptance Scenarios**:
 
@@ -99,7 +99,7 @@ the settings dialog and toggle the pause state respectively.
    row, **Then** no Agents button and no Runs button are present, and Settings
    and Start/Pause are present.
 2. **Given** the workspace list is displayed, **When** the operator clicks
-   Settings on a row, **Then** the workspace settings dialog opens as it did
+   Settings on a row, **Then** the workspace settings view opens as it did
    before this change.
 3. **Given** the workspace list is displayed, **When** the operator clicks
    Start/Pause on a row, **Then** the workspace pause state toggles as it did
