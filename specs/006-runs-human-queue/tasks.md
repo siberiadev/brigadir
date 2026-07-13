@@ -229,7 +229,7 @@ all green. Backend/worker feature-complete; frontend can begin.
 
 ## Phase 7: Frontend foundation (api client + shared handlers)
 
-- [ ] T037 [P] Add typed api modules `apps/web/src/api/{runs,humanTasks,executors}.ts` (using the
+- [X] T037 [P] Add typed api modules `apps/web/src/api/{runs,humanTasks,executors}.ts` (using the
   existing `apiClient` in `apps/web/src/api/client.ts` and the Phase-1 contract types) and extend
   `apps/web/test/handlers.ts` with msw handlers for the new endpoints (list/card/cost/cancel/retry,
   queue list/count/resolve, executors CRUD).
@@ -246,12 +246,12 @@ and a live navbar open-task badge.
 **Independent Test**: Load the queue, resolve a blocking task with "resume" + answer → task leaves the
 open list; switch to history → closed tasks show resolution + resolver; badge count updates.
 
-- [ ] T038 [P] [US1] Add `apps/web/src/composables/useHumanTasks.ts` — Query hooks for list
+- [X] T038 [P] [US1] Add `apps/web/src/composables/useHumanTasks.ts` — Query hooks for list
   (open|closed) and count, with `refetchInterval` (~3 s for the count/badge), plus a resolve mutation.
-- [ ] T039 [US1] Fill `apps/web/src/views/HumanQueue.vue` — open list (title, ticket, agent, kind, age,
+- [X] T039 [US1] Fill `apps/web/src/views/HumanQueue.vue` — open list (title, ticket, agent, kind, age,
   blocking flag; oldest-first), per-task resolution form (answer + resume/done_manually/dismiss),
   history filter, empty state (FR-001–FR-006).
-- [ ] T040 [P] [US1] `apps/web/test/human-queue.spec.ts` — msw component test: renders open tasks;
+- [X] T040 [P] [US1] `apps/web/test/human-queue.spec.ts` — msw component test: renders open tasks;
   resume submits to resolve and removes the task; history filter shows closed with resolution/resolver.
 
 **Checkpoint**: Human queue works against faked APIs; component test green.
@@ -266,14 +266,14 @@ link + status, run history, event timeline, failure diagnostics, cancel/retry.
 **Independent Test**: Open a seeded card → 4 glyphs render, reasons expand, timeline + history show,
 failed run shows stderr, cancel/retry hit the faked endpoints.
 
-- [ ] T041 [P] [US2] Add `apps/web/src/composables/useRunCard.ts` — Query hook for GET `/api/runs/:id`
+- [X] T041 [P] [US2] Add `apps/web/src/composables/useRunCard.ts` — Query hook for GET `/api/runs/:id`
   with `refetchInterval` (~3 s while the run is non-terminal; terminal cards do not poll), plus cancel
   and retry mutations.
-- [ ] T042 [US2] Add `apps/web/src/views/RunCard.vue` — header (key/summary/Jira link/status), report
+- [X] T042 [US2] Add `apps/web/src/views/RunCard.vue` — header (key/summary/Jira link/status), report
   checklist with expandable reasons, run history table (agent/executor/attempt/duration/cost/outcome),
   chronological timeline, failure diagnostics block, cancel + retry buttons (FR-007–FR-014). Handle
   partial reports / missing summary / null cost gracefully.
-- [ ] T043 [P] [US2] `apps/web/test/run-card.spec.ts` — msw component test: 4 check glyphs + reason
+- [X] T043 [P] [US2] `apps/web/test/run-card.spec.ts` — msw component test: 4 check glyphs + reason
   expand; timeline + history render; failed run shows diagnostics; cancel/retry call the endpoints.
 
 **Checkpoint**: Run card works against faked APIs; component test green.
@@ -288,12 +288,12 @@ agent/status filters + ticket-key search, live refresh, row → card, header cos
 **Independent Test**: Load the Runs tab, apply agent/status/ticket filters → rows narrow; change cost
 period → total updates; click a row → card opens.
 
-- [ ] T044 [P] [US3] Add `apps/web/src/composables/useRuns.ts` — Query hooks for the runs list (filters +
+- [X] T044 [P] [US3] Add `apps/web/src/composables/useRuns.ts` — Query hooks for the runs list (filters +
   pagination) and the cost figure, with `refetchInterval` (~4–5 s for the focused table).
-- [ ] T045 [US3] Replace the placeholder `apps/web/src/views/Runs.vue` — table + agent/status filters +
+- [X] T045 [US3] Replace the placeholder `apps/web/src/views/Runs.vue` — table + agent/status filters +
   ticket-key search + pagination + cost header (period presets 24h/7d/30d) + row-click → run card;
   empty state, not an error (FR-015–FR-019).
-- [ ] T046 [P] [US3] `apps/web/test/runs-table.spec.ts` — msw component test: filters narrow rows &
+- [X] T046 [P] [US3] `apps/web/test/runs-table.spec.ts` — msw component test: filters narrow rows &
   pagination reflects the filtered set; cost period switch updates the total; row click routes to the
   card.
 
@@ -311,18 +311,18 @@ toggle.
 open the agent form → picker shows names + badges, defaults to claude_cli, never a UUID/empty; toggle
 workspace pause → persisted via settings.
 
-- [ ] T047 [P] [US4] Add `apps/web/src/composables/useExecutors.ts` — Query hooks + create/update/delete
+- [X] T047 [P] [US4] Add `apps/web/src/composables/useExecutors.ts` — Query hooks + create/update/delete
   mutations for `/api/workspaces/:id/executors`.
-- [ ] T048 [US4] Add `apps/web/src/components/ExecutorForm/…` — typed per-type config form driven by the
+- [X] T048 [US4] Add `apps/web/src/components/ExecutorForm/…` — typed per-type config form driven by the
   Phase-1 `executor.schema` union (mock: concurrency; claude_cli: model, cli_path, repository select
   from workspace repos, callback toggle, keep-failed-worktrees toggle, max turns, concurrency) (FR-021).
-- [ ] T049 [US4] Add an Executors section to `apps/web/src/views/WorkspaceSettings.vue` (list + create/
+- [X] T049 [US4] Add an Executors section to `apps/web/src/views/WorkspaceSettings.vue` (list + create/
   edit via ExecutorForm + delete with the in-use error surfaced) **and** the workspace enabled/pause
   toggle writing `settings.enabled` via the existing settings endpoint (FR-020, FR-024, FR-030, US5).
-- [ ] T050 [US4] Update `apps/web/src/components/AgentForm/AgentForm.vue` — executor picker reads
+- [X] T050 [US4] Update `apps/web/src/components/AgentForm/AgentForm.vue` — executor picker reads
   `useExecutors` (names + type badge, never a raw UUID, never empty, defaults to the workspace's
   claude_cli executor), replacing the discovery workaround (FR-023).
-- [ ] T051 [P] [US4] `apps/web/test/executor-form.spec.ts` — msw component test: type switch shows only
+- [X] T051 [P] [US4] `apps/web/test/executor-form.spec.ts` — msw component test: type switch shows only
   that type's fields; create/update/delete; delete-in-use surfaces the 409 message. Update
   `apps/web/test/agent-form.spec.ts` for the new picker (names + badge + claude_cli default).
 
@@ -332,12 +332,12 @@ workspace pause → persisted via settings.
 
 ## Phase 12: Wire-up, navigation & docs (cross-cutting)
 
-- [ ] T052 [US1] Add the navbar open-task badge in `apps/web/src/App.vue` bound to `useHumanTasks`
+- [X] T052 [US1] Add the navbar open-task badge in `apps/web/src/App.vue` bound to `useHumanTasks`
   count (live ~3 s) and the landing rule: `open > 0` → human queue is the default landing view; else
   workspaces (FR-002, FR-005).
-- [ ] T053 Add routes in `apps/web/src/router/index.ts` — run card (`/runs/:id`) and the workspace
+- [X] T053 Add routes in `apps/web/src/router/index.ts` — run card (`/runs/:id`) and the workspace
   Runs tab + settings routes; ensure all new routes are behind the existing auth flow (FR-032).
-- [ ] T054 [P] Update `docs/progress.md` with the iteration-6 entry (surfaces shipped, the two-item
+- [X] T054 [P] Update `docs/progress.md` with the iteration-6 entry (surfaces shipped, the two-item
   additive schema note) and `docs/local-setup.md` if any env/setup note changed.
 - [ ] T055 Run `specs/006-runs-human-queue/quickstart.md` Scenarios A–E end-to-end against a live
   stack; fix any gaps. Final `pnpm typecheck && pnpm lint && pnpm test` (+ `pnpm test:integration`).

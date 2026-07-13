@@ -5,14 +5,12 @@ import { server } from './server';
 import { mountWithProviders, flush } from './mount';
 import { sampleWorkspace } from './handlers';
 import WorkspaceSettings from '../src/views/WorkspaceSettings.vue';
-import Runs from '../src/views/Runs.vue';
-import HumanQueue from '../src/views/HumanQueue.vue';
 
 /**
  * T156 — Workspace settings (US4): the expiry badge reflects the server-derived
- * credential_status, rotation re-verifies then persists (and a 422 surfaces
- * inline without dropping the stored connection), and the iteration-6 routes
- * render placeholders.
+ * credential_status, and rotation re-verifies then persists (a 422 surfaces
+ * inline without dropping the stored connection). The Runs/HumanQueue views are
+ * now real and covered by their own component tests (feature 006).
  */
 
 function withCredentialStatus(status: CredentialStatus) {
@@ -95,19 +93,5 @@ describe('WorkspaceSettings — rotation', () => {
     // The stored connection is untouched — the workspace's site/project still show.
     expect(wrapper.text()).toContain(sampleWorkspace.jira_site_url);
     expect(wrapper.text()).toContain(sampleWorkspace.project_key);
-  });
-});
-
-describe('placeholder routes', () => {
-  it('renders the Runs placeholder (iteration-6 stub)', async () => {
-    const wrapper = mountWithProviders(Runs);
-    await flush();
-    expect(wrapper.find('[data-test="runs-placeholder"]').exists()).toBe(true);
-  });
-
-  it('renders the Human queue placeholder (iteration-6 stub)', async () => {
-    const wrapper = mountWithProviders(HumanQueue);
-    await flush();
-    expect(wrapper.find('[data-test="human-queue-placeholder"]').exists()).toBe(true);
   });
 });

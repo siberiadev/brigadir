@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue';
-import { RouterLink, RouterView } from 'vue-router';
+import { computed, ref, watch } from 'vue';
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from './stores/auth';
+import { useHumanTaskCount } from './composables/useHumanTasks';
 
 // Runtime token gate: the shared dashboard bearer is entered here (kept in
 // sessionStorage), never compiled into the bundle (research R1 / Constitution V).
@@ -14,6 +15,26 @@ function saveToken() {
     tokenInput.value = '';
   }
 }
+
+// Live open-task badge (US1) — polled only once authenticated (no bearer in a URL).
+const authed = computed(() => !!auth.token);
+const countQuery = useHumanTaskCount(authed);
+const openCount = computed(() => countQuery.data.value?.open ?? 0);
+
+// Landing rule (FR-002/FR-005): the FIRST time the count resolves with open > 0
+// while sitting on the workspaces root, jump to the queue. One-shot so it never
+// fights the operator navigating back to workspaces.
+const route = useRoute();
+const router = useRouter();
+let landingApplied = false;
+watch(
+  () => countQuery.data.value?.open,
+  (open) => {
+    if (landingApplied || open == null) return;
+    landingApplied = true;
+    if (open > 0 && route.path === '/') router.replace('/human-queue');
+  },
+);
 </script>
 
 <template>
@@ -39,8 +60,17 @@ function saveToken() {
       <span class="brand">BRIGADIR</span>
       <nav class="app-nav">
         <RouterLink to="/">Workspaces</RouterLink>
-        <RouterLink to="/runs">Runs</RouterLink>
-        <RouterLink to="/human-queue">Human queue</RouterLink>
+        <RouterLink to="/human-queue" class="queue-link" data-test="nav-human-queue">
+          <el-badge
+            :value="openCount"
+            :hidden="openCount === 0"
+            :max="99"
+            type="danger"
+            data-test="queue-badge"
+          >
+            Human queue
+          </el-badge>
+        </RouterLink>
       </nav>
       <el-button link type="info" @click="auth.clear()">Sign out</el-button>
     </el-header>

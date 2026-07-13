@@ -8,3 +8,25 @@ export function defaultExpiry(from: Date = new Date()): Date {
   d.setFullYear(d.getFullYear() + 1);
   return d;
 }
+
+/** Compact "how long ago" label for an ISO timestamp (queue age / run timing). */
+export function relativeAge(iso: string, now: Date = new Date()): string {
+  const ms = now.getTime() - new Date(iso).getTime();
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
+}
+
+/** A duration in ms as a compact "1m 5s" / "42s" label; null → em dash. */
+export function formatDuration(ms: number | null): string {
+  if (ms == null) return '—';
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return rem ? `${m}m ${rem}s` : `${m}m`;
+}

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { RouterLink, useRouter } from 'vue-router';
-import { useWorkspaces } from '../composables/useWorkspaces';
+import { ElMessage } from 'element-plus';
+import type { WorkspaceResponse } from '@brigadir/contracts';
+import { useWorkspaces, useSetWorkspaceEnabled } from '../composables/useWorkspaces';
 import CredentialBadge from '../components/CredentialBadge.vue';
 import FormDialog from '../components/FormDialog.vue';
 import WorkspaceForm from '../components/WorkspaceForm/WorkspaceForm.vue';
@@ -27,6 +29,22 @@ function openSettings(row: { id: string; name: string }) {
   settingsName.value = row.name;
   showSettings.value = true;
 }
+
+// --- enable/pause a workspace inline (US5) ---
+const setEnabled = useSetWorkspaceEnabled();
+const pendingId = ref('');
+async function togglePause(row: WorkspaceResponse) {
+  const enabled = !row.enabled;
+  pendingId.value = row.id;
+  try {
+    await setEnabled.mutateAsync({ workspaceId: row.id, enabled });
+    ElMessage.success(enabled ? 'Workspace started.' : 'Workspace paused.');
+  } catch (err) {
+    ElMessage.error((err as Error)?.message ?? 'Could not update the pause state.');
+  } finally {
+    pendingId.value = '';
+  }
+}
 </script>
 
 <template>
@@ -46,6 +64,13 @@ function openSettings(row: { id: string; name: string }) {
       <el-table-column prop="name" label="Name" />
       <el-table-column prop="project_key" label="Project" />
       <el-table-column prop="board_type" label="Board" />
+      <el-table-column label="Status">
+        <template #default="{ row }">
+          <el-tag :type="row.enabled ? 'success' : 'info'" data-test="workspace-status">
+            {{ row.enabled ? 'Running' : 'Paused' }}
+          </el-tag>
+        </template>
+      </el-table-column>
       <el-table-column label="Credentials">
         <template #default="{ row }">
           <CredentialBadge :status="row.credential_status" />
@@ -56,7 +81,19 @@ function openSettings(row: { id: string; name: string }) {
           <RouterLink :to="`/workspaces/${row.id}/agents`">
             <el-button link type="primary">Agents</el-button>
           </RouterLink>
+          <RouterLink :to="`/workspaces/${row.id}/runs`">
+            <el-button link type="primary">Runs</el-button>
+          </RouterLink>
           <el-button link type="primary" @click="openSettings(row)">Settings</el-button>
+          <el-button
+            link
+            :type="row.enabled ? 'warning' : 'success'"
+            :loading="pendingId === row.id"
+            :data-test="`toggle-pause-${row.id}`"
+            @click="togglePause(row)"
+          >
+            {{ row.enabled ? 'Pause' : 'Start' }}
+          </el-button>
         </template>
       </el-table-column>
     </el-table>

@@ -1,6 +1,12 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
-import { DRIZZLE, type BrigadirDb, schema, getRepositories, patchWorkspaceSettings } from '@brigadir/database';
+import {
+  DRIZZLE,
+  type BrigadirDb,
+  schema,
+  getWorkspaceSettings,
+  patchWorkspaceSettings,
+} from '@brigadir/database';
 import {
   JiraClientFactory,
   StatusesService,
@@ -201,7 +207,7 @@ export class WorkspacesController {
       .from(schema.workspaces)
       .where(eq(schema.workspaces.id, id))
       .limit(1);
-    const repositories = await getRepositories(this.db, id);
+    const settings = await getWorkspaceSettings(this.db, id);
     return {
       id: row.id,
       name: row.name,
@@ -211,7 +217,9 @@ export class WorkspacesController {
       board_type: (row.jiraBoardType as JiraBoardType | null) ?? null,
       expires_at: row.jiraCredentialExpiresAt ? row.jiraCredentialExpiresAt.toISOString() : null,
       credential_status: deriveCredentialStatus(row.jiraCredentialExpiresAt),
-      repositories,
+      repositories: settings.repositories ?? [],
+      // Absent flag ⇒ enabled (data-model additive item 2; only `false` pauses).
+      enabled: settings.enabled !== false,
       created_at: row.createdAt.toISOString(),
       updated_at: row.updatedAt.toISOString(),
     };

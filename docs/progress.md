@@ -108,3 +108,56 @@ so each entrypoint emits a single runnable `dist/apps/<app>/main.*.js` with the
 `@brigadir/*` path aliases inlined; `packages/contracts` stays external and
 resolves via its workspace package. Vitest emits decorator metadata via
 `unplugin-swc` so NestJS type-based DI resolves in tests as it does at runtime.
+
+## Iteration 6 — Runs Visibility & Human Queue (feature 006)
+
+The operational half of the dashboard. Closes product pains #2 (unreadable
+reports) and #3 (no needs-human queue), and pays down iteration-5 debt
+(executors admin, multi-workspace reconcile).
+
+### What shipped
+
+**Backend/worker (Session 1)** — executors CRUD under
+`/api/workspaces/:id/executors` (typed per-type config union, default seeding on
+workspace create, `OnApplicationBootstrap` type-scoped backfill, delete-guard →
+409 `executor_in_use`); live concurrency re-apply on a ~15 s worker timer;
+multi-workspace reconcile (every `settings.enabled != false` workspace, per-
+workspace Jira client resolved lazily in `forWorkspace`, per-workspace try/catch
+outage isolation); runs read surface (`/api/workspaces/:id/runs` list + cost,
+`/api/runs/:id` card, guarded `cancel` `WHERE status='running'`, `retry` via
+manual-trigger through all three idempotency layers); global human-queue
+list/count; the feature-004 resolve endpoint moved behind `DashboardTokenGuard`.
+
+**Frontend (Session 2)** — four operator surfaces, all live via TanStack Query
+`refetchInterval` polling (no SSE, no bearer in any URL): the needs-human queue
+(resume / done_manually / dismiss + history) with a live navbar open-task badge
+and the `open > 0` landing rule; the run/ticket card (✅/❌/⚠/⏭ report checklist
+with expandable reasons, event timeline, run history, failure diagnostics,
+cancel/retry); the workspace runs table (agent/status/ticket filters,
+pagination, cost header with 24h/7d/30d presets, row → card); executors admin in
+Workspace Settings (typed `ExecutorForm` modal driven by the shared
+`executor.schema` union, list/create/update/delete with the in-use 409
+surfaced) plus the enabled/pause Start/Pause control and a Running/Paused status
+column in the workspace list. The agent form's executor picker now reads the
+real `/executors` (names + type badge, defaults to the workspace's `claude_cli`
+executor, never a raw UUID). Component tests are msw + `@vue/test-utils` extending
+`apps/web/test/{mount,handlers}.ts` — no live backend needed.
+
+### No structural schema change (two additive items only)
+
+1. One additive index `runs_workspace_created` on `(workspace_id, created_at
+   desc)` — committed migration + reviewed SQL (constitution rule #5).
+2. The enabled/pause flag lives in `workspaces.settings` jsonb
+   (`settings.enabled`; absent ⇒ enabled) — no DDL. Session 2 extended the
+   shared `WorkspaceSettingsRequestSchema` with an optional `enabled` (the write
+   path, which flows through `patchWorkspaceSettings`) and added `enabled` to
+   `WorkspaceResponse` (mapped in the backend `toResponse` from settings) so the
+   Start/Pause control reflects and writes the persisted state.
+
+### Live pass
+
+`quickstart.md` Scenarios A–E (executors admin, run card, runs table, human
+queue, multi-workspace pause) run against a live `docker compose` stack at the
+iteration checkpoint — deferred here (no running stack in the frontend session);
+all static gates (`pnpm typecheck && pnpm lint && pnpm test`, plus the web
+package's `vue-tsc` typecheck and 36 msw component tests) are green.

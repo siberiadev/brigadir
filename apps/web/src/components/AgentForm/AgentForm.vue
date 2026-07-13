@@ -13,6 +13,7 @@ import type {
 import { lintAgent } from '@brigadir/contracts/agent-linter';
 import { useStatuses } from '../../composables/useStatuses';
 import { useAgents, useCreateAgent, useUpdateAgent, useTestRun } from '../../composables/useAgents';
+import { useExecutors } from '../../composables/useExecutors';
 import { ApiError } from '../../api/client';
 
 const props = defineProps<{
@@ -31,12 +32,11 @@ const statusesUnavailable = computed(() => statusesQuery.isError.value);
 const statusById = computed(() => new Map(boardStatuses.value.map((s) => [s.name, s.id])));
 
 const agentsQuery = useAgents(props.workspaceId);
-// Only discovery seam for executors in the frozen API: reuse ids off existing
-// agents (an executors provisioning endpoint is deferred to iteration 6).
-const executorOptions = computed(() => {
-  const ids = new Set((agentsQuery.data.value ?? []).map((a) => a.executor_id).filter(Boolean));
-  return [...ids];
-});
+// Executors now come from the real CRUD surface (feature 006, FR-023): the
+// picker shows NAMES + a type badge, never a raw UUID, and defaults to the
+// workspace's claude_cli executor.
+const executorsQuery = useExecutors(props.workspaceId);
+const executorOptions = computed(() => executorsQuery.data.value?.items ?? []);
 
 const a = props.agent;
 const form = reactive({
@@ -59,9 +59,11 @@ const form = reactive({
   use_callback_channel: (a?.behavior?.use_callback_channel as boolean | undefined) ?? true,
 });
 
-// Default the executor to the first discoverable one for a fresh form.
+// Default a fresh form to the workspace's claude_cli executor (else the first).
 watch(executorOptions, (opts) => {
-  if (!form.executor_id && opts.length) form.executor_id = opts[0];
+  if (!form.executor_id && opts.length) {
+    form.executor_id = (opts.find((e) => e.type === 'claude_cli') ?? opts[0]).id;
+  }
 });
 
 const showAdvanced = ref(false);
@@ -214,12 +216,17 @@ defineExpose({ submit, saving });
         <el-select
           v-model="form.executor_id"
           filterable
-          allow-create
-          default-first-option
           data-test="executor-select"
-          placeholder="executor id"
+          placeholder="Select executor"
         >
-          <el-option v-for="id in executorOptions" :key="id" :label="id" :value="id" />
+          <el-option v-for="ex in executorOptions" :key="ex.id" :label="ex.name" :value="ex.id">
+            <span class="executor-option">
+              <span>{{ ex.name }}</span>
+              <el-tag size="small" :type="ex.type === 'claude_cli' ? 'primary' : 'info'">
+                {{ ex.type }}
+              </el-tag>
+            </span>
+          </el-option>
         </el-select>
       </el-form-item>
       <el-form-item label="Model">
@@ -378,5 +385,11 @@ defineExpose({ submit, saving });
   display: flex;
   gap: 12px;
   align-items: center;
+}
+.executor-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 </style>

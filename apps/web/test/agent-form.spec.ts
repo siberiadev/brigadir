@@ -3,7 +3,7 @@ import { http, HttpResponse } from 'msw';
 import type { VueWrapper } from '@vue/test-utils';
 import { server } from './server';
 import { mountWithProviders, flush } from './mount';
-import { sampleStatuses, sampleAgent } from './handlers';
+import { sampleStatuses, sampleAgent, sampleExecutors } from './handlers';
 import AgentForm from '../src/components/AgentForm/AgentForm.vue';
 
 /**
@@ -107,6 +107,25 @@ describe('AgentForm — statuses + linter mirror', () => {
     await (wrapper.vm as unknown as { submit: () => Promise<void> }).submit();
     await flush();
     expect(saved).toBe(true);
+  });
+
+  it('populates the executor picker with names + type badge and defaults to claude_cli (US4 FR-023)', async () => {
+    const wrapper = mountForm();
+    await flush();
+
+    const picker = selectByTest(wrapper, 'executor-select');
+    const optionLabels = picker.findAllComponents({ name: 'ElOption' }).map((o) => o.props('label'));
+    // Names, never UUIDs.
+    expect(optionLabels).toEqual(sampleExecutors.map((e) => e.name));
+
+    // A fresh form defaults to the workspace's claude_cli executor (id, not blank).
+    const claude = sampleExecutors.find((e) => e.type === 'claude_cli')!;
+    expect(picker.props('modelValue')).toBe(claude.id);
+
+    // The type badge renders alongside the name.
+    expect(picker.findAllComponents({ name: 'ElTag' }).some((t) => t.text() === 'claude_cli')).toBe(
+      true,
+    );
   });
 
   it('shows a non-blocking status_cycle warning yet still submits (US2 #5)', async () => {

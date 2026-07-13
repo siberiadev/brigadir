@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import type { WorkspaceRepository } from '@brigadir/contracts';
+import type { ExecutorResponse, WorkspaceRepository } from '@brigadir/contracts';
 import { useWorkspaces, useRotateConnection, useUpdateSettings } from '../composables/useWorkspaces';
+import { useExecutors, useDeleteExecutor } from '../composables/useExecutors';
 import { ApiError } from '../api/client';
 import { defaultExpiry } from '../utils/date';
 import CredentialBadge from '../components/CredentialBadge.vue';
+import ExecutorForm from '../components/ExecutorForm/ExecutorForm.vue';
+import FormDialog from '../components/FormDialog.vue';
 
 const props = defineProps<{ id: string }>();
 
@@ -74,17 +77,45 @@ async function saveSettings() {
   });
   ElMessage.success('Settings saved — effective on the next poller pass.');
 }
+
+// --- executors admin (US4) ---
+const executorsQuery = useExecutors(props.id);
+const deleteExecutor = useDeleteExecutor(props.id);
+const showExecutorForm = ref(false);
+const editingExecutor = ref<ExecutorResponse | null>(null);
+const executorFormRef = ref<InstanceType<typeof ExecutorForm>>();
+
+function openCreateExecutor() {
+  editingExecutor.value = null;
+  showExecutorForm.value = true;
+}
+function openEditExecutor(ex: ExecutorResponse) {
+  editingExecutor.value = ex;
+  showExecutorForm.value = true;
+}
+function onExecutorSaved() {
+  showExecutorForm.value = false;
+  ElMessage.success('Executor saved.');
+}
+async function onDeleteExecutor(ex: ExecutorResponse) {
+  try {
+    await deleteExecutor.mutateAsync(ex.id);
+    ElMessage.success('Executor deleted.');
+  } catch (err) {
+    // 409 executor_in_use names the referencing agents — surface it verbatim.
+    const msg = err instanceof ApiError ? err.message : (err as Error)?.message ?? 'Delete failed.';
+    ElMessage.error(msg);
+  }
+}
 </script>
 
 <template>
   <div v-if="workspace" class="settings">
-    <el-card class="block">
-      <template #header>
-        <div class="card-head">
-          <span>Jira connection</span>
-          <CredentialBadge :status="workspace.credential_status" />
-        </div>
-      </template>
+    <div class="block">
+      <div class="block-head">
+        <h3>Jira connection</h3>
+        <CredentialBadge :status="workspace.credential_status" />
+      </div>
       <p class="hint">
         Site <strong>{{ workspace.jira_site_url }}</strong> · project
         <strong>{{ workspace.project_key }}</strong>
@@ -115,10 +146,10 @@ async function saveSettings() {
       >
         Reconnect (re-verify)
       </el-button>
-    </el-card>
+    </div>
 
-    <el-card class="block">
-      <template #header>Configuration</template>
+    <div class="block">
+      <h3>Configuration</h3>
       <el-form label-position="top">
         <el-form-item label="Default branch prefix">
           <el-input v-model="settings.branch_prefix" data-test="branch-prefix" />
@@ -160,7 +191,69 @@ async function saveSettings() {
           Save settings
         </el-button>
       </div>
-    </el-card>
+    </div>
+
+    <div class="block">
+      <div class="block-head">
+        <h3>Executors</h3>
+        <el-button type="primary" data-test="new-executor" @click="openCreateExecutor">
+          New executor
+        </el-button>
+      </div>
+
+      <el-table
+        v-loading="executorsQuery.isLoading.value"
+        :data="executorsQuery.data.value?.items ?? []"
+        data-test="executors-table"
+      >
+        <el-table-column label="Name">
+          <template #default="{ row }">
+            <span data-test="executor-name-cell">{{ row.name }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="Type">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.type === 'claude_cli' ? 'primary' : 'info'">
+              {{ row.type }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="concurrency_limit" label="Concurrency" width="120" />
+        <el-table-column label="">
+          <template #default="{ row }">
+            <el-button link type="primary" :data-test="`executor-edit-${row.id}`" @click="openEditExecutor(row)">
+              Edit
+            </el-button>
+            <el-button link type="danger" :data-test="`executor-delete-${row.id}`" @click="onDeleteExecutor(row)">
+              Delete
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+
+    <FormDialog v-model="showExecutorForm" :title="editingExecutor ? 'Edit executor' : 'New executor'">
+      <ExecutorForm
+        v-if="showExecutorForm"
+        ref="executorFormRef"
+        :key="editingExecutor?.id ?? 'new'"
+        :workspace-id="id"
+        :executor="editingExecutor"
+        :repositories="repositories"
+        @saved="onExecutorSaved"
+      />
+      <template #footer>
+        <el-button data-test="executor-cancel" @click="showExecutorForm = false">Cancel</el-button>
+        <el-button
+          type="primary"
+          data-test="executor-save"
+          :loading="executorFormRef?.saving"
+          @click="executorFormRef?.submit()"
+        >
+          {{ editingExecutor ? 'Save' : 'Create executor' }}
+        </el-button>
+      </template>
+    </FormDialog>
   </div>
   <el-empty v-else description="Workspace not found" />
 </template>
@@ -170,12 +263,20 @@ async function saveSettings() {
   max-width: 640px;
 }
 .block {
-  margin-bottom: 20px;
+  margin-bottom: 28px;
 }
-.card-head {
+.block h3 {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+}
+.block-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+.block-head h3 {
+  margin-bottom: 0;
 }
 .hint {
   font-size: 12px;

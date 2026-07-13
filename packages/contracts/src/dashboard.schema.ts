@@ -75,6 +75,10 @@ export const WorkspaceSettingsRequestSchema = z
     scope_jql: z.string().min(1).optional(),
     branch_prefix: z.string().min(1).optional(),
     repositories: z.array(WorkspaceRepositorySchema).optional(),
+    // Feature 006 (US5): the enabled/pause flag. Absent ⇒ unchanged; `false`
+    // pauses the workspace in the multi-workspace reconcile loop (settings jsonb;
+    // no DDL — mirrors WorkspaceSettings.enabled).
+    enabled: z.boolean().optional(),
   })
   .strict();
 export type WorkspaceSettingsRequest = z.infer<typeof WorkspaceSettingsRequestSchema>;
@@ -92,6 +96,9 @@ export const WorkspaceResponseSchema = z
     expires_at: z.string().nullable(),
     credential_status: CredentialStatusSchema,
     repositories: z.array(WorkspaceRepositorySchema),
+    // Feature 006 (US5): the enabled/pause flag surfaced so the settings toggle
+    // reflects persisted state. Absent settings ⇒ treated as enabled (true).
+    enabled: z.boolean(),
     created_at: z.string(),
     updated_at: z.string(),
   })

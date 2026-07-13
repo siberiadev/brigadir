@@ -42,3 +42,17 @@ export function useUpdateSettings(workspaceId: string) {
     onSuccess: () => qc.invalidateQueries({ queryKey: workspacesKey }),
   });
 }
+
+/**
+ * Enable/pause a workspace from the list (US5). Workspace id travels in the
+ * mutation payload so a single instance drives every row (composables can't be
+ * called per-row in setup). Writes `settings.enabled` via the settings endpoint.
+ */
+export function useSetWorkspaceEnabled() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ workspaceId, enabled }: { workspaceId: string; enabled: boolean }) =>
+      api.updateSettings(workspaceId, { enabled }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: workspacesKey }),
+  });
+}
