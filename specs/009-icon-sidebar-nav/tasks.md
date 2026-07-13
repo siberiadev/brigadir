@@ -172,8 +172,8 @@ stories independently pass.
 
 **Purpose**: Record the iteration and run the authoritative gates.
 
-- [ ] T015 [P] Append an iteration-9 entry to `docs/progress.md`: header→icon-sidebar migration, the new `AppSidebar.vue` presentational component (props/events/data-test surface), `App.vue` shell rework (gate stays sidebar-free; 70px fixed rail + `margin-left` content; count query + 006 landing watch retained), badge move onto the Human queue icon, the single new `lucide-vue-next` dependency, and the `app-sidebar.spec.ts` cases + all-green gates
-- [ ] T016 Run the authoritative gates per quickstart.md from repo root: `pnpm --filter @brigadir/web typecheck` (strict props/events) and `pnpm --filter @brigadir/web test` (the new spec passes alongside the existing web specs), plus root `pnpm lint`; confirm the diff touches only `apps/web/src/App.vue`, `apps/web/src/components/AppSidebar.vue`, `apps/web/package.json`, `apps/web/test/app-sidebar.spec.ts`, and `docs/progress.md` — no backend/contract/schema change (FR-015, SC-001..007)
+- [X] T015 [P] Append an iteration-9 entry to `docs/progress.md`: header→icon-sidebar migration, the new `AppSidebar.vue` presentational component (props/events/data-test surface), `App.vue` shell rework (gate stays sidebar-free; 70px fixed rail + `margin-left` content; count query + 006 landing watch retained), badge move onto the Human queue icon, the single new `lucide-vue-next` dependency, and the `app-sidebar.spec.ts` cases + all-green gates
+- [X] T016 Run the authoritative gates per quickstart.md from repo root: `pnpm --filter @brigadir/web typecheck` (strict props/events) and `pnpm --filter @brigadir/web test` (the new spec passes alongside the existing web specs), plus root `pnpm lint`; confirm the diff touches only `apps/web/src/App.vue`, `apps/web/src/components/AppSidebar.vue`, `apps/web/package.json`, `apps/web/test/app-sidebar.spec.ts`, and `docs/progress.md` — no backend/contract/schema change (FR-015, SC-001..007)
 
 ---
 
