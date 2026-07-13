@@ -58,4 +58,22 @@ describe('PlatformSettings — sub-nav + executors panel', () => {
     expect(names).toEqual(['claude', 'mock']);
     expect(wrapper.find('[data-test="new-executor"]').exists()).toBe(true);
   });
+
+  it('profile table column order: Type, Model, Name, Max parallel runs, API key, Enabled (2026-07-14)', async () => {
+    const wrapper = await mountAt('/settings/executors');
+
+    const headers = wrapper
+      .findAll('[data-test="executors-table"] thead th')
+      .map((th) => th.text())
+      .filter(Boolean); // the unnamed actions column drops out
+    expect(headers).toEqual(['Type', 'Model', 'Name', 'Max parallel runs', 'API key', 'Enabled']);
+
+    // Model shows the profile's model, em-dash for mock; API key set/—; Enabled tag.
+    const models = wrapper.findAll('[data-test="executor-model-cell"]').map((n) => n.text());
+    expect(models).toEqual(['claude-sonnet-5', '—']);
+    const keys = wrapper.findAll('[data-test="executor-api-key-cell"]').map((n) => n.text());
+    expect(keys).toEqual(['—', '—']);
+    const enabled = wrapper.findAll('[data-test="executor-enabled-cell"]').map((n) => n.text());
+    expect(enabled).toEqual(['enabled', 'enabled']);
+  });
 });

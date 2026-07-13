@@ -73,7 +73,7 @@ describe('config source-of-truth flip (T130)', () => {
       .returning({ id: schema.workspaces.id });
     const [exec] = await db.db
       .insert(schema.executors)
-      .values({ type: 'mock', name: 'mock-exec', concurrencyLimit: 7 })
+      .values({ type: 'mock', name: 'mock-exec', maxParallelRuns: 7 })
       .returning({ id: schema.executors.id });
     await db.db.insert(schema.agents).values({
       workspaceId: ws.id,
@@ -97,7 +97,7 @@ describe('config source-of-truth flip (T130)', () => {
       .select()
       .from(schema.executors)
       .where(eq(schema.executors.id, exec.id));
-    expect(execAfter.concurrencyLimit).toBe(7); // DB wins
+    expect(execAfter.maxParallelRuns).toBe(7); // DB wins
 
     const [agentAfter] = await db.db
       .select()

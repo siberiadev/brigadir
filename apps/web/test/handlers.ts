@@ -90,7 +90,7 @@ export const sampleAgent: AgentResponse = {
   enabled: true,
 };
 
-// --- executors fixtures (PLATFORM-scoped, 2026-07-13: no repository in config) ---
+// --- executor fixtures (named runner profiles, 2026-07-14: has_api_key, no repository) ---
 
 export const sampleExecutors: ExecutorResponse[] = [
   {
@@ -98,7 +98,8 @@ export const sampleExecutors: ExecutorResponse[] = [
     type: 'claude_cli',
     name: 'claude',
     enabled: true,
-    concurrency_limit: 2,
+    max_parallel_runs: 2,
+    has_api_key: false,
     config: {
       model: 'claude-sonnet-5',
       cli_path: 'claude',
@@ -112,10 +113,44 @@ export const sampleExecutors: ExecutorResponse[] = [
     type: 'mock',
     name: 'mock',
     enabled: true,
-    concurrency_limit: 1,
+    max_parallel_runs: 1,
+    has_api_key: false,
     config: {},
   },
 ];
+
+/** A claude_cli profile WITH a stored key + a DISABLED profile — picker/form state fixtures. */
+export const sampleExecutorWithKey: ExecutorResponse = {
+  id: 'ex-team',
+  type: 'claude_cli',
+  name: 'team-api-key',
+  enabled: true,
+  max_parallel_runs: 4,
+  has_api_key: true,
+  config: {
+    model: 'claude-opus-4-8',
+    cli_path: 'claude',
+    use_callback_channel: true,
+    keep_failed_worktrees: false,
+    max_turns: 40,
+  },
+};
+
+export const sampleDisabledExecutor: ExecutorResponse = {
+  id: 'ex-off',
+  type: 'claude_cli',
+  name: 'paused-runner',
+  enabled: false,
+  max_parallel_runs: 1,
+  has_api_key: false,
+  config: {
+    model: 'claude-sonnet-5',
+    cli_path: 'claude',
+    use_callback_channel: true,
+    keep_failed_worktrees: false,
+    max_turns: 30,
+  },
+};
 
 export const sampleRunListItem: RunListResponse['items'][number] = {
   run_id: 'run-1',

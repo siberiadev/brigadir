@@ -62,7 +62,7 @@ describe('executor delete guard (cross-workspace)', () => {
   const seedExecutor = async (name: string) => {
     const [row] = await db.db
       .insert(schema.executors)
-      .values({ type: 'mock', name, concurrencyLimit: 1, config: {} })
+      .values({ type: 'mock', name, maxParallelRuns: 1, config: {} })
       .returning({ id: schema.executors.id });
     return row.id;
   };

@@ -67,7 +67,7 @@ describe('agent CRUD + linter + test-run (T142/T143)', () => {
     workspaceId = ws.id;
     const [exec] = await db.db
       .insert(schema.executors)
-      .values({ type: 'mock', name: 'mock-exec', concurrencyLimit: 2 })
+      .values({ type: 'mock', name: 'mock-exec', maxParallelRuns: 2 })
       .returning({ id: schema.executors.id });
     executorId = exec.id;
   });

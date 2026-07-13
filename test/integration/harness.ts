@@ -180,7 +180,7 @@ export async function seedPipeline(
       // mints a unique name (no spec asserts it — they assert type/config).
       type: opts.executorType ?? 'mock',
       name: `exec-${randomBytes(4).toString('hex')}`,
-      concurrencyLimit: 2,
+      maxParallelRuns: 2,
       config: opts.executorConfig ?? {},
     })
     .returning({ id: schema.executors.id });

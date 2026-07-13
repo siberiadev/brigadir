@@ -53,7 +53,7 @@ describe('executor global type-scoped backfill', () => {
     expect(rows.map((r) => r.name).sort()).toEqual(['claude', 'mock']);
 
     const claude = rows.find((r) => r.type === 'claude_cli')!;
-    expect(claude.concurrencyLimit).toBe(2);
+    expect(claude.maxParallelRuns).toBe(2);
     expect(claude.config).toMatchObject({
       model: 'claude-sonnet-5',
       cliPath: 'claude',
@@ -67,7 +67,7 @@ describe('executor global type-scoped backfill', () => {
   it('a DB with a custom-named executor of a type gains no duplicate of that type, only the missing type', async () => {
     await db.db
       .insert(schema.executors)
-      .values({ type: 'claude_cli', name: 'claude-cli', concurrencyLimit: 7, config: { model: 'x' } });
+      .values({ type: 'claude_cli', name: 'claude-cli', maxParallelRuns: 7, config: { model: 'x' } });
 
     await backfill.run();
     const rows = await allExecutors();
@@ -76,16 +76,16 @@ describe('executor global type-scoped backfill', () => {
     const mock = rows.filter((r) => r.type === 'mock');
     expect(claude).toHaveLength(1);
     expect(claude[0].name).toBe('claude-cli');
-    expect(claude[0].concurrencyLimit).toBe(7); // existing row unmodified
+    expect(claude[0].maxParallelRuns).toBe(7); // existing row unmodified
     expect(mock).toHaveLength(1);
     expect(mock[0].name).toBe('mock');
   });
 
   it('mirrors the live DB: "mock-exec" + "claude-cli" present → backfill adds NOTHING', async () => {
     await db.db.insert(schema.executors).values([
-      { type: 'mock', name: 'mock-exec', concurrencyLimit: 2, config: {} },
+      { type: 'mock', name: 'mock-exec', maxParallelRuns: 2, config: {} },
       // the leftover repository key in a pre-0003 config is kept and ignored
-      { type: 'claude_cli', name: 'claude-cli', concurrencyLimit: 1, config: { model: 'x', repository: 'old' } },
+      { type: 'claude_cli', name: 'claude-cli', maxParallelRuns: 1, config: { model: 'x', repository: 'old' } },
     ]);
     await backfill.run();
     const rows = await allExecutors();

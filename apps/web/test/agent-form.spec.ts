@@ -3,7 +3,7 @@ import { http, HttpResponse } from 'msw';
 import type { VueWrapper } from '@vue/test-utils';
 import { server } from './server';
 import { mountWithProviders, flush } from './mount';
-import { sampleStatuses, sampleAgent, sampleExecutors } from './handlers';
+import { sampleStatuses, sampleAgent, sampleExecutors, sampleDisabledExecutor } from './handlers';
 import AgentForm from '../src/components/AgentForm/AgentForm.vue';
 
 /**
@@ -109,23 +109,43 @@ describe('AgentForm — statuses + linter mirror', () => {
     expect(saved).toBe(true);
   });
 
-  it('populates the executor picker with names + type badge and defaults to claude_cli (US4 FR-023)', async () => {
+  it('renders profile options as "<type> — <model> (<name>)" / "mock (<name>)" and defaults to claude_cli', async () => {
     const wrapper = mountForm();
     await flush();
 
     const picker = selectByTest(wrapper, 'executor-select');
     const optionLabels = picker.findAllComponents({ name: 'ElOption' }).map((o) => o.props('label'));
-    // Names, never UUIDs.
-    expect(optionLabels).toEqual(sampleExecutors.map((e) => e.name));
+    // Full profile identity — never a raw UUID; mock has no model segment.
+    expect(optionLabels).toEqual(['claude_cli — claude-sonnet-5 (claude)', 'mock (mock)']);
 
-    // A fresh form defaults to the workspace's claude_cli executor (id, not blank).
+    // A fresh form defaults to a claude_cli profile (id, not blank).
     const claude = sampleExecutors.find((e) => e.type === 'claude_cli')!;
     expect(picker.props('modelValue')).toBe(claude.id);
+  });
 
-    // The type badge renders alongside the name.
-    expect(picker.findAllComponents({ name: 'ElTag' }).some((t) => t.text() === 'claude_cli')).toBe(
-      true,
+  it('has NO Model input — the profile model is the single source of truth (2026-07-14)', async () => {
+    const wrapper = mountForm();
+    await flush();
+    expect(wrapper.find('[data-test="model-input"]').exists()).toBe(false);
+  });
+
+  it('a disabled profile stays visible in the picker but is not selectable', async () => {
+    server.use(
+      http.get('/api/executors', () =>
+        HttpResponse.json({ items: [...sampleExecutors, sampleDisabledExecutor] }),
+      ),
     );
+    const wrapper = mountForm();
+    await flush();
+
+    const picker = selectByTest(wrapper, 'executor-select');
+    const options = picker.findAllComponents({ name: 'ElOption' });
+    const off = options.find((o) => o.props('value') === sampleDisabledExecutor.id)!;
+    expect(off).toBeTruthy();
+    expect(off.props('disabled')).toBe(true);
+    expect(off.text()).toContain('disabled');
+    // The default never lands on the disabled profile.
+    expect(picker.props('modelValue')).not.toBe(sampleDisabledExecutor.id);
   });
 
   it('shows a non-blocking status_cycle warning yet still submits (US2 #5)', async () => {

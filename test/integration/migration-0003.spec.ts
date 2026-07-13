@@ -42,7 +42,7 @@ describe('migration 0003_platform_executors — from scratch', () => {
       SELECT column_name FROM information_schema.columns WHERE table_name = 'executors'
     `);
     const names = cols.rows.map((r) => r.column_name as string).sort();
-    expect(names).toEqual(['concurrency_limit', 'config', 'enabled', 'id', 'name', 'secrets', 'type']);
+    expect(names).toEqual(['config', 'enabled', 'id', 'max_parallel_runs', 'name', 'secrets', 'type']);
 
     const constraints = await h.db.execute(sql`
       SELECT conname FROM pg_constraint WHERE conrelid = 'executors'::regclass ORDER BY conname
@@ -86,7 +86,8 @@ describe('migration 0003_platform_executors — on a DB with existing 0000–000
   });
 
   it('keeps every row, preserves ids, and suffixes only the later name collision', async () => {
-    // Two workspaces: the live-DB shape (ST3 MCP v3 with mock-exec/claude-cli)
+    // Two workspaces: the live-DB shape (ST3 MCP v3 with mock-exec / claude-cli /
+    // "Claude Code CLI" and agent TEST carrying a legacy behavior.model)
     // plus a second workspace whose executor name COLLIDES with the first's.
     const ws = await pool.query(`
       INSERT INTO workspaces (name, jira_site_url, jira_project_key, jira_credentials)
@@ -98,9 +99,12 @@ describe('migration 0003_platform_executors — on a DB with existing 0000–000
 
     const ex = await pool.query(
       `
+      -- pre-0003 world: the column is still concurrency_limit; the live-like
+      -- profile set is "mock-exec" / "claude-cli" / "Claude Code CLI".
       INSERT INTO executors (workspace_id, type, name, concurrency_limit, config)
       VALUES ($1, 'mock', 'mock-exec', 2, '{}'::jsonb),
              ($1, 'claude_cli', 'claude-cli', 1, '{"model":"claude-sonnet-5","repository":"legacy"}'::jsonb),
+             ($1, 'claude_cli', 'Claude Code CLI', 2, '{"model":"claude-opus-4-8"}'::jsonb),
              ($2, 'mock', 'mock-exec', 3, '{}'::jsonb)
       RETURNING id, name, workspace_id
     `,
@@ -118,16 +122,16 @@ describe('migration 0003_platform_executors — on a DB with existing 0000–000
     const claudeId = ex.rows.find((r) => r.name === 'claude-cli')!.id as string;
     await pool.query(
       `
-      INSERT INTO agents (workspace_id, executor_id, name, instruction, status_success, status_failure)
-      VALUES ($1, $2, 'implementer', 'x', 'Done', 'Blocked')
+      INSERT INTO agents (workspace_id, executor_id, name, instruction, status_success, status_failure, behavior)
+      VALUES ($1, $2, 'TEST', 'x', 'Done', 'Blocked', '{"model":"legacy-behavior-model"}'::jsonb)
     `,
       [wsA, claudeId],
     );
 
     for (const stmt of statementsOf(MIGRATION_0003)) await pool.query(stmt);
 
-    const after = await pool.query('SELECT id, name, type, concurrency_limit, config FROM executors ORDER BY name');
-    expect(after.rows).toHaveLength(3);
+    const after = await pool.query('SELECT id, name, type, max_parallel_runs, config FROM executors ORDER BY name');
+    expect(after.rows).toHaveLength(4);
     expect(new Set(after.rows.map((r) => r.id as string))).toEqual(idsBefore); // ids stable
 
     // Exactly one mock-exec keeps its bare name (the smaller id — deterministic);
@@ -158,5 +162,16 @@ describe('migration 0003_platform_executors — on a DB with existing 0000–000
     await expect(
       pool.query(`INSERT INTO executors (type, name) VALUES ('mock', 'mock-exec')`),
     ).rejects.toMatchObject({ code: '23505' });
+
+    // The rename landed: max_parallel_runs carries the old values, the old
+    // column is gone, "Claude Code CLI" survived untouched.
+    const renamed = await pool.query(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_name = 'executors' AND column_name IN ('concurrency_limit', 'max_parallel_runs')`,
+    );
+    expect(renamed.rows.map((r) => r.column_name as string)).toEqual(['max_parallel_runs']);
+    const cli = after.rows.find((r) => r.name === 'Claude Code CLI')!;
+    expect(cli.max_parallel_runs).toBe(2);
+    expect(cli.config).toMatchObject({ model: 'claude-opus-4-8' });
   });
 });
