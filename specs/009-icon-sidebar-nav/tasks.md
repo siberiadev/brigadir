@@ -46,7 +46,7 @@ Web frontend workspace `@brigadir/web` at `apps/web/`:
 
 **Purpose**: Land the one new frontend dependency the whole feature needs.
 
-- [ ] T001 Add `lucide-vue-next` to `apps/web/package.json` dependencies and install it (`pnpm --filter @brigadir/web add lucide-vue-next` from repo root, then `pnpm install`); confirm the lockfile updates and `import { LayoutGrid, Inbox, LogOut } from 'lucide-vue-next'` resolves under strict TS (research R1)
+- [X] T001 Add `lucide-vue-next` to `apps/web/package.json` dependencies and install it (`pnpm --filter @brigadir/web add lucide-vue-next` from repo root, then `pnpm install`); confirm the lockfile updates and `import { LayoutGrid, Inbox, LogOut } from 'lucide-vue-next'` resolves under strict TS (research R1)
 
 **Checkpoint**: Dependency available — the sidebar component can import lucide glyphs.
 
@@ -61,9 +61,9 @@ sidebar and the spec file can mount the real routes.
 
 **⚠️ CRITICAL**: Complete this phase before starting any user story phase.
 
-- [ ] T002 [P] Scaffold `apps/web/test/app-sidebar.spec.ts`: import `{ routes }` from `../src/router`, static-import the lazy view modules to warm the module cache (`WorkspacePage.vue`, `AgentsList.vue`, `Runs.vue`, `WorkspaceSettings.vue`, `WorkspaceList.vue` — the `workspace-tabs.spec.ts` pattern), and add `mountApp(initialPath)` + `settle(predicate)` helpers using `mountWithProviders(AppRoot, { routes, initialPath })` where `AppRoot` mounts `App.vue`; leave `describe` blocks empty for the per-story tests
-- [ ] T003 Create `apps/web/src/components/AppSidebar.vue` skeleton as a PURE presentational component: declare `defineProps<{ openCount: number }>()` and `defineEmits<{ (e: 'sign-out'): void }>()`, named lucide imports (`LayoutGrid`, `Inbox`, `LogOut`), the static two-item `NavItem` array from data-model.md (`workspaces` → `LayoutGrid`/`'/'`, `human-queue` → `Inbox`/`'/human-queue'`), and the root `<aside data-test="app-sidebar">` with empty brand / nav / bottom-pinned sign-out regions — no `App.vue` coupling, no count query inside (contracts/app-sidebar.md Props/Events)
-- [ ] T004 Rework `apps/web/src/App.vue` shell: KEEP the `v-if="!auth.token"` branch a full-screen token gate WITHOUT any sidebar; in the authenticated `v-else` branch render `<AppSidebar :open-count="openCount" @sign-out="auth.clear()" />` as a `position: fixed` left rail ~70px wide × full viewport height plus a main region offset by `margin-left` equal to the rail width (nothing under the rail); KEEP `authed`, `countQuery` (`useHumanTaskCount`), `openCount`, and the 006 landing `watch` in `App.vue` unchanged; REMOVE the old `el-header` / `.app-nav` / inline `el-badge` / inline Sign out button (FR-001/002/011/013/014, research R5)
+- [X] T002 [P] Scaffold `apps/web/test/app-sidebar.spec.ts`: import `{ routes }` from `../src/router`, static-import the lazy view modules to warm the module cache (`WorkspacePage.vue`, `AgentsList.vue`, `Runs.vue`, `WorkspaceSettings.vue`, `WorkspaceList.vue` — the `workspace-tabs.spec.ts` pattern), and add `mountApp(initialPath)` + `settle(predicate)` helpers using `mountWithProviders(AppRoot, { routes, initialPath })` where `AppRoot` mounts `App.vue`; leave `describe` blocks empty for the per-story tests
+- [X] T003 Create `apps/web/src/components/AppSidebar.vue` skeleton as a PURE presentational component: declare `defineProps<{ openCount: number }>()` and `defineEmits<{ (e: 'sign-out'): void }>()`, named lucide imports (`LayoutGrid`, `Inbox`, `LogOut`), the static two-item `NavItem` array from data-model.md (`workspaces` → `LayoutGrid`/`'/'`, `human-queue` → `Inbox`/`'/human-queue'`), and the root `<aside data-test="app-sidebar">` with empty brand / nav / bottom-pinned sign-out regions — no `App.vue` coupling, no count query inside (contracts/app-sidebar.md Props/Events)
+- [X] T004 Rework `apps/web/src/App.vue` shell: KEEP the `v-if="!auth.token"` branch a full-screen token gate WITHOUT any sidebar; in the authenticated `v-else` branch render `<AppSidebar :open-count="openCount" @sign-out="auth.clear()" />` as a `position: fixed` left rail ~70px wide × full viewport height plus a main region offset by `margin-left` equal to the rail width (nothing under the rail); KEEP `authed`, `countQuery` (`useHumanTaskCount`), `openCount`, and the 006 landing `watch` in `App.vue` unchanged; REMOVE the old `el-header` / `.app-nav` / inline `el-badge` / inline Sign out button (FR-001/002/011/013/014, research R5)
 
 **Checkpoint**: Authenticated shell renders `AppSidebar` beside offset content; the
 gate stays sidebar-free; the spec file can mount the app at any real route.
@@ -85,11 +85,11 @@ top nav header exists.
 
 > Write these FIRST against the `data-test` contract; they fail until T006 lands.
 
-- [ ] T005 [US1] Add the "rendering + tooltips" describe block to `apps/web/test/app-sidebar.spec.ts`: mounting the authed shell shows `app-sidebar` containing `sidebar-brand`, `nav-workspaces`, `nav-human-queue`, and `sidebar-sign-out`; NO top nav header (the old `.app-nav` is gone); each of the three icons is wrapped in an `el-tooltip` with `placement="right"` whose content is exactly "Workspaces" / "Human queue" / "Sign out" (assert on the rendered tooltip content/aria surface, no real hover) (contracts §Tooltip, SC-001/007)
+- [X] T005 [US1] Add the "rendering + tooltips" describe block to `apps/web/test/app-sidebar.spec.ts`: mounting the authed shell shows `app-sidebar` containing `sidebar-brand`, `nav-workspaces`, `nav-human-queue`, and `sidebar-sign-out`; NO top nav header (the old `.app-nav` is gone); each of the three icons is wrapped in an `el-tooltip` with `placement="right"` whose content is exactly "Workspaces" / "Human queue" / "Sign out" (assert on the rendered tooltip content/aria surface, no real hover) (contracts §Tooltip, SC-001/007)
 
 ### Implementation for User Story 1
 
-- [ ] T006 [US1] Fill `apps/web/src/components/AppSidebar.vue` nav render: `sidebar-brand` compact "B" mark at top; `nav-workspaces` and `nav-human-queue` as `RouterLink` (`to` from the `NavItem` array) each wrapping its lucide icon inside an `el-tooltip placement="right"` with the item `label`; the bottom-pinned `sidebar-sign-out` `LogOut` icon inside an `el-tooltip placement="right"` content "Sign out" (click behavior deferred to US3); icons only, no visible text labels (FR-003/004/005, research R2)
+- [X] T006 [US1] Fill `apps/web/src/components/AppSidebar.vue` nav render: `sidebar-brand` compact "B" mark at top; `nav-workspaces` and `nav-human-queue` as `RouterLink` (`to` from the `NavItem` array) each wrapping its lucide icon inside an `el-tooltip placement="right"` with the item `label`; the bottom-pinned `sidebar-sign-out` `LogOut` icon inside an `el-tooltip placement="right"` content "Sign out" (click behavior deferred to US3); icons only, no visible text labels (FR-003/004/005, research R2)
 
 **Checkpoint**: The sidebar renders and routes; hover tooltips name each icon. MVP
 navigation surface is functional and independently testable.
