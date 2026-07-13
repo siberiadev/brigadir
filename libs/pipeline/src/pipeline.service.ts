@@ -1,7 +1,7 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
-import { JIRA_CLIENT, type JiraClient, buildRunComment, NoTransitionPath } from '@brigadir/jira';
+import { JiraClientFactory, buildRunComment, NoTransitionPath } from '@brigadir/jira';
 import { RunTriggerService } from '@brigadir/runs';
 import type { AgentReport, JiraIssue, TriggerEvent } from '@brigadir/contracts';
 import { evaluateDependencyGate, blockingKeys } from './dependency-gate';
@@ -37,7 +37,10 @@ export class PipelineService {
 
   constructor(
     @Inject(DRIZZLE) private readonly db: BrigadirDb,
-    @Inject(JIRA_CLIENT) private readonly jira: JiraClient,
+    // Per-workspace client (feature 006 checkpoint): finalization writes for
+    // workspace B must hit B's Jira site — the global LIMIT-1 client is wrong
+    // the moment a second workspace exists. Resolved lazily per write.
+    private readonly jiraFactory: JiraClientFactory,
     private readonly runTrigger: RunTriggerService,
   ) {}
 
@@ -98,7 +101,11 @@ export class PipelineService {
    */
   async onRunStarted(runId: string): Promise<void> {
     const [run] = await this.db
-      .select({ agentId: schema.runs.agentId, ticketId: schema.runs.ticketId })
+      .select({
+        agentId: schema.runs.agentId,
+        ticketId: schema.runs.ticketId,
+        workspaceId: schema.runs.workspaceId,
+      })
       .from(schema.runs)
       .where(eq(schema.runs.id, runId))
       .limit(1);
@@ -119,7 +126,8 @@ export class PipelineService {
     if (!ticket) return;
 
     try {
-      await this.jira.transitionTo(ticket.jiraKey, agent.statusRunning);
+      const jira = await this.jiraFactory.forWorkspace(run.workspaceId);
+      await jira.transitionTo(ticket.jiraKey, agent.statusRunning);
       this.logger.log(`run ${runId}: ${ticket.jiraKey} → running status "${agent.statusRunning}"`);
     } catch (err) {
       this.logger.warn(`run ${runId}: running-status transition failed (non-fatal): ${String(err)}`);
@@ -138,6 +146,7 @@ export class PipelineService {
         error: schema.runs.error,
         agentId: schema.runs.agentId,
         ticketId: schema.runs.ticketId,
+        workspaceId: schema.runs.workspaceId,
       })
       .from(schema.runs)
       .where(eq(schema.runs.id, runId))
@@ -174,8 +183,11 @@ export class PipelineService {
     const report = (run.report as AgentReport | null) ?? syntheticFailureReport(run.error);
 
     try {
-      await this.jira.transitionTo(ticket.jiraKey, targetStatus);
-      await this.jira.addComment(ticket.jiraKey, buildRunComment(report));
+      // Resolved inside the try: a credential-decode failure rethrows like any
+      // Jira error → the caller logs and drift repair retries next pass.
+      const jira = await this.jiraFactory.forWorkspace(run.workspaceId);
+      await jira.transitionTo(ticket.jiraKey, targetStatus);
+      await jira.addComment(ticket.jiraKey, buildRunComment(report));
       await this.db.insert(schema.runEvents).values({
         runId,
         type: 'jira_action',

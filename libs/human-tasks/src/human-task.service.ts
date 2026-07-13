@@ -1,7 +1,7 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
-import { JIRA_CLIENT, type JiraClient, buildHumanTaskComment } from '@brigadir/jira';
+import { JiraClientFactory, buildHumanTaskComment } from '@brigadir/jira';
 import type { HumanTaskKind } from '@brigadir/contracts';
 
 export interface CreateHumanTaskInput {
@@ -32,7 +32,9 @@ export class HumanTaskService {
 
   constructor(
     @Inject(DRIZZLE) private readonly db: BrigadirDb,
-    @Inject(JIRA_CLIENT) private readonly jira: JiraClient,
+    // Per-workspace client (feature 006 checkpoint) — the blocked-status
+    // transition/comment must hit the run's own workspace site.
+    private readonly jiraFactory: JiraClientFactory,
   ) {}
 
   async createFromRequest(runId: string, input: CreateHumanTaskInput): Promise<CreateHumanTaskResult> {
@@ -77,7 +79,7 @@ export class HumanTaskService {
 
     const parked = await this.parkRun(runId);
     if (parked) {
-      await this.transitionAndComment(run.agentId, run.ticketId, input);
+      await this.transitionAndComment(run.workspaceId, run.agentId, run.ticketId, input);
     } else {
       this.logger.warn(`run ${runId} was not in "running" when blocking request_human arrived — no park/transition`);
     }
@@ -96,6 +98,7 @@ export class HumanTaskService {
   }
 
   private async transitionAndComment(
+    workspaceId: string,
     agentId: string,
     ticketId: string,
     input: CreateHumanTaskInput,
@@ -118,8 +121,9 @@ export class HumanTaskService {
     // client would retry (D9), since retrying would just re-attempt an
     // already-satisfied dedup guard. Self-heals on reconcile.
     try {
-      await this.jira.transitionTo(ticket.jiraKey, agent.statusFailure);
-      await this.jira.addComment(ticket.jiraKey, buildHumanTaskComment(input));
+      const jira = await this.jiraFactory.forWorkspace(workspaceId);
+      await jira.transitionTo(ticket.jiraKey, agent.statusFailure);
+      await jira.addComment(ticket.jiraKey, buildHumanTaskComment(input));
     } catch (err) {
       this.logger.warn(`blocked-status transition/comment failed (non-fatal): ${String(err)}`);
     }

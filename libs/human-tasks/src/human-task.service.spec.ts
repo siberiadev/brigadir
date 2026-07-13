@@ -59,6 +59,11 @@ function fakeJira(): JiraClient {
   } as unknown as JiraClient;
 }
 
+/** The service now takes the per-workspace factory (feature 006 checkpoint). */
+function fakeFactory(jira: JiraClient) {
+  return { forWorkspace: vi.fn().mockResolvedValue(jira) } as never;
+}
+
 describe('HumanTaskService.createFromRequest (T101)', () => {
   it('blocking create: inserts one task, parks the run, transitions + comments', async () => {
     const state: FakeState = {
@@ -70,7 +75,7 @@ describe('HumanTaskService.createFromRequest (T101)', () => {
       insertedHumanTasks: [],
     };
     const jira = fakeJira();
-    const service = new HumanTaskService(fakeDb(state) as never, jira);
+    const service = new HumanTaskService(fakeDb(state) as never, fakeFactory(jira));
 
     const result = await service.createFromRequest('run-1', {
       kind: 'question',
@@ -96,7 +101,7 @@ describe('HumanTaskService.createFromRequest (T101)', () => {
       insertedHumanTasks: [],
     };
     const jira = fakeJira();
-    const service = new HumanTaskService(fakeDb(state) as never, jira);
+    const service = new HumanTaskService(fakeDb(state) as never, fakeFactory(jira));
 
     const result = await service.createFromRequest('run-1', {
       kind: 'question',
@@ -121,7 +126,7 @@ describe('HumanTaskService.createFromRequest (T101)', () => {
       insertedHumanTasks: [],
     };
     const jira = fakeJira();
-    const service = new HumanTaskService(fakeDb(state) as never, jira);
+    const service = new HumanTaskService(fakeDb(state) as never, fakeFactory(jira));
 
     const result = await service.createFromRequest('run-1', {
       kind: 'question',

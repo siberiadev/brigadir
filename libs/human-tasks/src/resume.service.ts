@@ -4,7 +4,7 @@ import { getQueueToken } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 import { and, eq, sql } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
-import { JIRA_CLIENT, type JiraClient } from '@brigadir/jira';
+import { JiraClientFactory } from '@brigadir/jira';
 import { runQueueName } from '@brigadir/queues';
 import type { ResolveHumanTaskInput } from '@brigadir/contracts';
 
@@ -33,7 +33,9 @@ export class ResumeService {
 
   constructor(
     @Inject(DRIZZLE) private readonly db: BrigadirDb,
-    @Inject(JIRA_CLIENT) private readonly jira: JiraClient,
+    // Per-workspace client (feature 006 checkpoint) — the resume transition
+    // must hit the parked run's own workspace site.
+    private readonly jiraFactory: JiraClientFactory,
     private readonly moduleRef: ModuleRef,
   ) {}
 
@@ -136,12 +138,17 @@ export class ResumeService {
     const queue = this.moduleRef.get<Queue>(getQueueToken(runQueueName(parked.executorType)), { strict: false });
     await queue.add('run', { runId: newRunId }, { jobId: newRunId });
 
-    await this.transitionToRunning(parked.agentId, parked.ticketId, newRunId);
+    await this.transitionToRunning(parked.workspaceId, parked.agentId, parked.ticketId, newRunId);
 
     return newRunId;
   }
 
-  private async transitionToRunning(agentId: string, ticketId: string, newRunId: string): Promise<void> {
+  private async transitionToRunning(
+    workspaceId: string,
+    agentId: string,
+    ticketId: string,
+    newRunId: string,
+  ): Promise<void> {
     const [agent] = await this.db
       .select({ statusRunning: schema.agents.statusRunning })
       .from(schema.agents)
@@ -157,7 +164,8 @@ export class ResumeService {
     if (!ticket) return;
 
     try {
-      await this.jira.transitionTo(ticket.jiraKey, agent.statusRunning);
+      const jira = await this.jiraFactory.forWorkspace(workspaceId);
+      await jira.transitionTo(ticket.jiraKey, agent.statusRunning);
     } catch (err) {
       this.logger.warn(`resume: running-status transition failed (non-fatal) for run ${newRunId}: ${String(err)}`);
     }
