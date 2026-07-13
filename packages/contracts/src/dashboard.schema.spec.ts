@@ -24,8 +24,8 @@ describe('dashboard schemas (T119)', () => {
       timeout_minutes: 45,
       max_budget_usd: 5,
       max_attempts: 2,
-      repository: null,
-      behavior: { allowed_tools: ['Read', 'Edit'], use_callback_channel: true },
+      // repository lives in behavior now (platform-scoped executors, 2026-07-13)
+      behavior: { allowed_tools: ['Read', 'Edit'], use_callback_channel: true, repository: 'api' },
     };
     const res = AgentWriteRequestSchema.safeParse(body);
     expect(res.success).toBe(true);

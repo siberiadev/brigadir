@@ -63,7 +63,7 @@ describe('hot-reload: API-created/edited agent picked up next pass (T144)', () =
     workspaceId = ws.id;
     const [exec] = await db.db
       .insert(schema.executors)
-      .values({ workspaceId, type: 'mock', name: 'mock-exec', concurrencyLimit: 2 })
+      .values({ type: 'mock', name: 'mock-exec', concurrencyLimit: 2 })
       .returning({ id: schema.executors.id });
     executorId = exec.id;
 

@@ -90,7 +90,7 @@ export const sampleAgent: AgentResponse = {
   enabled: true,
 };
 
-// --- feature 006 fixtures ---
+// --- executors fixtures (PLATFORM-scoped, 2026-07-13: no repository in config) ---
 
 export const sampleExecutors: ExecutorResponse[] = [
   {
@@ -102,7 +102,6 @@ export const sampleExecutors: ExecutorResponse[] = [
     config: {
       model: 'claude-sonnet-5',
       cli_path: 'claude',
-      repository: 'api',
       use_callback_channel: true,
       keep_failed_worktrees: false,
       max_turns: 30,
@@ -253,13 +252,13 @@ export const defaultHandlers = [
   http.put('/api/agents/:id', () => HttpResponse.json(sampleAgent)),
   http.post('/api/agents/:id/test-run', () => HttpResponse.json({ run_id: 'run-1' }, { status: 202 })),
 
-  // executors CRUD (US4)
-  http.get('/api/workspaces/:id/executors', () =>
+  // executors CRUD (platform-scoped — global /api/executors)
+  http.get('/api/executors', () =>
     HttpResponse.json<ExecutorListResponse>({ items: sampleExecutors }),
   ),
-  http.post('/api/workspaces/:id/executors', () => HttpResponse.json(sampleExecutors[0], { status: 201 })),
-  http.put('/api/workspaces/:id/executors/:executorId', () => HttpResponse.json(sampleExecutors[0])),
-  http.delete('/api/workspaces/:id/executors/:executorId', () => new HttpResponse(null, { status: 204 })),
+  http.post('/api/executors', () => HttpResponse.json(sampleExecutors[0], { status: 201 })),
+  http.put('/api/executors/:executorId', () => HttpResponse.json(sampleExecutors[0])),
+  http.delete('/api/executors/:executorId', () => new HttpResponse(null, { status: 204 })),
 
   // runs table + cost + card + cancel/retry (US2/US3)
   http.get('/api/workspaces/:id/runs', () => HttpResponse.json(sampleRunList)),

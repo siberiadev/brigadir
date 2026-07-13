@@ -156,3 +156,61 @@ describe('AgentForm — statuses + linter mirror', () => {
     expect(saved).toBe(true);
   });
 });
+
+describe('AgentForm — repository select (platform-scoped executors, 2026-07-13)', () => {
+  const repositories = [
+    { name: 'api', git_url: 'git@github.com:acme/api.git', default_branch: 'main' },
+    { name: 'infra', git_url: 'git@github.com:acme/infra.git', default_branch: 'main' },
+  ];
+
+  function mountWithRepos(agent: typeof sampleAgent | null = null) {
+    return mountWithProviders(AgentForm, {
+      props: { workspaceId: 'ws-1', agent, repositories },
+    });
+  }
+
+  it('lists the workspace repositories plus an explicit "workspace default" empty option', async () => {
+    const wrapper = mountWithRepos();
+    await flush();
+
+    const select = selectByTest(wrapper, 'repository-select');
+    const options = select.findAllComponents({ name: 'ElOption' });
+    expect(options.map((o) => o.props('label'))).toEqual(['workspace default', 'api', 'infra']);
+    expect(options[0].props('value')).toBe('');
+    // A fresh form starts on the workspace default.
+    expect(select.props('modelValue')).toBe('');
+  });
+
+  it('persists the choice into behavior.repository (null when left on the default)', async () => {
+    let posted: Record<string, unknown> | undefined;
+    server.use(
+      http.post('/api/agents', async ({ request }) => {
+        posted = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(sampleAgent, { status: 201 });
+      }),
+    );
+
+    const wrapper = mountWithRepos();
+    await flush();
+    await wrapper.find('[data-test="name-input"]').setValue('Impl');
+    await wrapper.find('[data-test="instruction-input"]').setValue('do it');
+    await setStatus(wrapper, 'trigger-status-select', 'Ready for Dev');
+    await setStatus(wrapper, 'status-success-select', 'In Review');
+    await setStatus(wrapper, 'status-failure-select', 'Blocked');
+    await selectByTest(wrapper, 'repository-select').setValue('infra');
+    await (wrapper.vm as unknown as { submit: () => Promise<void> }).submit();
+    await flush();
+
+    expect(posted).toBeTruthy();
+    // repository is a BEHAVIOR key, never a top-level agent field.
+    expect(posted).not.toHaveProperty('repository');
+    expect((posted!.behavior as Record<string, unknown>).repository).toBe('infra');
+  });
+
+  it('seeds the select from an existing agent behavior.repository on edit', async () => {
+    const agent = { ...sampleAgent, behavior: { ...sampleAgent.behavior, repository: 'api' } };
+    const wrapper = mountWithRepos(agent);
+    await flush();
+    expect(selectByTest(wrapper, 'repository-select').props('modelValue')).toBe('api');
+  });
+});

@@ -19,7 +19,6 @@ describe('live concurrency re-apply (T015)', () => {
   let redis: RedisHarness;
   let worker: TestingModule;
   let mockProc: RunProcessor;
-  let workspaceId: string;
 
   beforeAll(async () => {
     db = await startDatabase();
@@ -30,21 +29,11 @@ describe('live concurrency re-apply (T015)', () => {
     // Fast re-apply cadence so the test doesn't wait ~15 s.
     process.env.EXECUTOR_CONCURRENCY_REAPPLY_MS = '120';
 
-    const [ws] = await db.db
-      .insert(schema.workspaces)
-      .values({
-        name: 'ws',
-        jiraSiteUrl: 'https://test.atlassian.net',
-        jiraProjectKey: 'BRIG',
-        jiraCredentials: Buffer.from('placeholder'),
-      })
-      .returning({ id: schema.workspaces.id });
-    workspaceId = ws.id;
-
+    // Executors are platform-scoped (migration 0003) — no workspace needed.
     // One mock executor, concurrency 2 (matches the decorator default → no-op at boot).
     await db.db
       .insert(schema.executors)
-      .values({ workspaceId, type: 'mock', name: 'm1', concurrencyLimit: 2, config: {} });
+      .values({ type: 'mock', name: 'm1', concurrencyLimit: 2, config: {} });
 
     worker = await Test.createTestingModule({ imports: [WorkerAppModule] })
       .overrideProvider(ReconcileScheduler)
@@ -84,7 +73,7 @@ describe('live concurrency re-apply (T015)', () => {
     // m1 is now 4; add m2 = 3 → sum 7.
     await db.db
       .insert(schema.executors)
-      .values({ workspaceId, type: 'mock', name: 'm2', concurrencyLimit: 3, config: {} });
+      .values({ type: 'mock', name: 'm2', concurrencyLimit: 3, config: {} });
     expect(await waitForConcurrency(7)).toBe(7);
   });
 });

@@ -36,7 +36,8 @@ describe('config source-of-truth flip (T130)', () => {
   });
 
   beforeEach(async () => {
-    await db.db.delete(schema.workspaces); // cascades executors/agents
+    await db.db.delete(schema.workspaces); // cascades agents
+    await db.db.delete(schema.executors); // platform-scoped — no longer cascades from workspaces
   });
 
   async function seedWithYaml(path: string): Promise<void> {
@@ -72,7 +73,7 @@ describe('config source-of-truth flip (T130)', () => {
       .returning({ id: schema.workspaces.id });
     const [exec] = await db.db
       .insert(schema.executors)
-      .values({ workspaceId: ws.id, type: 'mock', name: 'mock-exec', concurrencyLimit: 7 })
+      .values({ type: 'mock', name: 'mock-exec', concurrencyLimit: 7 })
       .returning({ id: schema.executors.id });
     await db.db.insert(schema.agents).values({
       workspaceId: ws.id,

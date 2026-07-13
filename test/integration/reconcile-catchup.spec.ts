@@ -34,7 +34,7 @@ async function seedWorkspaceAndAgent(db: DbHarness): Promise<{ workspaceId: stri
     .returning({ id: schema.workspaces.id });
   const [exec] = await db.db
     .insert(schema.executors)
-    .values({ workspaceId: ws.id, type: 'mock', name: 'mock-exec', concurrencyLimit: 2 })
+    .values({ type: 'mock', name: 'mock-exec', concurrencyLimit: 2 })
     .returning({ id: schema.executors.id });
   const [agent] = await db.db
     .insert(schema.agents)

@@ -157,6 +157,8 @@ export async function seedPipeline(
     jiraCredentials?: Buffer;
     /** Feature 004: agent.status_running, for resume/onRunStarted transition assertions. */
     statusRunning?: string;
+    /** Merged into `workspaces.settings` (jsonb) — e.g. repositories for claude_cli repo resolution. */
+    workspaceSettings?: Record<string, unknown>;
   } = {},
 ): Promise<SeededPipeline> {
   const [workspace] = await db
@@ -166,15 +168,18 @@ export async function seedPipeline(
       jiraSiteUrl: opts.jiraSiteUrl ?? 'https://test.atlassian.net',
       jiraProjectKey: 'BRIG',
       jiraCredentials: opts.jiraCredentials ?? Buffer.from('placeholder'),
+      ...(opts.workspaceSettings ? { settings: opts.workspaceSettings } : {}),
     })
     .returning({ id: schema.workspaces.id });
 
   const [executor] = await db
     .insert(schema.executors)
     .values({
-      workspaceId: workspace.id,
+      // Executors are PLATFORM-scoped (migration 0003) with a GLOBAL unique
+      // name; seedPipeline runs many times per suite database, so each call
+      // mints a unique name (no spec asserts it — they assert type/config).
       type: opts.executorType ?? 'mock',
-      name: 'mock-exec',
+      name: `exec-${randomBytes(4).toString('hex')}`,
       concurrencyLimit: 2,
       config: opts.executorConfig ?? {},
     })

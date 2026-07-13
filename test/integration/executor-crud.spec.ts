@@ -8,26 +8,25 @@ import { BackendAppModule } from '../../apps/backend/src/app.module';
 import { startDatabase, startRedis, TEST_DASHBOARD_TOKEN, DbHarness, RedisHarness } from './harness';
 
 /**
- * T008 (US4, FR-020/FR-021): executors CRUD — GET list shape (secrets never
- * serialized), POST create 201, PUT update, name-conflict 409, invalid typed
- * config 422 (foreign field, unknown repository).
+ * Global executors CRUD (platform-scoped, 2026-07-13): GET list shape (secrets
+ * never serialized), POST create 201, PUT update, GLOBAL name-conflict 409,
+ * invalid typed config 422 (foreign field), repository rejected (it moved to
+ * agents.behavior). No workspace in the path.
  */
-describe('executors CRUD (T008)', () => {
+describe('executors CRUD (global /api/executors)', () => {
   let db: DbHarness;
   let redis: RedisHarness;
   let app: INestApplication;
   let url: string;
-  let workspaceId: string;
 
   const authHeaders = { 'content-type': 'application/json', authorization: `Bearer ${TEST_DASHBOARD_TOKEN}` };
-  const base = () => `${url}/api/workspaces/${workspaceId}/executors`;
+  const base = () => `${url}/api/executors`;
 
   const claudeBody = (overrides: Record<string, unknown> = {}) => ({
     type: 'claude_cli',
     name: 'extra',
     model: 'claude-opus-4-8',
     cli_path: 'claude',
-    repository: 'api',
     use_callback_channel: true,
     keep_failed_worktrees: false,
     max_turns: 20,
@@ -56,18 +55,9 @@ describe('executors CRUD (T008)', () => {
   });
 
   beforeEach(async () => {
-    await db.db.delete(schema.workspaces);
-    const [ws] = await db.db
-      .insert(schema.workspaces)
-      .values({
-        name: 'ws',
-        jiraSiteUrl: 'https://test.atlassian.net',
-        jiraProjectKey: 'BRIG',
-        jiraCredentials: Buffer.from('placeholder'),
-        settings: { repositories: [{ name: 'api', git_url: 'g', default_branch: 'main' }] },
-      })
-      .returning({ id: schema.workspaces.id });
-    workspaceId = ws.id;
+    // Platform-scoped: executors no longer cascade from workspaces.
+    await db.db.delete(schema.agents);
+    await db.db.delete(schema.executors);
   });
 
   it('POST creates a claude_cli executor (201) with snake_case config and no secrets in the response', async () => {
@@ -82,7 +72,7 @@ describe('executors CRUD (T008)', () => {
       type: 'claude_cli',
       name: 'extra',
       concurrency_limit: 1,
-      config: { model: 'claude-opus-4-8', cli_path: 'claude', repository: 'api', use_callback_channel: true, max_turns: 20 },
+      config: { model: 'claude-opus-4-8', cli_path: 'claude', use_callback_channel: true, max_turns: 20 },
     });
     expect(JSON.stringify(body)).not.toContain('s3cr3t');
     expect(body.secrets).toBeUndefined();
@@ -115,9 +105,14 @@ describe('executors CRUD (T008)', () => {
     expect(row.concurrencyLimit).toBe(5);
   });
 
-  it('POST with a duplicate name → 409 executor_name_taken', async () => {
+  it('POST with a duplicate name → 409 executor_name_taken (names are GLOBALLY unique)', async () => {
     await fetch(base(), { method: 'POST', headers: authHeaders, body: JSON.stringify(claudeBody({ name: 'dup' })) });
-    const res = await fetch(base(), { method: 'POST', headers: authHeaders, body: JSON.stringify(claudeBody({ name: 'dup' })) });
+    // Even a different TYPE cannot reuse the name — one flat platform namespace.
+    const res = await fetch(base(), {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({ type: 'mock', name: 'dup', concurrency_limit: 1 }),
+    });
     expect(res.status).toBe(409);
     expect((await res.json()).error.code).toBe('executor_name_taken');
   });
@@ -131,13 +126,19 @@ describe('executors CRUD (T008)', () => {
     expect(res.status).toBe(422);
   });
 
-  it('POST claude_cli with an unknown repository → 422', async () => {
+  it('POST claude_cli carrying repository → 422 (repository is an agent choice now)', async () => {
     const res = await fetch(base(), {
       method: 'POST',
       headers: authHeaders,
-      body: JSON.stringify(claudeBody({ name: 'badrepo', repository: 'nope' })),
+      body: JSON.stringify(claudeBody({ name: 'badrepo', repository: 'api' })),
     });
     expect(res.status).toBe(422);
-    expect((await res.json()).error.issues[0]).toMatchObject({ path: ['repository'], code: 'unknown_repository' });
+  });
+
+  it('old workspace-scoped route is gone → 404', async () => {
+    const res = await fetch(`${url}/api/workspaces/00000000-0000-0000-0000-000000000000/executors`, {
+      headers: authHeaders,
+    });
+    expect(res.status).toBe(404);
   });
 });
