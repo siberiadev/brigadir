@@ -17,7 +17,6 @@ describe('ExecutorConfigSchema (executor typed config union)', () => {
       type: 'claude_cli',
       model: 'claude-opus-4-8',
       cli_path: 'claude',
-      repository: 'api',
       use_callback_channel: true,
       keep_failed_worktrees: false,
       max_turns: 40,
@@ -26,18 +25,18 @@ describe('ExecutorConfigSchema (executor typed config union)', () => {
     expect(parsed.success).toBe(true);
   });
 
-  it('accepts a claude_cli config with an empty repository (seeded before a default repo exists)', () => {
+  it('rejects repository on claude_cli — it moved to agents.behavior (platform-scoped executors)', () => {
     const parsed = ExecutorConfigSchema.safeParse({
       type: 'claude_cli',
       model: 'claude-opus-4-8',
       cli_path: 'claude',
-      repository: '',
+      repository: 'api',
       use_callback_channel: true,
       keep_failed_worktrees: false,
       max_turns: 40,
       concurrency_limit: 2,
     });
-    expect(parsed.success).toBe(true);
+    expect(parsed.success).toBe(false);
   });
 
   it('rejects a foreign field (mock carrying max_turns)', () => {
@@ -54,7 +53,7 @@ describe('ExecutorConfigSchema (executor typed config union)', () => {
       type: 'claude_cli',
       model: 'claude-opus-4-8',
       concurrency_limit: 2,
-      // cli_path, repository, use_callback_channel, keep_failed_worktrees, max_turns missing
+      // cli_path, use_callback_channel, keep_failed_worktrees, max_turns missing
     });
     expect(parsed.success).toBe(false);
   });

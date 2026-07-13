@@ -1,21 +1,24 @@
-import { and, eq, sql } from 'drizzle-orm';
-import { type BrigadirDb, schema, getRepositories } from '@brigadir/database';
+import { eq, sql } from 'drizzle-orm';
+import { type BrigadirDb, schema } from '@brigadir/database';
 
 /**
- * Default executor seeding (feature 006, executors-api.md "Default seeding" +
- * "Backfill"). Every workspace gets exactly one `claude_cli` "claude" and one
- * `mock` "mock" so the agent-form picker is never empty (SC-006, FR-022/FR-023).
+ * Default executor backfill, PLATFORM-scoped (2026-07-13). Executors are
+ * global capacity now, so workspace creation seeds nothing; instead one
+ * type-scoped backfill at backend bootstrap guarantees the agent-form picker
+ * is never empty: if no executor of a type exists AT ALL, that type's default
+ * is inserted.
  *
  * The stored `config` jsonb uses the SAME camelCase keys the executor runtime
  * already consumes (config-seeder + resolveClaudeCliConfig) — the API layer
  * translates snake_case ⇄ camelCase at the controller boundary, so seeding here
- * writes directly in the storage shape.
+ * writes directly in the storage shape. No `repository` key: a run's repository
+ * resolves from `agents.behavior.repository`, else the run workspace's default.
  */
 
-/** Sensible defaults for the seeded claude_cli executor (executors-api.md). */
+/** Sensible defaults for the seeded claude_cli executor. */
 const CLAUDE_DEFAULTS = {
   // Cost-sane default (matches the live executor config); raise per-executor
-  // via the config form when a workspace needs a heavier model.
+  // via the config form when a heavier model is needed.
   model: 'claude-sonnet-5',
   cliPath: 'claude',
   useCallbackChannel: true,
@@ -31,13 +34,13 @@ export interface SeedExecutorRow {
   config: Record<string, unknown>;
 }
 
-/** The `claude` default; `repository` = the workspace default repo when present, else empty. */
-export function buildClaudeDefault(defaultRepository: string): SeedExecutorRow {
+/** The `claude` default. */
+export function buildClaudeDefault(): SeedExecutorRow {
   return {
     name: 'claude',
     type: 'claude_cli',
     concurrencyLimit: DEFAULT_CONCURRENCY,
-    config: { ...CLAUDE_DEFAULTS, repository: defaultRepository },
+    config: { ...CLAUDE_DEFAULTS },
   };
 }
 
@@ -47,47 +50,23 @@ export function buildMockDefault(): SeedExecutorRow {
 }
 
 /**
- * Seed BOTH named defaults for a freshly-created workspace (insert-if-absent by
- * the `executors_workspace_name` unique index — a re-run is safe). Used from
- * `WorkspacesController.create`.
- */
-export async function seedDefaultExecutors(
-  db: BrigadirDb,
-  workspaceId: string,
-  defaultRepository: string,
-): Promise<void> {
-  const rows = [buildClaudeDefault(defaultRepository), buildMockDefault()];
-  await db
-    .insert(schema.executors)
-    .values(rows.map((r) => ({ workspaceId, ...r })))
-    .onConflictDoNothing({
-      target: [schema.executors.workspaceId, schema.executors.name],
-    });
-}
-
-/**
- * TYPE-scoped backfill for existing workspaces (executors-api.md "Backfill"): a
- * default of a type is inserted ONLY when the workspace has no executor of that
- * type at all. A workspace with custom-named executors (e.g. `claude-cli` /
- * `mock-exec`) gains nothing — no duplicate defaults, no inflated per-type
- * concurrency sum. Existing rows are never modified.
+ * TYPE-scoped global backfill: a default of a type is inserted ONLY when the
+ * platform has no executor of that type at all. A DB with custom-named
+ * executors (e.g. `claude-cli` / `mock-exec`) gains nothing — no duplicate
+ * defaults, no inflated per-type concurrency sum. Existing rows are never
+ * modified.
  */
 export async function backfillDefaultExecutors(db: BrigadirDb): Promise<void> {
-  const workspaces = await db.select({ id: schema.workspaces.id }).from(schema.workspaces);
-  for (const ws of workspaces) {
-    const repos = await getRepositories(db, ws.id);
-    const defaultRepo = repos[0]?.name ?? '';
-    const wanted: SeedExecutorRow[] = [buildClaudeDefault(defaultRepo), buildMockDefault()];
-    for (const row of wanted) {
-      const [existing] = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(schema.executors)
-        .where(and(eq(schema.executors.workspaceId, ws.id), eq(schema.executors.type, row.type)));
-      if ((existing?.count ?? 0) > 0) continue; // type already present → skip (type-scoped)
-      await db
-        .insert(schema.executors)
-        .values({ workspaceId: ws.id, ...row })
-        .onConflictDoNothing({ target: [schema.executors.workspaceId, schema.executors.name] });
-    }
+  const wanted: SeedExecutorRow[] = [buildClaudeDefault(), buildMockDefault()];
+  for (const row of wanted) {
+    const [existing] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(schema.executors)
+      .where(eq(schema.executors.type, row.type));
+    if ((existing?.count ?? 0) > 0) continue; // type already present → skip (type-scoped)
+    await db
+      .insert(schema.executors)
+      .values(row)
+      .onConflictDoNothing({ target: [schema.executors.name] });
   }
 }

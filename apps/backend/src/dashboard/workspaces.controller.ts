@@ -26,7 +26,6 @@ import {
 import { DashboardTokenGuard } from './dashboard-token.guard';
 import { fieldError, statusesUnavailable, validationError } from './dashboard.errors';
 import { extractBoardId, deriveCredentialStatus } from './dashboard.helpers';
-import { seedDefaultExecutors } from './executor-seed';
 
 /**
  * Dashboard workspaces surface (feature 005, US1/US2/US4). All routes behind the
@@ -88,8 +87,9 @@ export class WorkspacesController {
       })
       .returning({ id: schema.workspaces.id });
 
-    // Feature 006 (FR-022): seed default executors so the picker is never empty.
-    await seedDefaultExecutors(this.db, row.id, req.repositories[0]?.name ?? '');
+    // Executors are PLATFORM-scoped (2026-07-13): workspace creation seeds
+    // nothing — the global type-scoped backfill at bootstrap keeps the
+    // agent-form picker non-empty.
 
     return this.toResponse(row.id);
   }
