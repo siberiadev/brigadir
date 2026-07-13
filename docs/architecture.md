@@ -139,19 +139,29 @@ CREATE TABLE workspaces (
   updated_at      timestamptz NOT NULL DEFAULT now()
 );
 
--- PLATFORM-scoped (миграция 0003, решение 2026-07-13): executor — физическая
--- мощность (CLI на хосте, подписка/API-ключ), одна на всю платформу; очередь
--- run.<type> и суммарная concurrency воркера и так были глобальными.
+-- ИМЕНОВАННЫЙ ПРОФИЛЬ РАННЕРА (2026-07-14; PLATFORM-scoped с миграции 0003,
+-- решение 2026-07-13): executor — рантайм-профиль на всю платформу: транспорт
+-- (type — реестр в коде, строки не создают поведения) + модель + лимиты +
+-- опциональные креды. Агент — чистая роль, привязан к профилю через
+-- agents.executor_id; модель агента НЕ принадлежит (legacy behavior.model
+-- игнорируется рантаймом безусловно). Очередь run.<type> и суммарная
+-- concurrency воркера и так были глобальными.
 CREATE TABLE executors (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   type            text NOT NULL,               -- claude_routines | claude_cli | anthropic_api | deepseek_api
-  name            text NOT NULL,
-  config          jsonb NOT NULL DEFAULT '{}', -- non-secret: model, effort, cli path, routine_id...
+  name            text NOT NULL,               -- алиас профиля («команда/владелец раннера»), глобально уникален
+  config          jsonb NOT NULL DEFAULT '{}', -- non-secret свойства ПРОФИЛЯ: model, max_turns, cli path, routine_id...
                                                -- (repository здесь БОЛЬШЕ НЕ живёт: берётся из agents.behavior.repository,
                                                --  иначе дефолтный репозиторий workspace прогона; leftover-ключ игнорируется)
-  secrets         bytea,                       -- encrypted: api key / routine fire token
-  concurrency_limit int NOT NULL DEFAULT 2,    -- -> queue.setGlobalConcurrency
-  enabled         boolean NOT NULL DEFAULT true,
+  secrets         bytea,                       -- опциональный API-ключ профиля: JSON {api_key}, запечатан тем же
+                                               -- AES-256-GCM конвертом, что jira_credentials (ключ BRIGADIR_CREDENTIALS_KEY).
+                                               -- WRITE-ONLY через API (в ответах только has_api_key); ключ задан →
+                                               -- рантайм инжектит ANTHROPIC_API_KEY в спаун (биллинг по ключу),
+                                               -- нет → подписка хоста
+  max_parallel_runs int NOT NULL DEFAULT 2,    -- кап ОДНОВРЕМЕННЫХ прогонов ЭТОГО профиля (processor-side gate
+                                               -- считает running-прогоны по executor_id); concurrency воркера типа =
+                                               -- СУММА по enabled-профилям (type capacity, boot + 15s re-apply)
+  enabled         boolean NOT NULL DEFAULT true, -- false → исключён из type capacity, его джобы держит gate
   UNIQUE (name)
 );
 

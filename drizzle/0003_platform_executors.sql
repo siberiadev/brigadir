@@ -13,4 +13,8 @@ FROM (
   FROM "executors"
 ) ranked
 WHERE ranked."id" = e."id" AND ranked.rn > 1;--> statement-breakpoint
-ALTER TABLE "executors" ADD CONSTRAINT "executors_name" UNIQUE("name");
+ALTER TABLE "executors" ADD CONSTRAINT "executors_name" UNIQUE("name");--> statement-breakpoint
+-- Named runner profiles (2026-07-14, amends this same unmerged migration): the
+-- knob caps SIMULTANEOUS RUNS OF ONE PROFILE (worker gate counts running runs
+-- per executor_id), not a queue concurrency — rename says what it means.
+ALTER TABLE "executors" RENAME COLUMN "concurrency_limit" TO "max_parallel_runs";

@@ -4,8 +4,10 @@
 reviewed line-by-line against the architecture §3 schema before it is considered
 done (Constitution governance / CLAUDE.md rule 5).
 
-**Reviewed**: 2026-07-13 · **Migration**: `drizzle/0003_platform_executors.sql` ·
-**Change**: platform-scoped executors (decision 2026-07-13, done outside spec-kit)
+**Reviewed**: 2026-07-13, re-reviewed 2026-07-14 (rename amended into the same
+UNMERGED migration) · **Migration**: `drizzle/0003_platform_executors.sql` ·
+**Change**: platform-scoped executors → named runner profiles (decisions
+2026-07-13 / 2026-07-14, done outside spec-kit)
 
 ## Generated SQL
 
@@ -21,10 +23,14 @@ FROM (
 ) ranked
 WHERE ranked."id" = e."id" AND ranked.rn > 1;
 ALTER TABLE "executors" ADD CONSTRAINT "executors_name" UNIQUE("name");
+ALTER TABLE "executors" RENAME COLUMN "concurrency_limit" TO "max_parallel_runs";
 ```
 
 The `UPDATE` is hand-added on top of drizzle-kit's generated DDL (kit cannot
-express data-dependent steps); everything else is generated.
+express data-dependent steps); the `RENAME COLUMN` is hand-added because
+non-interactive drizzle-kit would emit a lossy DROP+ADD — `meta/0003_snapshot.json`
+was hand-renamed to match and verified with a no-op `drizzle-kit generate`.
+Everything else is generated.
 
 ## Verdict: ✅ MATCHES §3 (executors is now platform-scoped)
 
@@ -36,6 +42,9 @@ express data-dependent steps); everything else is generated.
 | `agents.executor_id` FK | Untouched (stays `REFERENCES executors(id)`, no action). |
 | Data loss | None — no row is deleted; a leftover `repository` key inside `config` jsonb is intentionally kept and ignored by the runtime (no data migration). |
 | Other tables | Untouched. `0000`–`0002` files unmodified; only `0003_platform_executors.sql`, `meta/0003_snapshot.json`, and `meta/_journal.json` added/updated. |
+
+| `concurrency_limit` → `max_parallel_runs` | RENAME (values preserved) — the knob caps SIMULTANEOUS RUNS OF ONE PROFILE (worker-side gate counts `running` runs per `executor_id`), not a queue concurrency; the worker's queue concurrency is the SUM over enabled profiles (type capacity). §3 documents both roles. |
+| `secrets` usage | Column unchanged structurally; now documented in §3 as the profile's optional API key: JSON `{api_key}` sealed with the same AES-256-GCM envelope as `workspaces.jira_credentials` (write-only via API, `has_api_key` in responses). |
 
 ## Notes (non-deviations)
 

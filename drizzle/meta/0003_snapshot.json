@@ -130,8 +130,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "concurrency_limit": {
-          "name": "concurrency_limit",
+        "max_parallel_runs": {
+          "name": "max_parallel_runs",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
