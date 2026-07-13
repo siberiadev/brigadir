@@ -20,6 +20,7 @@ import {
   type ExecutorListResponse,
   type ExecutorResponse,
 } from '@brigadir/contracts';
+import { sealExecutorSecrets } from '@brigadir/executors';
 import { DashboardTokenGuard } from './dashboard-token.guard';
 import { conflictError, notFoundError, validationError } from './dashboard.errors';
 
@@ -31,15 +32,18 @@ interface DashboardHttpResponse {
 }
 
 /**
- * Executors surface, PLATFORM-scoped (2026-07-13): an executor is physical
- * capacity (the CLI on the host, a subscription/API key), so CRUD lives under
- * `/api/executors` — no workspace in the path. Behind the shared bearer guard.
- * Typed-config validation via the shared `executor.schema` union (foreign
- * field / missing required → 422). `concurrency_limit` maps to its column;
- * every other typed field to `config` jsonb (stored camelCase — the executor
- * runtime's shape). Secrets are NEVER serialized. Names are globally unique
- * (409 `executor_name_taken`); delete is guarded by a pre-count of referencing
- * agents across ALL workspaces → 409 `executor_in_use`.
+ * Executors surface — NAMED RUNNER PROFILES (2026-07-14; platform-scoped since
+ * 2026-07-13): a row is a runtime profile (transport type + model + limits +
+ * optional credentials), so CRUD lives under `/api/executors` — no workspace
+ * in the path. Behind the shared bearer guard. Typed-config validation via the
+ * shared `executor.schema` union (foreign field / missing required → 422).
+ * `max_parallel_runs` maps to its column; every other typed field to `config`
+ * jsonb (stored camelCase — the executor runtime's shape). The optional
+ * `api_key` is WRITE-ONLY: sealed (AES-256-GCM, the workspace-credentials
+ * envelope) into `executors.secrets`; responses carry `has_api_key` only.
+ * Names are globally unique (409 `executor_name_taken`); delete is guarded by
+ * a pre-count of referencing agents across ALL workspaces → 409
+ * `executor_in_use`.
  */
 @Controller('api/executors')
 @UseGuards(DashboardTokenGuard)
@@ -56,7 +60,7 @@ export class ExecutorsController {
   async create(@Body() body: unknown): Promise<ExecutorResponse> {
     const req = this.parse(body, ExecutorCreateRequestSchema);
 
-    const values = toInsertValues(req);
+    const values = { ...toInsertValues(req), secrets: sealApiKey(req) ?? null };
     let row: ExecutorRow;
     try {
       [row] = await this.db.insert(schema.executors).values(values).returning();
@@ -74,6 +78,11 @@ export class ExecutorsController {
     const req = this.parse(body, ExecutorUpdateRequestSchema);
 
     const values = toInsertValues(req);
+    // api_key tri-state (write-only): omitted → keep the stored blob;
+    // string → replace; explicit null → clear (host subscription).
+    const apiKey = req.type === 'claude_cli' ? req.api_key : undefined;
+    const secretsPatch =
+      apiKey === undefined ? {} : { secrets: apiKey === null ? null : sealExecutorSecrets({ api_key: apiKey }) };
     let rows: ExecutorRow[];
     try {
       rows = await this.db
@@ -82,7 +91,8 @@ export class ExecutorsController {
           type: values.type,
           name: values.name,
           config: values.config,
-          concurrencyLimit: values.concurrencyLimit,
+          maxParallelRuns: values.maxParallelRuns,
+          ...secretsPatch,
         })
         .where(eq(schema.executors.id, executorId))
         .returning();
@@ -152,12 +162,15 @@ function toInsertValues(req: ExecutorCreateRequest) {
   return {
     type: req.type,
     name: req.name,
-    concurrencyLimit: req.concurrency_limit,
+    maxParallelRuns: req.max_parallel_runs,
     config,
-    // NOTE: `secrets` is accepted in the request schema for forward-compat but
-    // the per-type configs carry no secret fields today; a plaintext store would
-    // violate secret-at-rest, so we intentionally do not persist it here.
   };
+}
+
+/** create-time api_key seal: string → sealed blob; absent/null → undefined (no key). */
+function sealApiKey(req: ExecutorCreateRequest): Buffer | undefined {
+  if (req.type !== 'claude_cli' || req.api_key == null) return undefined;
+  return sealExecutorSecrets({ api_key: req.api_key });
 }
 
 /** Storage row → API response (camelCase config → snake_case; secrets never serialized). */
@@ -178,7 +191,9 @@ function toExecutorResponse(row: ExecutorRow): ExecutorResponse {
     type: row.type as ExecutorResponse['type'],
     name: row.name,
     enabled: row.enabled,
-    concurrency_limit: row.concurrencyLimit,
+    max_parallel_runs: row.maxParallelRuns,
+    // The stored blob's PRESENCE is public; its content never is (write-only).
+    has_api_key: row.secrets != null,
     config,
   };
 }

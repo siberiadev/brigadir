@@ -30,7 +30,7 @@ const DEFAULT_CONCURRENCY = 2;
 export interface SeedExecutorRow {
   name: string;
   type: 'mock' | 'claude_cli';
-  concurrencyLimit: number;
+  maxParallelRuns: number;
   config: Record<string, unknown>;
 }
 
@@ -39,14 +39,14 @@ export function buildClaudeDefault(): SeedExecutorRow {
   return {
     name: 'claude',
     type: 'claude_cli',
-    concurrencyLimit: DEFAULT_CONCURRENCY,
+    maxParallelRuns: DEFAULT_CONCURRENCY,
     config: { ...CLAUDE_DEFAULTS },
   };
 }
 
 /** The `mock` default (concurrency only). */
 export function buildMockDefault(): SeedExecutorRow {
-  return { name: 'mock', type: 'mock', concurrencyLimit: DEFAULT_CONCURRENCY, config: {} };
+  return { name: 'mock', type: 'mock', maxParallelRuns: DEFAULT_CONCURRENCY, config: {} };
 }
 
 /**

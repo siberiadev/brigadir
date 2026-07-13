@@ -155,7 +155,9 @@ export const AgentWriteRequestSchema = z
     name: z.string().min(1),
     instruction: z.string().min(1),
     executor_id: z.string().min(1),
-    model: z.string().nullable().optional(),
+    // NO model field: the executor PROFILE's model is the single source of
+    // truth (named runner profiles, 2026-07-14). A legacy `behavior.model`
+    // still parses (behavior is passthrough) but the runtime ignores it.
     trigger_status: z.string().min(1),
     trigger_jql: z.string().nullable().optional(),
     status_running: z.string().nullable().optional(),

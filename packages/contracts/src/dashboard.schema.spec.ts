@@ -14,7 +14,8 @@ describe('dashboard schemas (T119)', () => {
       name: 'Implementer',
       instruction: 'Implement the ticket.',
       executor_id: 'ex-1',
-      model: 'claude-sonnet-5',
+      // NO model field — the executor profile's model is the single source of
+      // truth (named runner profiles, 2026-07-14).
       trigger_status: 'Ready for Dev',
       trigger_jql: null,
       status_running: 'In Progress',

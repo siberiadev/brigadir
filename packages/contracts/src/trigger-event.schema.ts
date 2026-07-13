@@ -16,6 +16,9 @@ export const MOCK_SCENARIOS = [
   'timeout',
   'rate_limited',
   'crash',
+  // Holds the run in `running` for `mock_delay_ms` (default 500) then succeeds —
+  // what the per-profile max_parallel_runs gate tests occupy slots with.
+  'delay',
 ] as const;
 
 export type MockScenario = (typeof MOCK_SCENARIOS)[number];
@@ -27,6 +30,7 @@ export const TriggerEventSchema = z
     source: z.enum(TRIGGER_SOURCES).default('manual'),
     mock_scenario: z.enum(MOCK_SCENARIOS).default('success'),
     rate_limit_ttl_ms: z.number().int().positive().optional(),
+    mock_delay_ms: z.number().int().positive().optional(),
   })
   .passthrough();
 

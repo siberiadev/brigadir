@@ -107,7 +107,7 @@ export class ConfigSeeder {
         }
         const [row] = await tx
           .insert(schema.executors)
-          .values({ name, type, concurrencyLimit: concurrency, config: rest })
+          .values({ name, type, maxParallelRuns: concurrency, config: rest })
           .returning({ id: schema.executors.id });
         executorIds[name] = row.id;
       }

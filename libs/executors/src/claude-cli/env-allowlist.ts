@@ -5,6 +5,11 @@
  * OPENAI_*, Jira tokens, `*_TOKEN`/`*_SECRET`/`*_KEY`, DB/Redis URLs, ...)
  * simply cannot leak through, by construction of the allowlist rather than
  * by pattern-matching secrets out of a denylist.
+ *
+ * Named runner profiles (2026-07-14): a profile with a stored API key gets
+ * ANTHROPIC_API_KEY injected EXPLICITLY by the executor AFTER this allowlist
+ * pass (its own decrypted secret, billed by key) — the HOST's variable of the
+ * same name still never passes through here.
  */
 const ALLOWLIST_KEYS = [
   // Needed for `claude` to run at all and read ~/.claude subscription auth.

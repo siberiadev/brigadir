@@ -1,4 +1,5 @@
 export * from './executors.module';
+export * from './executor-secrets';
 export * from './agent-executor.interface';
 export * from './executor.registry';
 export * from './mock.executor';

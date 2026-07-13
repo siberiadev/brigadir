@@ -48,6 +48,11 @@ export class MockExecutor implements AgentExecutor {
         throw new Error('mock: simulated process crash');
       case 'rate_limited':
         return this.rateLimited(ctx.runId);
+      case 'delay':
+        // Holds the run in `running` for a controllable window, then succeeds —
+        // what the per-profile max_parallel_runs gate tests occupy slots with.
+        await new Promise((r) => setTimeout(r, triggerEvent.mock_delay_ms ?? 500));
+        return { exitStatus: 'completed', report: successReport() };
       default:
         return { exitStatus: 'completed', report: successReport() };
     }
