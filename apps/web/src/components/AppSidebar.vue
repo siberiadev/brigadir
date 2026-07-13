@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Component } from 'vue';
-import type { RouteLocationRaw } from 'vue-router';
+import { useRoute, type RouteLocationRaw } from 'vue-router';
 import { LayoutGrid, Inbox, LogOut } from 'lucide-vue-next';
 
 /**
@@ -19,12 +19,31 @@ type NavItem = {
   label: string;
   icon: Component;
   to: RouteLocationRaw;
+  isActive: (path: string) => boolean;
 };
 
 const navItems: NavItem[] = [
-  { key: 'workspaces', label: 'Workspaces', icon: LayoutGrid, to: '/' },
-  { key: 'human-queue', label: 'Human queue', icon: Inbox, to: '/human-queue' },
+  {
+    key: 'workspaces',
+    label: 'Workspaces',
+    icon: LayoutGrid,
+    to: '/',
+    // Root plus every nested workspace sub-route (agents/runs/settings) — a path
+    // prefix test covers the 007 deep-links without enumerating child names (R3).
+    isActive: (path) => path === '/' || path.startsWith('/workspaces'),
+  },
+  {
+    key: 'human-queue',
+    label: 'Human queue',
+    icon: Inbox,
+    to: '/human-queue',
+    isActive: (path) => path === '/human-queue',
+  },
 ];
+
+// Active state derives from the live route path; unmatched routes (e.g.
+// `/runs/:id`) highlight nothing (FR-006/FR-007, data-model `isActive`).
+const route = useRoute();
 </script>
 
 <template>
@@ -37,8 +56,23 @@ const navItems: NavItem[] = [
         :content="item.label"
         placement="right"
       >
-        <RouterLink :to="item.to" class="nav-item" :data-test="`nav-${item.key}`">
-          <component :is="item.icon" class="nav-icon" />
+        <RouterLink
+          :to="item.to"
+          class="nav-item"
+          :class="{ 'is-active': item.isActive(route.path) }"
+          :data-test="`nav-${item.key}`"
+        >
+          <el-badge
+            v-if="item.key === 'human-queue'"
+            data-test="queue-badge"
+            :value="openCount"
+            :max="99"
+            :hidden="openCount === 0"
+            type="danger"
+          >
+            <component :is="item.icon" class="nav-icon" />
+          </el-badge>
+          <component v-else :is="item.icon" class="nav-icon" />
         </RouterLink>
       </el-tooltip>
     </nav>

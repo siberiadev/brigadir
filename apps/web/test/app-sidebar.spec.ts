@@ -91,3 +91,70 @@ describe('AppSidebar — rendering + tooltips (US1)', () => {
     expect(contents).toContain('Sign out');
   });
 });
+
+describe('AppSidebar — active highlight (US2)', () => {
+  const active = (wrapper: ReturnType<typeof mountSidebar>, dt: string) =>
+    wrapper.find(`[data-test="${dt}"]`).classes().includes('is-active');
+
+  it.each(['/', '/workspaces/ws-1/agents', '/workspaces/ws-1/settings'])(
+    'marks Workspaces active (not Human queue) at %s (FR-006, deep sub-routes)',
+    async (path) => {
+      const { wrapper } = await mountAuthedApp(path);
+      expect(active(wrapper, 'nav-workspaces')).toBe(true);
+      expect(active(wrapper, 'nav-human-queue')).toBe(false);
+    },
+  );
+
+  it('marks Human queue active (not Workspaces) at /human-queue (FR-006)', async () => {
+    const { wrapper } = await mountAuthedApp('/human-queue');
+    expect(active(wrapper, 'nav-human-queue')).toBe(true);
+    expect(active(wrapper, 'nav-workspaces')).toBe(false);
+  });
+
+  it('marks NEITHER active on a run card /runs/:id (FR-007, no matching section)', async () => {
+    const { wrapper } = await mountAuthedApp('/runs/r-1');
+    expect(active(wrapper, 'nav-workspaces')).toBe(false);
+    expect(active(wrapper, 'nav-human-queue')).toBe(false);
+  });
+});
+
+describe('AppSidebar — open-count badge (US2)', () => {
+  const badge = (wrapper: ReturnType<typeof mountSidebar>) =>
+    wrapper.findComponent({ name: 'ElBadge' });
+
+  it('shows the value on the Human queue icon when openCount > 0 (FR-008)', () => {
+    const wrapper = mountSidebar(3);
+    const b = badge(wrapper);
+    expect(b.props('hidden')).toBe(false);
+    expect(b.props('value')).toBe(3);
+    expect(wrapper.find('[data-test="queue-badge"]').text()).toContain('3');
+  });
+
+  it('caps the display at 99+ for a large value (FR-010, > 99)', () => {
+    const wrapper = mountSidebar(250);
+    expect(badge(wrapper).props('max')).toBe(99);
+    expect(wrapper.find('[data-test="queue-badge"]').text()).toContain('99+');
+  });
+
+  it('renders NO visible badge at openCount === 0 (FR-009, not-yet-loaded → 0)', () => {
+    const wrapper = mountSidebar(0);
+    expect(badge(wrapper).props('hidden')).toBe(true);
+  });
+
+  it('carries the badge only on Human queue, never on Workspaces', () => {
+    const wrapper = mountSidebar(5);
+    expect(wrapper.findAllComponents({ name: 'ElBadge' }).length).toBe(1);
+    expect(wrapper.find('[data-test="nav-workspaces"]').findComponent({ name: 'ElBadge' }).exists()).toBe(
+      false,
+    );
+  });
+
+  it('updates the badge when the prop changes (FR-010, US2 scenario 5)', async () => {
+    const wrapper = mountSidebar(2);
+    expect(wrapper.find('[data-test="queue-badge"]').text()).toContain('2');
+    await wrapper.setProps({ openCount: 7 });
+    expect(wrapper.find('[data-test="queue-badge"]').text()).toContain('7');
+    await wrapper.setProps({ openCount: 0 });
+    expect(badge(wrapper).props('hidden')).toBe(true);
+  });
+});
