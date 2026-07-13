@@ -19,6 +19,7 @@ import {
 import { DashboardTokenGuard } from './dashboard-token.guard';
 import { fieldError, statusesUnavailable, validationError } from './dashboard.errors';
 import { extractBoardId, deriveCredentialStatus } from './dashboard.helpers';
+import { seedDefaultExecutors } from './executor-seed';
 
 /**
  * Dashboard workspaces surface (feature 005, US1/US2/US4). All routes behind the
@@ -79,6 +80,9 @@ export class WorkspacesController {
         settings: { repositories: req.repositories },
       })
       .returning({ id: schema.workspaces.id });
+
+    // Feature 006 (FR-022): seed default executors so the picker is never empty.
+    await seedDefaultExecutors(this.db, row.id, req.repositories[0]?.name ?? '');
 
     return this.toResponse(row.id);
   }

@@ -1,0 +1,94 @@
+import { Controller, Get, Inject, Query, UseGuards } from '@nestjs/common';
+import { desc, eq, inArray } from 'drizzle-orm';
+import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
+import {
+  type HumanQueueCountResponse,
+  type HumanQueueItem,
+  type HumanQueueKind,
+  type HumanQueueListResponse,
+  type HumanTaskClosedStatus,
+} from '@brigadir/contracts';
+import { DashboardTokenGuard } from './dashboard-token.guard';
+
+/**
+ * Dashboard human-queue surface (feature 006, US1). The queue is GLOBAL across
+ * workspaces (one list), though every task belongs to a workspace. Read-only
+ * projections behind the shared bearer guard; the resolve action stays in
+ * `libs/human-tasks` (feature 004). `snake_case` bodies.
+ */
+@Controller('api/human-tasks')
+@UseGuards(DashboardTokenGuard)
+export class HumanTasksController {
+  constructor(@Inject(DRIZZLE) private readonly db: BrigadirDb) {}
+
+  @Get()
+  async list(@Query('status') statusRaw?: string): Promise<HumanQueueListResponse> {
+    const closed = statusRaw === 'closed';
+
+    const base = this.db
+      .select({
+        id: schema.humanTasks.id,
+        kind: schema.humanTasks.kind,
+        title: schema.humanTasks.title,
+        details: schema.humanTasks.details,
+        blocking: schema.humanTasks.blocking,
+        runId: schema.humanTasks.runId,
+        createdAt: schema.humanTasks.createdAt,
+        status: schema.humanTasks.status,
+        resolution: schema.humanTasks.resolution,
+        resolvedBy: schema.humanTasks.resolvedBy,
+        resolvedAt: schema.humanTasks.resolvedAt,
+        ticketKey: schema.tickets.jiraKey,
+        siteUrl: schema.workspaces.jiraSiteUrl,
+        agentId: schema.agents.id,
+        agentName: schema.agents.name,
+      })
+      .from(schema.humanTasks)
+      .innerJoin(schema.tickets, eq(schema.humanTasks.ticketId, schema.tickets.id))
+      .innerJoin(schema.workspaces, eq(schema.humanTasks.workspaceId, schema.workspaces.id))
+      // agent is derived via the blocked run, when present.
+      .leftJoin(schema.runs, eq(schema.humanTasks.runId, schema.runs.id))
+      .leftJoin(schema.agents, eq(schema.runs.agentId, schema.agents.id));
+
+    const rows = closed
+      ? await base
+          .where(inArray(schema.humanTasks.status, ['resolved', 'dismissed']))
+          .orderBy(desc(schema.humanTasks.resolvedAt))
+      : await base
+          .where(eq(schema.humanTasks.status, 'open'))
+          // oldest-first: longest-waiting on top.
+          .orderBy(schema.humanTasks.createdAt);
+
+    return {
+      items: rows.map((r) => {
+        const item: HumanQueueItem = {
+          id: r.id,
+          kind: r.kind as HumanQueueKind,
+          title: r.title,
+          details: r.details ?? null,
+          blocking: r.blocking,
+          ticket: { key: r.ticketKey, jira_url: `${r.siteUrl.replace(/\/+$/, '')}/browse/${r.ticketKey}` },
+          agent: r.agentId && r.agentName ? { id: r.agentId, name: r.agentName } : null,
+          run_id: r.runId ?? null,
+          created_at: r.createdAt.toISOString(),
+        };
+        if (closed) {
+          item.status = r.status as HumanTaskClosedStatus;
+          item.resolution = r.resolution ?? null;
+          item.resolved_by = r.resolvedBy ?? null;
+          item.resolved_at = r.resolvedAt ? r.resolvedAt.toISOString() : null;
+        }
+        return item;
+      }),
+    };
+  }
+
+  @Get('count')
+  async count(): Promise<HumanQueueCountResponse> {
+    const rows = await this.db
+      .select({ id: schema.humanTasks.id })
+      .from(schema.humanTasks)
+      .where(eq(schema.humanTasks.status, 'open'));
+    return { open: rows.length };
+  }
+}

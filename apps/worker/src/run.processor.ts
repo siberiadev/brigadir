@@ -1,5 +1,5 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Inject, Logger, type OnApplicationBootstrap } from '@nestjs/common';
+import { Inject, Logger, type OnApplicationBootstrap, type OnModuleDestroy } from '@nestjs/common';
 import { Worker, type Job } from 'bullmq';
 import { eq } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
@@ -7,7 +7,7 @@ import { runQueueName, backoffStrategy } from '@brigadir/queues';
 import { RunsService, mapExitStatusToRunStatus } from '@brigadir/runs';
 import { ExecutorRegistry, type ExecutorResult, type RunContext } from '@brigadir/executors';
 import { PipelineService } from '@brigadir/pipeline';
-import { applyExecutorConcurrency } from './executor-concurrency';
+import { applyExecutorConcurrency, startConcurrencyReapply } from './executor-concurrency';
 
 interface LoadedRun {
   runId: string;
@@ -36,8 +36,9 @@ interface LoadedRun {
   maxStalledCount: 0,
   settings: { backoffStrategy },
 })
-export class RunProcessor extends WorkerHost implements OnApplicationBootstrap {
+export class RunProcessor extends WorkerHost implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = new Logger(RunProcessor.name);
+  private reapplyTimer?: NodeJS.Timeout;
 
   constructor(
     @Inject(DRIZZLE) private readonly db: BrigadirDb,
@@ -50,6 +51,13 @@ export class RunProcessor extends WorkerHost implements OnApplicationBootstrap {
 
   async onApplicationBootstrap(): Promise<void> {
     await applyExecutorConcurrency(this.db, this.worker, 'mock', this.logger);
+    // Live re-apply (FR-025): a concurrency_limit edit takes effect ≤ ~15 s
+    // with no restart. The DB is read on each tick (lazy resolution).
+    this.reapplyTimer = startConcurrencyReapply(this.db, this.worker, 'mock', this.logger);
+  }
+
+  onModuleDestroy(): void {
+    if (this.reapplyTimer) clearInterval(this.reapplyTimer);
   }
 
   async process(job: Job<{ runId: string }>): Promise<void> {

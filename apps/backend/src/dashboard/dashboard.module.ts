@@ -2,6 +2,10 @@ import { Module } from '@nestjs/common';
 import { RunsModule } from '@brigadir/runs';
 import { WorkspacesController } from './workspaces.controller';
 import { AgentsController } from './agents.controller';
+import { ExecutorsController } from './executors.controller';
+import { RunsController } from './runs.controller';
+import { HumanTasksController } from './human-tasks.controller';
+import { ExecutorBackfillService } from './executor-backfill.service';
 import { dashboardTokenProvider } from './dashboard-token.provider';
 import { DashboardTokenGuard } from './dashboard-token.guard';
 
@@ -14,7 +18,13 @@ import { DashboardTokenGuard } from './dashboard-token.guard';
  */
 @Module({
   imports: [RunsModule],
-  controllers: [WorkspacesController, AgentsController],
-  providers: [dashboardTokenProvider, DashboardTokenGuard],
+  controllers: [
+    WorkspacesController,
+    AgentsController,
+    ExecutorsController,
+    RunsController,
+    HumanTasksController,
+  ],
+  providers: [dashboardTokenProvider, DashboardTokenGuard, ExecutorBackfillService],
 })
 export class DashboardModule {}

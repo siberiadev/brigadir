@@ -27,6 +27,16 @@ export function fieldError(
   return validationError(message, [{ path, code, message, value, level: 'error' }]);
 }
 
+/** 409 conflict with the shared `{ error: { code, message } }` envelope (feature 006). */
+export function conflictError(code: string, message: string): HttpException {
+  return new HttpException({ error: { code, message } }, HttpStatus.CONFLICT);
+}
+
+/** 404 not-found with the shared error envelope (feature 006). */
+export function notFoundError(code: string, message: string): HttpException {
+  return new HttpException({ error: { code, message } }, HttpStatus.NOT_FOUND);
+}
+
 /** 502 when the board status list can't be fetched (form blocks status editing). */
 export function statusesUnavailable(): HttpException {
   return new HttpException(

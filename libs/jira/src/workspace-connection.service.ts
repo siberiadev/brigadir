@@ -23,7 +23,15 @@ export class WorkspaceConnectionService {
     @Inject(DRIZZLE) private readonly db: BrigadirDb,
   ) {}
 
-  async introspectAndPersistBoardType(workspaceId: string): Promise<JiraBoardType> {
+  /**
+   * `jira` (feature 006, US5) is the per-workspace client resolved by the
+   * reconcile loop — introspection for workspace B must hit B's site/creds. It
+   * defaults to the global `JIRA_CLIENT` for the single-workspace/connect path.
+   */
+  async introspectAndPersistBoardType(
+    workspaceId: string,
+    jira: JiraClient = this.jira,
+  ): Promise<JiraBoardType> {
     const [ws] = await this.db
       .select({
         boardId: schema.workspaces.jiraBoardId,
@@ -39,7 +47,7 @@ export class WorkspaceConnectionService {
 
     let board: { type: JiraBoardType; projectKey: string };
     try {
-      board = await this.jira.getBoard(ws.boardId);
+      board = await jira.getBoard(ws.boardId);
     } catch (err) {
       if (err instanceof JiraHttpError && (err.status === 404 || err.status === 403)) {
         throw new JiraAuthError(

@@ -114,6 +114,10 @@ export const WorkspaceSettingsSchema = z
     scope_jql: z.string().min(1).optional(),
     // Ordered; first = the default repository agents inherit (feature 005).
     repositories: z.array(WorkspaceRepositorySchema).optional(),
+    // Workspace pause flag (feature 006, data-model additive item 2). ABSENT ⇒
+    // treated as enabled; the reconcile pass selects
+    // `settings->>'enabled' IS DISTINCT FROM 'false'`. No DDL — jsonb value only.
+    enabled: z.boolean().optional(),
     // iteration-1 seed leftovers (deprecated single-repo fields) tolerated:
     repo: z.string().optional(),
     default_branch: z.string().optional(),

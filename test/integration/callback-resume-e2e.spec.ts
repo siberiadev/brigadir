@@ -8,7 +8,7 @@ import { RunTriggerService } from '@brigadir/runs';
 import { WorkerAppModule } from '../../apps/worker/src/app.module';
 import { ClaudeCliRunProcessor } from '../../apps/worker/src/claude-cli-run.processor';
 import { BackendAppModule } from '../../apps/backend/src/app.module';
-import { startDatabase, startRedis, seedPipeline, DbHarness, RedisHarness } from './harness';
+import { startDatabase, startRedis, seedPipeline, TEST_DASHBOARD_TOKEN, DbHarness, RedisHarness } from './harness';
 import { mockJira, MockJira } from './mock-jira';
 import {
   setupClaudeCliTestEnv,
@@ -172,7 +172,8 @@ describe('callback blocking escalation → resume → completion (T108)', () => 
 
     const resolveRes = await fetch(`${backendUrl}/api/human-tasks/${openTasks[0].id}/resolve`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      // Feature 006: the resolve endpoint is now behind the dashboard bearer guard.
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${TEST_DASHBOARD_TOKEN}` },
       body: JSON.stringify({ action: 'resume', answer: 'Use API token auth.', resolved_by: 'op@team' }),
     });
     expect(resolveRes.status).toBe(200);

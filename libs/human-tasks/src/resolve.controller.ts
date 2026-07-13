@@ -7,12 +7,18 @@ import {
   Param,
   Post,
   UnprocessableEntityException,
+  UseGuards,
 } from '@nestjs/common';
 import { ResolveHumanTaskSchema } from '@brigadir/contracts';
+import { DashboardTokenGuard } from '@brigadir/app-config';
 import { ResumeService } from './resume.service';
 
-/** `POST /api/human-tasks/:id/resolve` (quickstart.md) — unguarded this iteration (Tasks UI out of scope). */
+/**
+ * `POST /api/human-tasks/:id/resolve` (quickstart.md). Feature 006 (FR-032/033):
+ * now behind the shared dashboard bearer guard — behavior unchanged, guard only.
+ */
 @Controller('api/human-tasks')
+@UseGuards(DashboardTokenGuard)
 export class ResolveController {
   constructor(private readonly resume: ResumeService) {}
 

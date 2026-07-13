@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
 import { eq } from 'drizzle-orm';
 import { schema } from '@brigadir/database';
-import { encodeJiraCredentials } from '@brigadir/jira';
+import { encodeJiraCredentials, JiraClientFactory, type JiraClient } from '@brigadir/jira';
 import { PipelineService } from '@brigadir/pipeline';
 import { ReconcileService, type WorkspaceContext } from '@brigadir/ingest';
 import type { JiraIssue, JiraIssueLink, StatusCategoryKey } from '@brigadir/contracts';
@@ -57,6 +57,7 @@ describe('dependency gate (T057 trigger-side, T066 reconcile-side)', () => {
   let workspaceId: string;
   let executorId: string;
   let ws: WorkspaceContext;
+  let jira: JiraClient;
   let counter = 0;
 
   beforeAll(async () => {
@@ -99,6 +100,8 @@ describe('dependency gate (T057 trigger-side, T066 reconcile-side)', () => {
     await worker.get(RunProcessor).worker.waitUntilReady();
     pipeline = worker.get(PipelineService, { strict: false });
     reconcile = worker.get(ReconcileService, { strict: false });
+    // Feature 006: reEvaluateDependencies now takes the per-workspace client.
+    jira = await worker.get(JiraClientFactory, { strict: false }).forWorkspace(workspaceId);
   }, 240_000);
 
   afterAll(async () => {
@@ -205,18 +208,18 @@ describe('dependency gate (T057 trigger-side, T066 reconcile-side)', () => {
       .values({ workspaceId, jiraKey: key, jiraId: '10000', summary: key, lastSeenStatus: status });
 
     // Pass 1: blocker still open → no run.
-    await reconcile.reEvaluateDependencies(ws);
+    await reconcile.reEvaluateDependencies(ws, jira);
     expect(await runCount(agentId)).toBe(0);
 
     // Blocker resolves (only the blocker's status changes).
     mock.moveBlocker(blockerKey, 'Done', 'done');
 
     // Pass 2: now clear → fires exactly once.
-    await reconcile.reEvaluateDependencies(ws);
+    await reconcile.reEvaluateDependencies(ws, jira);
     expect(await runCount(agentId)).toBe(1);
 
     // Pass 3: an active/succeeded run now exists → zero additional.
-    await reconcile.reEvaluateDependencies(ws);
+    await reconcile.reEvaluateDependencies(ws, jira);
     expect(await runCount(agentId)).toBe(1);
 
     // The run completes cleanly (blocked ticket now transitions on success).

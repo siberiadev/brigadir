@@ -53,5 +53,8 @@ export const runs = pgTable(
       .on(t.ticketId, t.agentId)
       .where(sql`status IN ('queued', 'running', 'awaiting_human')`),
     index('runs_ticket').on(t.ticketId, t.createdAt.desc()),
+    // Feature 006 (data-model additive item 1): supports the workspace-scoped,
+    // time-ordered runs table read + the cost period sum. Non-structural.
+    index('runs_workspace_created').on(t.workspaceId, t.createdAt.desc()),
   ],
 );

@@ -15,6 +15,13 @@
       "when": 1783761433147,
       "tag": "0001_jira_board",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783871274976,
+      "tag": "0002_runs_workspace_created",
+      "breakpoints": true
     }
   ]
 }

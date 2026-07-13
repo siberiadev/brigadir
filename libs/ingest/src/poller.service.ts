@@ -8,7 +8,7 @@ import {
   getReconcileState,
   setReconcileState,
 } from '@brigadir/database';
-import { JIRA_CLIENT, type JiraClient } from '@brigadir/jira';
+import { type JiraClient } from '@brigadir/jira';
 import { PipelineService } from '@brigadir/pipeline';
 import type { JiraBoardType, JiraIssue } from '@brigadir/contracts';
 import { POLL_FIELDS, buildScopeJql, sinceClause } from './scope-jql';
@@ -38,16 +38,20 @@ export class PollerService {
 
   constructor(
     @Inject(DRIZZLE) private readonly db: BrigadirDb,
-    @Inject(JIRA_CLIENT) private readonly jira: JiraClient,
     private readonly pipeline: PipelineService,
   ) {}
 
-  async pollAndDiff(ws: WorkspaceContext): Promise<void> {
+  /**
+   * `jira` (feature 006, US5) is the per-workspace client the reconcile loop
+   * resolves for THIS workspace — the poller no longer injects the global
+   * `JIRA_CLIENT` (which resolved `workspaces LIMIT 1`).
+   */
+  async pollAndDiff(ws: WorkspaceContext, jira: JiraClient): Promise<void> {
     const scopeJql = await getScopeJql(this.db, ws.id);
     const { highWaterMark, activeSprintId } = await getReconcileState(this.db, ws.id);
 
     if (ws.boardType === 'scrum') {
-      const currentSprintId = ws.boardId != null ? await this.jira.getActiveSprintId(ws.boardId) : null;
+      const currentSprintId = ws.boardId != null ? await jira.getActiveSprintId(ws.boardId) : null;
 
       if (currentSprintId == null) {
         // No active sprint → idle no-op (FR-030); remember the absence.
@@ -65,7 +69,7 @@ export class PollerService {
           sprintId: currentSprintId,
           scopeJql,
         });
-        const issues = await this.jira.searchUpdated(jql, [...POLL_FIELDS]);
+        const issues = await jira.searchUpdated(jql, [...POLL_FIELDS]);
         const maxUpdated = await this.processIssues(ws, issues);
         await setReconcileState(this.db, ws.id, {
           activeSprintId: currentSprintId,
@@ -84,7 +88,7 @@ export class PollerService {
         scopeJql,
         since: sinceClause(highWaterMark),
       });
-      const issues = await this.jira.searchUpdated(jql, [...POLL_FIELDS]);
+      const issues = await jira.searchUpdated(jql, [...POLL_FIELDS]);
       const maxUpdated = await this.processIssues(ws, issues);
       if (maxUpdated) await setReconcileState(this.db, ws.id, { highWaterMark: maxUpdated });
       return;
@@ -97,7 +101,7 @@ export class PollerService {
       scopeJql,
       since: sinceClause(highWaterMark),
     });
-    const issues = await this.jira.searchUpdated(jql, [...POLL_FIELDS]);
+    const issues = await jira.searchUpdated(jql, [...POLL_FIELDS]);
     const maxUpdated = await this.processIssues(ws, issues);
     if (maxUpdated) await setReconcileState(this.db, ws.id, { highWaterMark: maxUpdated });
   }

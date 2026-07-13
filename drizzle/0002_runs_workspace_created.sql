@@ -1,0 +1,1 @@
+CREATE INDEX "runs_workspace_created" ON "runs" USING btree ("workspace_id","created_at" DESC NULLS LAST);

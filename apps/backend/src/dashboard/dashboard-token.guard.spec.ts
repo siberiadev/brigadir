@@ -34,7 +34,12 @@ describe('DashboardTokenGuard (T132)', () => {
   });
 
   it('uses timingSafeEqual and guards length mismatch (source check)', () => {
-    const src = readFileSync(join(__dirname, 'dashboard-token.guard.ts'), 'utf8');
+    // Implementation moved to @brigadir/app-config (feature 006) so libs can
+    // share the guard; assert the constant-time source there.
+    const src = readFileSync(
+      join(process.cwd(), 'libs/app-config/src/dashboard-token.guard.ts'),
+      'utf8',
+    );
     expect(src.includes('timingSafeEqual')).toBe(true);
     expect(src.includes('provided.length !== expected.length')).toBe(true);
   });

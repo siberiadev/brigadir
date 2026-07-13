@@ -1,0 +1,170 @@
+import { z } from 'zod';
+
+/**
+ * Runs API contracts (feature 006, contracts/runs-api.md) — the runs table
+ * (US3), the run/ticket card (US2), the lite cost figure, and the guarded
+ * cancel + manual-trigger retry actions. Single typed source consumed by the
+ * backend `runs.controller` and the Vue composables. `snake_case` bodies, the
+ * shared path-qualified error envelope (dashboard.schema `ErrorBody`).
+ *
+ * Numeric money is serialized as a STRING (Postgres `numeric` round-trips as a
+ * string via Drizzle) or null when absent — never a float.
+ */
+
+/** Run status vocabulary (architecture §3, unchanged). */
+export const RunStatusSchema = z.enum([
+  'queued',
+  'running',
+  'awaiting_human',
+  'succeeded',
+  'failed',
+  'cancelled',
+  'timed_out',
+  'superseded',
+]);
+export type RunStatus = z.infer<typeof RunStatusSchema>;
+
+/** Check glyph states (run_checks.status → UI ✅/❌/⚠/⏭). */
+export const RunCheckStatusSchema = z.enum(['pass', 'fail', 'warn', 'skip']);
+export type RunCheckStatus = z.infer<typeof RunCheckStatusSchema>;
+
+// --- shared nested shapes ---
+
+export const RunAgentRefSchema = z.object({ id: z.string(), name: z.string() }).strict();
+
+export const RunTicketRefSchema = z
+  .object({
+    key: z.string(),
+    summary: z.string().nullable(),
+    jira_url: z.string(),
+  })
+  .strict();
+
+// --- GET /api/workspaces/:id/runs — runs table ---
+
+export const RunListItemSchema = z
+  .object({
+    run_id: z.string(),
+    agent: RunAgentRefSchema,
+    ticket: RunTicketRefSchema,
+    status: RunStatusSchema,
+    attempt: z.number().int(),
+    duration_ms: z.number().int().nullable(),
+    cost_usd: z.string().nullable(),
+    created_at: z.string(),
+  })
+  .strict();
+export type RunListItem = z.infer<typeof RunListItemSchema>;
+
+export const RunListResponseSchema = z
+  .object({
+    items: z.array(RunListItemSchema),
+    page: z.number().int(),
+    page_size: z.number().int(),
+    total: z.number().int(),
+  })
+  .strict();
+export type RunListResponse = z.infer<typeof RunListResponseSchema>;
+
+// --- GET /api/workspaces/:id/runs/cost — lite cost figure ---
+
+export const RunCostPeriodSchema = z.enum(['24h', '7d', '30d']);
+export type RunCostPeriod = z.infer<typeof RunCostPeriodSchema>;
+
+export const RunCostResponseSchema = z
+  .object({
+    period: RunCostPeriodSchema,
+    total_cost_usd: z.string(),
+    run_count: z.number().int(),
+  })
+  .strict();
+export type RunCostResponse = z.infer<typeof RunCostResponseSchema>;
+
+// --- GET /api/runs/:id — run/ticket card ---
+
+export const RunCardCheckSchema = z
+  .object({
+    position: z.number().int(),
+    name: z.string(),
+    status: RunCheckStatusSchema,
+    reason: z.string().nullable(),
+  })
+  .strict();
+export type RunCardCheck = z.infer<typeof RunCardCheckSchema>;
+
+export const RunCardEventSchema = z
+  .object({
+    id: z.string(),
+    type: z.string(),
+    payload: z.unknown(),
+    created_at: z.string(),
+  })
+  .strict();
+export type RunCardEvent = z.infer<typeof RunCardEventSchema>;
+
+export const RunCardHistoryItemSchema = z
+  .object({
+    run_id: z.string(),
+    agent: z.string(),
+    executor_type: z.string(),
+    attempt: z.number().int(),
+    duration_ms: z.number().int().nullable(),
+    cost_usd: z.string().nullable(),
+    outcome: z.string().nullable(),
+    status: RunStatusSchema,
+  })
+  .strict();
+export type RunCardHistoryItem = z.infer<typeof RunCardHistoryItemSchema>;
+
+export const RunCardRunSchema = z
+  .object({
+    run_id: z.string(),
+    status: RunStatusSchema,
+    attempt: z.number().int(),
+    executor_type: z.string(),
+    agent: RunAgentRefSchema,
+    duration_ms: z.number().int().nullable(),
+    cost_usd: z.string().nullable(),
+    usage: z.unknown().optional(),
+    outcome: z.string().nullable(),
+    external_ref: z.string().nullable(),
+    error: z.string().nullable(),
+    created_at: z.string(),
+    started_at: z.string().nullable(),
+    finished_at: z.string().nullable(),
+  })
+  .strict();
+export type RunCardRun = z.infer<typeof RunCardRunSchema>;
+
+export const RunCardResponseSchema = z
+  .object({
+    run: RunCardRunSchema,
+    ticket: RunTicketRefSchema,
+    checks: z.array(RunCardCheckSchema),
+    events: z.array(RunCardEventSchema),
+    history: z.array(RunCardHistoryItemSchema),
+  })
+  .strict();
+export type RunCardResponse = z.infer<typeof RunCardResponseSchema>;
+
+// --- POST /api/runs/:id/cancel ---
+
+export const RunCancelResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    cancelled: z.boolean(),
+    reason: z.literal('not_running').optional(),
+  })
+  .strict();
+export type RunCancelResponse = z.infer<typeof RunCancelResponseSchema>;
+
+// --- POST /api/runs/:id/retry ---
+
+export const RunRetryResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    run_id: z.string(),
+    deduplicated: z.boolean(),
+  })
+  .strict();
+export type RunRetryResponse = z.infer<typeof RunRetryResponseSchema>;

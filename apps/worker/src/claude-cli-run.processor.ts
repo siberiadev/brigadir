@@ -1,5 +1,5 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Inject, Logger, type OnApplicationBootstrap } from '@nestjs/common';
+import { Inject, Logger, type OnApplicationBootstrap, type OnModuleDestroy } from '@nestjs/common';
 import { Worker, type Job } from 'bullmq';
 import { desc, eq } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
@@ -9,7 +9,7 @@ import { RunsService, mapExitStatusToRunStatus } from '@brigadir/runs';
 import { ExecutorRegistry, type ExecutorResult, type RunContext } from '@brigadir/executors';
 import { PipelineService } from '@brigadir/pipeline';
 import { signRunToken } from '@brigadir/contracts';
-import { applyExecutorConcurrency } from './executor-concurrency';
+import { applyExecutorConcurrency, startConcurrencyReapply } from './executor-concurrency';
 
 interface LoadedRun {
   runId: string;
@@ -51,8 +51,12 @@ const DEFAULT_CALLBACK_BASE_URL = 'http://localhost:3000/api/callbacks';
   maxStalledCount: 0,
   settings: { backoffStrategy },
 })
-export class ClaudeCliRunProcessor extends WorkerHost implements OnApplicationBootstrap {
+export class ClaudeCliRunProcessor
+  extends WorkerHost
+  implements OnApplicationBootstrap, OnModuleDestroy
+{
   private readonly logger = new Logger(ClaudeCliRunProcessor.name);
+  private reapplyTimer?: NodeJS.Timeout;
 
   constructor(
     @Inject(DRIZZLE) private readonly db: BrigadirDb,
@@ -66,6 +70,13 @@ export class ClaudeCliRunProcessor extends WorkerHost implements OnApplicationBo
 
   async onApplicationBootstrap(): Promise<void> {
     await applyExecutorConcurrency(this.db, this.worker, 'claude_cli', this.logger);
+    // Live re-apply (FR-025): concurrency_limit edits take effect ≤ ~15 s with
+    // no restart; DB read on each tick (lazy resolution, never at composition).
+    this.reapplyTimer = startConcurrencyReapply(this.db, this.worker, 'claude_cli', this.logger);
+  }
+
+  onModuleDestroy(): void {
+    if (this.reapplyTimer) clearInterval(this.reapplyTimer);
   }
 
   async process(job: Job<{ runId: string }>): Promise<void> {
