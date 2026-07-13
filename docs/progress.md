@@ -156,8 +156,24 @@ executor, never a raw UUID). Component tests are msw + `@vue/test-utils` extendi
 
 ### Live pass
 
-`quickstart.md` Scenarios A–E (executors admin, run card, runs table, human
-queue, multi-workspace pause) run against a live `docker compose` stack at the
-iteration checkpoint — deferred here (no running stack in the frontend session);
-all static gates (`pnpm typecheck && pnpm lint && pnpm test`, plus the web
-package's `vue-tsc` typecheck and 36 msw component tests) are green.
+Checkpoint (2026-07-13, live dev stack): token gate → workspaces landing;
+Runs tab filters/cost header/empty state; executors admin lists the live
+workspace's custom-named executors (type-scoped backfill is a no-op — no
+duplicate defaults); the executor edit form round-trips typed config; **live
+concurrency re-apply proven on the running worker** (`concurrency_limit` 1→2
+via the UI → worker log `run.claude_cli concurrency: 2 (was 1)` within one
+15 s tick, no restart → reverted); agent-form executor picker defaults to the
+claude_cli executor by NAME (no UUIDs, never empty); human queue renders with
+its empty state; unauthenticated API calls → 401. Checkpoint fix landed the
+same day: PipelineService / HumanTaskService / ResumeService moved off the
+global LIMIT-1 Jira client onto per-workspace `forWorkspace` resolution (the
+write-path half of multi-workspace, missed by the 006 spec's US5 scope).
+
+**Deferred to iteration 9 step 0 (decision 2026-07-13)**: the write-path live
+scenarios — agent-via-UI + mock test-run with a real Jira transition/comment
+(gates T158/T070), the first live `claude_cli` run (T091), and the callback
+run request_human → queue → resume (T117) — plus journal gate entries
+T071/T092/T118/T159 and the T055 checkbox. They need a sacrificial board
+ticket and run at the start of the migration iteration, where live agent runs
+happen anyway. All static gates (`pnpm typecheck && pnpm lint && pnpm test`,
+the web package's `vue-tsc`, 38 msw component tests, 181 integration) green.

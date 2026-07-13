@@ -339,7 +339,11 @@ workspace pause → persisted via settings.
   Runs tab + settings routes; ensure all new routes are behind the existing auth flow (FR-032).
 - [X] T054 [P] Update `docs/progress.md` with the iteration-6 entry (surfaces shipped, the two-item
   additive schema note) and `docs/local-setup.md` if any env/setup note changed.
-- [ ] T055 Run `specs/006-runs-human-queue/quickstart.md` Scenarios A–E end-to-end against a live
+- [ ] T055 **DEFERRED → iteration 9 step 0 (plan-internal.md, decision 2026-07-13)** together with
+  legacy gates T158/T070/T091/T117: read surfaces + executors admin + live concurrency re-apply
+  already verified live at the 2026-07-13 checkpoint (see docs/progress.md iteration 6 "Live
+  pass"); the remaining write-path scenarios need a sacrificial Jira ticket and run at the start
+  of the migration iteration. Original task: run `specs/006-runs-human-queue/quickstart.md` Scenarios A–E end-to-end against a live
   stack; fix any gaps. Final `pnpm typecheck && pnpm lint && pnpm test` (+ `pnpm test:integration`).
 
 ---
