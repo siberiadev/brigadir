@@ -21,6 +21,12 @@ const ALLOWLIST_KEYS = [
   'GIT_AUTHOR_EMAIL',
   'GIT_COMMITTER_NAME',
   'GIT_COMMITTER_EMAIL',
+  // SSH agent socket (live incident 2026-07-14): repositories are cloned over
+  // SSH (private GitHub; https has no credential source in a headless spawn),
+  // and agents must push branches/PRs from their worktree. Trusted-team
+  // posture (plan-internal: no sandboxes) — the agent gets the host user's
+  // ssh-agent, same as any local script. Revisit if sandboxing ever lands.
+  'SSH_AUTH_SOCK',
   // Test-harness control channel for the substitutable fake `claude` binary
   // (research D8, test/fixtures/claude-cli/fake-claude.mjs). Harmless in
   // production: these names never exist in a real worker environment, and
