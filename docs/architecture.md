@@ -139,16 +139,20 @@ CREATE TABLE workspaces (
   updated_at      timestamptz NOT NULL DEFAULT now()
 );
 
+-- PLATFORM-scoped (миграция 0003, решение 2026-07-13): executor — физическая
+-- мощность (CLI на хосте, подписка/API-ключ), одна на всю платформу; очередь
+-- run.<type> и суммарная concurrency воркера и так были глобальными.
 CREATE TABLE executors (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  workspace_id    uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   type            text NOT NULL,               -- claude_routines | claude_cli | anthropic_api | deepseek_api
   name            text NOT NULL,
   config          jsonb NOT NULL DEFAULT '{}', -- non-secret: model, effort, cli path, routine_id...
+                                               -- (repository здесь БОЛЬШЕ НЕ живёт: берётся из agents.behavior.repository,
+                                               --  иначе дефолтный репозиторий workspace прогона; leftover-ключ игнорируется)
   secrets         bytea,                       -- encrypted: api key / routine fire token
   concurrency_limit int NOT NULL DEFAULT 2,    -- -> queue.setGlobalConcurrency
   enabled         boolean NOT NULL DEFAULT true,
-  UNIQUE (workspace_id, name)
+  UNIQUE (name)
 );
 
 CREATE TABLE agents (
