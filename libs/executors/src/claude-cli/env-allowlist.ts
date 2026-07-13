@@ -33,6 +33,7 @@ const ALLOWLIST_KEYS = [
   // listing them explicitly is what lets the security test (T085) prove the
   // allowlist floor holds even with the harness wired through the same path.
   'FAKE_CLAUDE_FIXTURE',
+  'FAKE_CLAUDE_STDIN_DUMP',
   'FAKE_CLAUDE_ENV_DUMP',
   'FAKE_CLAUDE_ARGV_DUMP',
   'FAKE_CLAUDE_SPAWN_CHILD',

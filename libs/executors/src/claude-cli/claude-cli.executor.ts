@@ -215,6 +215,19 @@ export class ClaudeCliExecutor implements AgentExecutor {
     const env = buildChildEnv(process.env);
     const group = spawnGroup(runtimeConfig.cliPath, argv, { cwd: worktree.worktreeDir, env });
 
+    // D7: `claude -p` REQUIRES a prompt on stdin (never argv — size/secrets).
+    // The full task (ticket + agent instruction + rules) already rides the
+    // --append-system-prompt-file wrapper; stdin carries the kick-off USER
+    // message. Missing this write was live incident #4 of 2026-07-14: the CLI
+    // waits 3s for stdin, then exits 1 ("Input must be provided..."), while
+    // the fake-claude harness never read stdin — green tests, dead runs.
+    group.child.stdin?.on('error', () => {
+      /* child may exit before/while we write (EPIPE) — the close handler owns the outcome */
+    });
+    group.child.stdin?.end(
+      `Work Jira ticket ${ctx.ticket.key} exactly as described in your system prompt. Begin now.\n`,
+    );
+
     const parser = new ClaudeStreamParser();
     const stderrTail = new StderrTail();
     let externalRef: string | undefined;

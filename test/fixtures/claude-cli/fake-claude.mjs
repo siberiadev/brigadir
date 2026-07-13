@@ -19,6 +19,7 @@
 //   FAKE_CLAUDE_STDERR_TEXT    - text to write to stderr before exiting
 //   FAKE_CLAUDE_EXIT_CODE      - process exit code (default 0)
 //   FAKE_CLAUDE_LINE_DELAY_MS  - delay between stdout lines (default 20)
+//   FAKE_CLAUDE_STDIN_DUMP     - path to write everything received on stdin
 //   FAKE_CLAUDE_CALLBACKS      - feature 004 (research D1/D8, quickstart.md
 //                                "the primary pattern"): JSON array of
 //                                { tool: 'progress'|'human'|'complete', body }
@@ -54,6 +55,7 @@ const lineDelayMs = process.env.FAKE_CLAUDE_LINE_DELAY_MS
   ? Number(process.env.FAKE_CLAUDE_LINE_DELAY_MS)
   : 20;
 const callbacksRaw = process.env.FAKE_CLAUDE_CALLBACKS;
+const stdinDumpPath = process.env.FAKE_CLAUDE_STDIN_DUMP;
 
 // Honor SIGTERM promptly (D2): print nothing further, exit. SIGKILL is the
 // OS default (no handler needed/possible).
@@ -71,6 +73,24 @@ if (envDumpPath) {
 }
 if (selfPidFile) {
   writeFileSync(selfPidFile, String(process.pid));
+}
+
+// Real `claude -p` REQUIRES a prompt on stdin (live incident #4, 2026-07-14:
+// the executor never wrote it and every live run died with "Input must be
+// provided..."). Mirror that contract: read stdin (bounded wait, mirroring the
+// CLI's own ~3s grace) and optionally dump it so tests can assert the kick-off
+// prompt actually arrives.
+const stdinText = await new Promise((resolve) => {
+  let buf = '';
+  const timer = setTimeout(() => resolve(buf), 3000);
+  process.stdin.on('data', (c) => (buf += c));
+  process.stdin.on('end', () => {
+    clearTimeout(timer);
+    resolve(buf);
+  });
+});
+if (stdinDumpPath) {
+  writeFileSync(stdinDumpPath, stdinText);
 }
 
 function sleep(ms) {
