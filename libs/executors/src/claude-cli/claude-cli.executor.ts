@@ -9,6 +9,7 @@ import { AGENTS_CONFIG } from '@brigadir/app-config';
 import { JIRA_CLIENT, type JiraClient } from '@brigadir/jira';
 import { ReportSchema, type AgentsConfig } from '@brigadir/contracts';
 import type { AgentExecutor, ExecutorResult, RunContext } from '../agent-executor.interface';
+import { openExecutorSecrets } from '../executor-secrets';
 import { resolveClaudeCliConfig, type ClaudeCliExecutorConfigInput } from './claude-cli.config';
 import { buildArgs } from './args';
 import { buildChildEnv } from './env-allowlist';
@@ -20,6 +21,16 @@ import { writeMcpConfig, defaultMcpConfigRoot, type WrittenMcpConfig } from './m
 import { buildFeatureContextSection } from './feature-context';
 
 const STDERR_TAIL_BYTES = 16 * 1024;
+
+/**
+ * Which repository NAME a run asks for (platform-scoped executors,
+ * 2026-07-13): the executor is platform capacity and carries no repository, so
+ * the choice is the AGENT's — `behavior.repository` when set, else '' (= the
+ * run workspace's default repository). Pure — unit-tested directly.
+ */
+export function resolveRepositoryName(behavior: { repository?: unknown }): string {
+  return typeof behavior.repository === 'string' ? behavior.repository : '';
+}
 
 /**
  * Repository source of truth (feature 005): workspace settings.repositories
@@ -84,12 +95,12 @@ function runFailed(result: ExecutorResult): boolean {
  * `result.result`-text fallback exists, by design).
  *
  * `RunContext` (frozen, FR-001) carries only the generic run shape; the
- * claude_cli-specific instance config (model/cliPath/repository/allowedTools/
+ * claude_cli-specific instance config (model/cliPath/allowedTools/
  * worktree roots/kill+cancel timing) has no home there, so this executor
  * looks it up itself via `ctx.runId` — the same DB-lookup pattern
- * `MockExecutor` already uses for its scenario. `AGENTS_CONFIG` resolves the
- * `repository` name to an actual git URL (workspace.repositories[], static
- * process config, not a secret).
+ * `MockExecutor` already uses for its scenario. The repository NAME comes from
+ * `agents.behavior.repository` (else the workspace default); workspace
+ * settings — or legacy `AGENTS_CONFIG` — resolve it to an actual git URL.
  */
 @Injectable()
 export class ClaudeCliExecutor implements AgentExecutor {
@@ -107,7 +118,9 @@ export class ClaudeCliExecutor implements AgentExecutor {
   ) {}
 
   async run(ctx: RunContext, signal: AbortSignal): Promise<ExecutorResult> {
-    const { runtimeConfig, repo, branchPrefix, workspaceId } = await this.loadRunConfig(ctx.runId);
+    const { runtimeConfig, repo, branchPrefix, workspaceId, apiKey } = await this.loadRunConfig(
+      ctx.runId,
+    );
 
     let worktree: { worktreeDir: string; branch: string; cacheDir: string };
     try {
@@ -161,7 +174,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
       return { exitStatus: 'crashed', diagnostics: err instanceof Error ? err.message : String(err) };
     }
 
-    const result = await this.runProcess(ctx, signal, worktree, runtimeConfig, mcpConfig);
+    const result = await this.runProcess(ctx, signal, worktree, runtimeConfig, mcpConfig, apiKey);
 
     try {
       await mcpConfig?.cleanup();
@@ -191,6 +204,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
     worktree: { worktreeDir: string; cacheDir: string },
     runtimeConfig: ReturnType<typeof resolveClaudeCliConfig>,
     mcpConfig: WrittenMcpConfig | undefined,
+    apiKey: string | undefined,
   ): Promise<ExecutorResult> {
     const argv = buildArgs({
       model: runtimeConfig.model,
@@ -203,7 +217,26 @@ export class ClaudeCliExecutor implements AgentExecutor {
       stopHookSettingsJson: mcpConfig?.settingsJson,
     });
     const env = buildChildEnv(process.env);
+    // Named runner profiles (2026-07-14): a profile with a stored API key runs
+    // billed by that key instead of the host's ~/.claude subscription. This is
+    // a DELIBERATE injection of the profile's own decrypted secret — the
+    // allowlist still guarantees the HOST's ANTHROPIC_API_KEY can never leak
+    // through (it is not an allowlisted key).
+    if (apiKey) env.ANTHROPIC_API_KEY = apiKey;
     const group = spawnGroup(runtimeConfig.cliPath, argv, { cwd: worktree.worktreeDir, env });
+
+    // D7: `claude -p` REQUIRES a prompt on stdin (never argv — size/secrets).
+    // The full task (ticket + agent instruction + rules) already rides the
+    // --append-system-prompt-file wrapper; stdin carries the kick-off USER
+    // message. Missing this write was live incident #4 of 2026-07-14: the CLI
+    // waits 3s for stdin, then exits 1 ("Input must be provided..."), while
+    // the fake-claude harness never read stdin — green tests, dead runs.
+    group.child.stdin?.on('error', () => {
+      /* child may exit before/while we write (EPIPE) — the close handler owns the outcome */
+    });
+    group.child.stdin?.end(
+      `Work Jira ticket ${ctx.ticket.key} exactly as described in your system prompt. Begin now.\n`,
+    );
 
     const parser = new ClaudeStreamParser();
     const stderrTail = new StderrTail();
@@ -358,10 +391,13 @@ export class ClaudeCliExecutor implements AgentExecutor {
     repo: WorktreeRepo;
     branchPrefix: string;
     workspaceId: string;
+    apiKey: string | undefined;
   }> {
     const [row] = await this.db
       .select({
         executorConfig: schema.executors.config,
+        executorName: schema.executors.name,
+        executorSecrets: schema.executors.secrets,
         behavior: schema.agents.behavior,
         workspaceId: schema.runs.workspaceId,
       })
@@ -376,16 +412,42 @@ export class ClaudeCliExecutor implements AgentExecutor {
     }
 
     const rawConfig = row.executorConfig as ClaudeCliExecutorConfigInput;
-    const behavior = (row.behavior ?? {}) as { allowed_tools?: string[]; branch_prefix?: string };
+    const behavior = (row.behavior ?? {}) as {
+      allowed_tools?: string[];
+      branch_prefix?: string;
+      repository?: string;
+    };
+    // Named runner profiles (2026-07-14): the PROFILE's model is the single
+    // source of truth — resolveClaudeCliConfig reads it from the executor
+    // config only, so a legacy `behavior.model` on the agent is ignored here
+    // unconditionally (no data migration; live agent "TEST" keeps working).
     const runtimeConfig = resolveClaudeCliConfig(rawConfig, behavior.allowed_tools ?? []);
 
-    const repo = await this.resolveRepository(row.workspaceId, runtimeConfig.repository);
+    // Platform-scoped executors (2026-07-13): the repository is the AGENT's
+    // choice (behavior.repository), else the run workspace's default repo.
+    const repo = await this.resolveRepository(row.workspaceId, resolveRepositoryName(behavior));
+
+    // Profile API key (write-only at the API; only the runtime opens it). A
+    // blob that fails to open is a hard error — running billed-by-subscription
+    // when the operator configured a key would be a silent misbill.
+    let apiKey: string | undefined;
+    if (row.executorSecrets != null) {
+      try {
+        apiKey = openExecutorSecrets(row.executorSecrets).api_key;
+      } catch (err) {
+        throw new Error(
+          `executor profile "${row.executorName}" has secrets that failed to decrypt (rotate BRIGADIR_CREDENTIALS_KEY back or re-enter the API key): ${String(err)}`,
+          { cause: err },
+        );
+      }
+    }
 
     return {
       runtimeConfig,
       repo,
       branchPrefix: behavior.branch_prefix ?? 'run',
       workspaceId: row.workspaceId,
+      apiKey,
     };
   }
 

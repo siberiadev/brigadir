@@ -9,7 +9,8 @@ import { AGENTS_CONFIG } from './agents-config.provider';
  * FR-016/FR-017): the DB is now authoritative. On boot the seeder imports the
  * single workspace, its executors, and its agents from agents.yaml ONLY for rows
  * that do not already exist — an existing row (workspace matched on `name`,
- * executors/agents on `UNIQUE(workspace_id, name)`) is **never** overwritten from
+ * executors on the GLOBAL `UNIQUE(name)` — platform-scoped since migration
+ * 0003 — agents on `UNIQUE(workspace_id, name)`) is **never** overwritten from
  * the yaml. UI edits are the sole post-import mutation channel.
  *
  * The yaml is optional (FR-019): `AGENTS_CONFIG` is `null` when the file is
@@ -86,15 +87,19 @@ export class ConfigSeeder {
       }
 
       // --- executors: insert-if-absent (existing rows kept; ids resolved) ---
+      // PLATFORM-scoped since migration 0003: matched on the GLOBAL name — a
+      // yaml executor whose name already exists anywhere is reused, not
+      // re-created. The yaml-era `repository` key is not persisted: a run's
+      // repository resolves from `agents.behavior.repository`, else the run
+      // workspace's default repository.
       const executorIds: Record<string, string> = {};
       for (const [name, exec] of Object.entries(executors)) {
         const { type, concurrency, ...rest } = exec;
+        delete (rest as Record<string, unknown>).repository;
         const found = await tx
           .select({ id: schema.executors.id })
           .from(schema.executors)
-          .where(
-            and(eq(schema.executors.workspaceId, workspaceId), eq(schema.executors.name, name)),
-          )
+          .where(eq(schema.executors.name, name))
           .limit(1);
         if (found.length > 0) {
           executorIds[name] = found[0].id;
@@ -102,7 +107,7 @@ export class ConfigSeeder {
         }
         const [row] = await tx
           .insert(schema.executors)
-          .values({ workspaceId, name, type, concurrencyLimit: concurrency, config: rest })
+          .values({ name, type, maxParallelRuns: concurrency, config: rest })
           .returning({ id: schema.executors.id });
         executorIds[name] = row.id;
       }

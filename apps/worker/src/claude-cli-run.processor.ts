@@ -10,6 +10,7 @@ import { ExecutorRegistry, type ExecutorResult, type RunContext } from '@brigadi
 import { PipelineService } from '@brigadir/pipeline';
 import { signRunToken } from '@brigadir/contracts';
 import { applyExecutorConcurrency, startConcurrencyReapply } from './executor-concurrency';
+import { checkExecutorGate } from './executor-gate';
 
 interface LoadedRun {
   runId: string;
@@ -44,7 +45,7 @@ const DEFAULT_CALLBACK_BASE_URL = 'http://localhost:3000/api/callbacks';
  * `running`" (Principle I), no new channel.
  */
 @Processor(runQueueName('claude_cli'), {
-  // Static fallback only — the real limit is executors.concurrency_limit,
+  // Static fallback only — the real limit is executors.max_parallel_runs,
   // applied at bootstrap (executor-concurrency.ts; decorator args cannot
   // read the DB, CLAUDE.md rule #1).
   concurrency: 2,
@@ -70,7 +71,7 @@ export class ClaudeCliRunProcessor
 
   async onApplicationBootstrap(): Promise<void> {
     await applyExecutorConcurrency(this.db, this.worker, 'claude_cli', this.logger);
-    // Live re-apply (FR-025): concurrency_limit edits take effect ≤ ~15 s with
+    // Live re-apply (FR-025): max_parallel_runs edits take effect ≤ ~15 s with
     // no restart; DB read on each tick (lazy resolution, never at composition).
     this.reapplyTimer = startConcurrencyReapply(this.db, this.worker, 'claude_cli', this.logger);
   }
@@ -88,6 +89,15 @@ export class ClaudeCliRunProcessor
     if (!loaded) {
       this.logger.warn(`run ${runId} not found — dropping job`);
       return;
+    }
+
+    // Per-profile max_parallel_runs gate (2026-07-14): saturated/disabled
+    // profile → back to waiting via the rate-limit path, no attempt burned.
+    const gate = await checkExecutorGate(this.db, runId);
+    if (!gate.admit) {
+      this.logger.log(`run ${runId} held by profile "${gate.profile}" (${gate.reason}) — retrying in ${gate.ttlMs}ms`);
+      await this.worker.rateLimit(gate.ttlMs);
+      throw Worker.RateLimitError();
     }
 
     // markRunning guards status ∈ {queued, running}: false means the run is

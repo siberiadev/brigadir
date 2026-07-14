@@ -32,18 +32,25 @@ const statusesUnavailable = computed(() => statusesQuery.isError.value);
 const statusById = computed(() => new Map(boardStatuses.value.map((s) => [s.name, s.id])));
 
 const agentsQuery = useAgents(props.workspaceId);
-// Executors now come from the real CRUD surface (feature 006, FR-023): the
-// picker shows NAMES + a type badge, never a raw UUID, and defaults to the
-// workspace's claude_cli executor.
-const executorsQuery = useExecutors(props.workspaceId);
+// Named runner profiles (2026-07-14): the picker lists the global executor
+// PROFILES as "<type> — <model> (<name>)" (mock: "mock (<name>)"), never a raw
+// UUID; defaults to a claude_cli profile. Disabled profiles stay visible but
+// are not selectable. The profile's model is the single source of truth — the
+// agent has NO model field.
+const executorsQuery = useExecutors();
 const executorOptions = computed(() => executorsQuery.data.value?.items ?? []);
+
+function executorLabel(ex: { type: string; name: string; config: Record<string, unknown> }): string {
+  if (ex.type === 'mock') return `mock (${ex.name})`;
+  const model = typeof ex.config.model === 'string' ? ex.config.model : '?';
+  return `${ex.type} — ${model} (${ex.name})`;
+}
 
 const a = props.agent;
 const form = reactive({
   name: a?.name ?? '',
   instruction: a?.instruction ?? '',
   executor_id: a?.executor_id ?? '',
-  model: (a?.behavior?.model as string | undefined) ?? '',
   trigger_status: a?.trigger_status ?? '',
   trigger_jql: a?.trigger_jql ?? '',
   status_running: a?.status_running ?? '',
@@ -52,17 +59,20 @@ const form = reactive({
   timeout_minutes: a?.timeout_minutes ?? 45,
   max_budget_usd: a?.max_budget_usd ?? null,
   max_attempts: a?.max_attempts ?? 2,
-  repository: '',
+  // The run's repository is the AGENT's choice (behavior.repository); '' = the
+  // workspace default repo, resolved at run time.
+  repository: (a?.behavior?.repository as string | undefined) ?? '',
   branch_prefix: (a?.behavior?.branch_prefix as string | undefined) ?? '',
   allowed_tools: (a?.behavior?.allowed_tools as string[] | undefined) ?? [],
   required_checks: (a?.behavior?.required_checks as string[] | undefined) ?? [],
   use_callback_channel: (a?.behavior?.use_callback_channel as boolean | undefined) ?? true,
 });
 
-// Default a fresh form to the workspace's claude_cli executor (else the first).
+// Default a fresh form to an ENABLED claude_cli profile (else the first enabled one).
 watch(executorOptions, (opts) => {
   if (!form.executor_id && opts.length) {
-    form.executor_id = (opts.find((e) => e.type === 'claude_cli') ?? opts[0]).id;
+    const enabled = opts.filter((e) => e.enabled);
+    form.executor_id = (enabled.find((e) => e.type === 'claude_cli') ?? enabled[0] ?? opts[0]).id;
   }
 });
 
@@ -128,7 +138,6 @@ function buildRequest(): AgentWriteRequest {
     name: form.name,
     instruction: form.instruction,
     executor_id: form.executor_id,
-    model: form.model || null,
     trigger_status: form.trigger_status,
     trigger_jql: form.trigger_jql || null,
     status_running: form.status_running || null,
@@ -138,13 +147,14 @@ function buildRequest(): AgentWriteRequest {
     timeout_minutes: form.timeout_minutes,
     max_budget_usd: form.max_budget_usd,
     max_attempts: form.max_attempts,
-    repository: form.repository || null,
     behavior: {
       branch_prefix: form.branch_prefix || null,
+      repository: form.repository || null,
       allowed_tools: form.allowed_tools,
       required_checks: form.required_checks,
       use_callback_channel: form.use_callback_channel,
-      ...(form.model ? { model: form.model } : {}),
+      // NO model key: the executor profile's model is the single source of
+      // truth; a legacy behavior.model on old rows is ignored by the runtime.
     },
   };
 }
@@ -211,28 +221,29 @@ defineExpose({ submit, saving });
       <el-input v-model="form.instruction" type="textarea" data-test="instruction-input" />
     </el-form-item>
 
-    <div class="two-col">
-      <el-form-item label="Executor">
-        <el-select
-          v-model="form.executor_id"
-          filterable
-          data-test="executor-select"
-          placeholder="Select executor"
+    <el-form-item label="Executor">
+      <el-select
+        v-model="form.executor_id"
+        filterable
+        data-test="executor-select"
+        placeholder="Select executor"
+      >
+        <!-- The option LABEL carries the full profile identity so the selected
+             value renders the same "<type> — <model> (<name>)" string. -->
+        <el-option
+          v-for="ex in executorOptions"
+          :key="ex.id"
+          :label="executorLabel(ex)"
+          :value="ex.id"
+          :disabled="!ex.enabled"
         >
-          <el-option v-for="ex in executorOptions" :key="ex.id" :label="ex.name" :value="ex.id">
-            <span class="executor-option">
-              <span>{{ ex.name }}</span>
-              <el-tag size="small" :type="ex.type === 'claude_cli' ? 'primary' : 'info'">
-                {{ ex.type }}
-              </el-tag>
-            </span>
-          </el-option>
-        </el-select>
-      </el-form-item>
-      <el-form-item label="Model">
-        <el-input v-model="form.model" data-test="model-input" placeholder="claude-…" />
-      </el-form-item>
-    </div>
+          <span class="executor-option">
+            <span>{{ executorLabel(ex) }}</span>
+            <el-tag v-if="!ex.enabled" size="small" type="info">disabled</el-tag>
+          </span>
+        </el-option>
+      </el-select>
+    </el-form-item>
 
     <el-form-item label="Trigger status" :error="errorFor('trigger_status')">
       <el-select
@@ -308,8 +319,9 @@ defineExpose({ submit, saving });
       </el-form-item>
     </div>
 
-    <el-form-item label="Repository (empty = workspace default)">
+    <el-form-item label="Repository">
       <el-select v-model="form.repository" clearable data-test="repository-select">
+        <el-option label="workspace default" value="" data-test="repository-default-option" />
         <el-option v-for="r in repositories" :key="r.name" :label="r.name" :value="r.name" />
       </el-select>
     </el-form-item>

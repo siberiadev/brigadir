@@ -141,7 +141,13 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
   const matchesJql = (i: StoredIssue, jql: string): boolean => {
     const upd = jql.match(/updated\s*>=\s*"([^"]+)"/i);
     if (upd) {
-      const bound = Date.parse(upd[1]);
+      // Mirror LIVE Jira (incident 2026-07-13): JQL datetime literals accept ONLY
+      // `yyyy-MM-dd HH:mm` (or bare `yyyy-MM-dd`). An ISO string with T/Z/millis is
+      // NOT a 400 — the live /search/jql answers HTTP 200 with ZERO issues. The mock
+      // must be exactly this unforgiving, otherwise a bad `since` format passes every
+      // test while silently killing incremental polling in production.
+      if (!/^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$/.test(upd[1])) return false;
+      const bound = Date.parse(upd[1].includes(' ') ? upd[1].replace(' ', 'T') + ':00Z' : upd[1]);
       if (!Number.isNaN(bound) && Date.parse(i.updated) < bound) return false;
     }
     const sprint = jql.match(/sprint\s+in\s*\(([^)]*)\)/i);

@@ -25,6 +25,17 @@ export class WorktreePrepareError extends Error {
   }
 }
 
+async function branchExists(cacheDir: string, branch: string): Promise<boolean> {
+  try {
+    await execFileAsync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], {
+      cwd: cacheDir,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function git(args: string[], cwd?: string): Promise<string> {
   try {
     const { stdout } = await execFileAsync('git', args, { cwd });
@@ -39,9 +50,11 @@ async function git(args: string[], cwd?: string): Promise<string> {
  * Prepare a per-run git worktree (research D3). Keeps one cached local clone
  * per repository (`repoCacheRoot/<repo.name>`) and adds a fresh worktree off
  * `origin/<repo.defaultBranch>` per run, on branch `<branchPrefix>/<ticketKey>`.
- * Fails fast and loud — never silently reuses or force-resets — if that
- * branch already exists (a prior crashed run's leftover), per the spec edge
- * case: running against a stale/half-finished tree is worse than failing.
+ * Leftover-branch policy (revised, live incident 2026-07-14): an existing
+ * branch with ZERO commits beyond the base ref is a worthless remnant of an
+ * attempt that died before doing work — it is deleted and recreated so
+ * retries are possible. An existing branch WITH commits is real prior work —
+ * fail fast and loud (never silently reuse or force-reset); a human decides.
  */
 export async function prepare(
   repo: WorktreeRepo,
@@ -75,12 +88,33 @@ export async function prepare(
       // to the existing branch rather than creating a fresh one.
       await git(['worktree', 'add', worktreeDir, branch], cacheDir);
     } else {
+      // Live incident 2026-07-14: a failed attempt leaves its branch behind
+      // (cleanup removes the worktree, never the branch), so EVERY retry of a
+      // failed run collided here and failure became permanent. Distinguish the
+      // two leftover cases instead of failing on both:
+      //  - branch exists with ZERO commits beyond the base ref → worthless
+      //    leftover of an attempt that died before doing work; delete and
+      //    recreate fresh (deterministic, nothing lost).
+      //  - branch exists WITH commits → real prior work; keep failing loud
+      //    (no silent reuse/force-reset — a human decides).
+      const exists = await branchExists(cacheDir, branch);
+      if (exists) {
+        const ahead = (await git(['rev-list', '--count', `${baseRef}..${branch}`], cacheDir)).trim();
+        if (ahead === '0') {
+          await git(['branch', '-D', branch], cacheDir);
+        } else {
+          throw new WorktreePrepareError(
+            `branch "${branch}" already exists with ${ahead} commit(s) of prior work — ` +
+              `refusing to discard or silently reuse it; delete or merge the branch, then retry`,
+          );
+        }
+      }
       await git(['worktree', 'add', '-b', branch, worktreeDir, baseRef], cacheDir);
     }
   } catch (err) {
+    if (err instanceof WorktreePrepareError) throw err;
     throw new WorktreePrepareError(
-      `cannot create worktree on branch "${branch}" — it likely already exists from a prior run ` +
-        `(no silent reuse/force-reset): ${(err as Error).message}`,
+      `cannot create worktree on branch "${branch}": ${(err as Error).message}`,
     );
   }
 

@@ -86,7 +86,7 @@ describe('dependency gate (T057 trigger-side, T066 reconcile-side)', () => {
 
     const [exec] = await db.db
       .insert(schema.executors)
-      .values({ workspaceId, type: 'mock', name: 'mock-exec', concurrencyLimit: 2 })
+      .values({ type: 'mock', name: 'mock-exec', maxParallelRuns: 2 })
       .returning({ id: schema.executors.id });
     executorId = exec.id;
 

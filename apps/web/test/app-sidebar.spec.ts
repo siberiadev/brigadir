@@ -16,6 +16,8 @@ import '../src/views/Runs.vue';
 import '../src/views/WorkspaceSettings.vue';
 import '../src/views/HumanQueue.vue';
 import '../src/views/RunCard.vue';
+import '../src/views/settings/PlatformSettings.vue';
+import '../src/views/settings/SettingsExecutors.vue';
 
 /**
  * Feature 009 — Icon Sidebar Navigation. These component tests drive the app's
@@ -115,6 +117,42 @@ describe('AppSidebar — active highlight (US2)', () => {
     const { wrapper } = await mountAuthedApp('/runs/r-1');
     expect(active(wrapper, 'nav-workspaces')).toBe(false);
     expect(active(wrapper, 'nav-human-queue')).toBe(false);
+  });
+});
+
+describe('AppSidebar — platform Settings gear (2026-07-13)', () => {
+  const active = (wrapper: ReturnType<typeof mountSidebar>, dt: string) =>
+    wrapper.find(`[data-test="${dt}"]`).classes().includes('is-active');
+
+  it('renders the gear above the bottom-pinned Sign out, wrapped in a right-placed "Settings" tooltip', async () => {
+    const { wrapper } = await mountAuthedApp('/');
+
+    const gear = wrapper.find('[data-test="nav-settings"]');
+    expect(gear.exists()).toBe(true);
+    // Both live in the bottom-pinned group, gear BEFORE sign out.
+    const bottom = wrapper.find('.sidebar-bottom');
+    const order = bottom.findAll('[data-test]').map((n) => n.attributes('data-test'));
+    expect(order).toEqual(['nav-settings', 'sidebar-sign-out']);
+
+    const tip = tooltips(wrapper).find((t) => t.content === 'Settings');
+    expect(tip).toBeTruthy();
+    expect(tip!.placement).toBe('right');
+  });
+
+  it.each(['/settings', '/settings/executors'])(
+    'marks the gear active for %s (active for /settings/*), and no other section',
+    async (path) => {
+      const { wrapper } = await mountAuthedApp(path);
+      await settle(() => active(wrapper as never, 'nav-settings'));
+      expect(active(wrapper as never, 'nav-settings')).toBe(true);
+      expect(active(wrapper as never, 'nav-workspaces')).toBe(false);
+      expect(active(wrapper as never, 'nav-human-queue')).toBe(false);
+    },
+  );
+
+  it('the gear is NOT active elsewhere (workspace settings tab is a different surface)', async () => {
+    const { wrapper } = await mountAuthedApp('/workspaces/ws-1/settings');
+    expect(active(wrapper as never, 'nav-settings')).toBe(false);
   });
 });
 

@@ -75,8 +75,10 @@ describe('WorkspaceSettings — read-only blocks (US1)', () => {
 
     expect(wrapper.find('[data-test="settings-jira-block"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="settings-config-block"]').exists()).toBe(true);
-    expect(wrapper.find('[data-test="settings-executors-block"]').exists()).toBe(true);
-    expect(wrapper.find('[data-test="executors-table"]').exists()).toBe(true);
+    // Executors admin moved to the PLATFORM Settings page (/settings/executors,
+    // 2026-07-13) — the workspace tab keeps Jira connection + Configuration only.
+    expect(wrapper.find('[data-test="settings-executors-block"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="executors-table"]').exists()).toBe(false);
 
     // The read-only view has NO editable input controls (SC-001) — inputs live
     // only inside the (closed) Edit modals.

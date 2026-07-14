@@ -139,6 +139,9 @@ export type StatusesResponse = z.infer<typeof StatusesResponseSchema>;
 export const AgentBehaviorRequestSchema = z
   .object({
     branch_prefix: z.string().nullable().optional(),
+    // Platform-scoped executors (2026-07-13): the run's repository is an AGENT
+    // choice, persisted here — empty/absent means the workspace default repo.
+    repository: z.string().nullable().optional(),
     allowed_tools: z.array(z.string()).optional(),
     required_checks: z.array(z.string()).optional(),
     use_callback_channel: z.boolean().optional(),
@@ -152,7 +155,9 @@ export const AgentWriteRequestSchema = z
     name: z.string().min(1),
     instruction: z.string().min(1),
     executor_id: z.string().min(1),
-    model: z.string().nullable().optional(),
+    // NO model field: the executor PROFILE's model is the single source of
+    // truth (named runner profiles, 2026-07-14). A legacy `behavior.model`
+    // still parses (behavior is passthrough) but the runtime ignores it.
     trigger_status: z.string().min(1),
     trigger_jql: z.string().nullable().optional(),
     status_running: z.string().nullable().optional(),
@@ -162,7 +167,6 @@ export const AgentWriteRequestSchema = z
     timeout_minutes: z.number().int().positive().default(45),
     max_budget_usd: z.number().positive().nullable().optional(),
     max_attempts: z.number().int().min(1).default(2),
-    repository: z.string().nullable().optional(),
     behavior: AgentBehaviorRequestSchema.default({}),
   })
   .strict();

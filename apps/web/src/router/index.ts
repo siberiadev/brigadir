@@ -57,6 +57,21 @@ export const routes: RouteRecordRaw[] = [
     props: true,
   },
   { path: '/human-queue', name: 'human-queue', component: () => import('../views/HumanQueue.vue') },
+  {
+    // Platform Settings (2026-07-13): a shell with its own left sub-navigation;
+    // panels are nested children so future sections (General, Users, Usage) are
+    // one child route each. Bare /settings lands on Executors.
+    path: '/settings',
+    component: () => import('../views/settings/PlatformSettings.vue'),
+    children: [
+      { path: '', name: 'platform-settings', redirect: '/settings/executors' },
+      {
+        path: 'executors',
+        name: 'platform-settings-executors',
+        component: () => import('../views/settings/SettingsExecutors.vue'),
+      },
+    ],
+  },
 ];
 
 export const router = createRouter({

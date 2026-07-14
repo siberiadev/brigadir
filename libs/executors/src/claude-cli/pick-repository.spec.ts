@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pickWorkspaceRepository } from './claude-cli.executor';
+import { pickWorkspaceRepository, resolveRepositoryName } from './claude-cli.executor';
 
 const dbRepos = [
   { name: 'product', git_url: 'git@github.com:acme/product.git', default_branch: 'main' },
@@ -35,5 +35,24 @@ describe('pickWorkspaceRepository (feature 005 checkpoint fix — DB settings wi
   it('no settings repos and no yaml → clear diagnostic naming the missing source', () => {
     expect(() => pickWorkspaceRepository([], [], 'product', false)).toThrow(/no agents.yaml is loaded/);
     expect(() => pickWorkspaceRepository([], [], '', true)).toThrow(/does not define it either/);
+  });
+});
+
+describe('resolveRepositoryName (platform-scoped executors, 2026-07-13 — repository is the AGENT choice)', () => {
+  it('behavior.repository wins when set', () => {
+    expect(resolveRepositoryName({ repository: 'infra' })).toBe('infra');
+    expect(pickWorkspaceRepository(dbRepos, [], resolveRepositoryName({ repository: 'infra' }), false).name).toBe(
+      'infra',
+    );
+  });
+
+  it('absent behavior.repository → the workspace default (first settings entry)', () => {
+    expect(resolveRepositoryName({})).toBe('');
+    expect(pickWorkspaceRepository(dbRepos, [], resolveRepositoryName({}), false).name).toBe('product');
+  });
+
+  it('non-string junk in behavior.repository degrades to the workspace default, never crashes', () => {
+    expect(resolveRepositoryName({ repository: 42 })).toBe('');
+    expect(resolveRepositoryName({ repository: null })).toBe('');
   });
 });

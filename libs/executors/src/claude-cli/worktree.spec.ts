@@ -48,10 +48,33 @@ describe('worktree prepare/cleanup (T080)', () => {
     expect(stdout.trim()).toBe('feat/BRIG-1');
   });
 
-  it('calling prepare again with a branch that already exists throws a diagnostic error', async () => {
+  it('calling prepare again while the branch is still checked out in a live worktree throws', async () => {
     await prepare(repo, 'run-1', 'BRIG-2', 'feat', worktreeRoot, repoCacheRoot);
     await expect(prepare(repo, 'run-2', 'BRIG-2', 'feat', worktreeRoot, repoCacheRoot)).rejects.toThrow(
       WorktreePrepareError,
+    );
+  });
+
+  it('an EMPTY leftover branch (failed attempt, no commits) is deleted and prepare succeeds (retry path, incident 2026-07-14)', async () => {
+    const first = await prepare(repo, 'run-1', 'BRIG-9', 'feat', worktreeRoot, repoCacheRoot);
+    await cleanup(first.cacheDir, first.worktreeDir); // removes worktree, leaves branch
+    const second = await prepare(repo, 'run-2', 'BRIG-9', 'feat', worktreeRoot, repoCacheRoot);
+    expect(second.branch).toBe('feat/BRIG-9');
+    expect(existsSync(join(second.worktreeDir, 'README.md'))).toBe(true);
+  });
+
+  it('a leftover branch WITH commits is refused loudly (real prior work is never discarded)', async () => {
+    const first = await prepare(repo, 'run-1', 'BRIG-10', 'feat', worktreeRoot, repoCacheRoot);
+    await writeFile(join(first.worktreeDir, 'work.txt'), 'real work\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: first.worktreeDir });
+    await execFileAsync(
+      'git',
+      ['-c', 'user.email=t@e.com', '-c', 'user.name=T', 'commit', '-m', 'agent work'],
+      { cwd: first.worktreeDir },
+    );
+    await cleanup(first.cacheDir, first.worktreeDir);
+    await expect(prepare(repo, 'run-2', 'BRIG-10', 'feat', worktreeRoot, repoCacheRoot)).rejects.toThrow(
+      /commit\(s\) of prior work/,
     );
   });
 

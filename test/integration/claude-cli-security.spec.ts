@@ -95,11 +95,13 @@ describe('claude_cli security — env/argv secret isolation (T085/US2)', () => {
       const dumpDir = await mkdtemp(join(tmpdir(), 'brigadir-security-dump-'));
       const envDumpPath = join(dumpDir, 'env.json');
       const argvDumpPath = join(dumpDir, 'argv.json');
+      const stdinDumpPath = join(dumpDir, 'stdin.txt');
 
       resetFakeClaudeEnv();
       process.env.FAKE_CLAUDE_FIXTURE = 'stream-success';
       process.env.FAKE_CLAUDE_ENV_DUMP = envDumpPath;
       process.env.FAKE_CLAUDE_ARGV_DUMP = argvDumpPath;
+      process.env.FAKE_CLAUDE_STDIN_DUMP = stdinDumpPath;
 
       const ticketKey = `BRIG-${nextTicket++}`;
       const p = await seedPipeline(db.db, {
@@ -124,6 +126,12 @@ describe('claude_cli security — env/argv secret isolation (T085/US2)', () => {
 
       const envDump = JSON.parse(readFileSync(envDumpPath, 'utf8')) as Record<string, string>;
       const argvDump = JSON.parse(readFileSync(argvDumpPath, 'utf8')) as string[];
+      // Live incident #4 (2026-07-14): `claude -p` requires a prompt on stdin
+      // and the executor never wrote one — every live run exited 1 while the
+      // harness (which ignored stdin) stayed green. The kick-off prompt must
+      // reach the child's stdin and name the ticket (D7: stdin, never argv).
+      const stdinDump = readFileSync(stdinDumpPath, 'utf8');
+      expect(stdinDump).toContain(ticketKey);
       return { envDump, argvDump };
     } finally {
       for (const [key, value] of Object.entries(savedEnv)) {
@@ -157,6 +165,9 @@ describe('claude_cli security — env/argv secret isolation (T085/US2)', () => {
       'TMPDIR',
       'GIT_AUTHOR_NAME',
       'GIT_AUTHOR_EMAIL',
+      // Live incident 2026-07-14: agents clone/push over SSH — the host
+      // user's agent socket is deliberately allowlisted (trusted-team).
+      'SSH_AUTH_SOCK',
       'GIT_COMMITTER_NAME',
       'GIT_COMMITTER_EMAIL',
       // Benign macOS-injected variable: observed empirically to appear in a

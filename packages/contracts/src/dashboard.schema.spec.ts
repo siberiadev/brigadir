@@ -14,7 +14,8 @@ describe('dashboard schemas (T119)', () => {
       name: 'Implementer',
       instruction: 'Implement the ticket.',
       executor_id: 'ex-1',
-      model: 'claude-sonnet-5',
+      // NO model field — the executor profile's model is the single source of
+      // truth (named runner profiles, 2026-07-14).
       trigger_status: 'Ready for Dev',
       trigger_jql: null,
       status_running: 'In Progress',
@@ -24,8 +25,8 @@ describe('dashboard schemas (T119)', () => {
       timeout_minutes: 45,
       max_budget_usd: 5,
       max_attempts: 2,
-      repository: null,
-      behavior: { allowed_tools: ['Read', 'Edit'], use_callback_channel: true },
+      // repository lives in behavior now (platform-scoped executors, 2026-07-13)
+      behavior: { allowed_tools: ['Read', 'Edit'], use_callback_channel: true, repository: 'api' },
     };
     const res = AgentWriteRequestSchema.safeParse(body);
     expect(res.success).toBe(true);

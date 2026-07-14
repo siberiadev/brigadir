@@ -22,6 +22,13 @@
       "when": 1783871274976,
       "tag": "0002_runs_workspace_created",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783947861292,
+      "tag": "0003_platform_executors",
+      "breakpoints": true
     }
   ]
 }

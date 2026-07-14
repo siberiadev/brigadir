@@ -1,24 +1,22 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
-import type { ExecutorResponse } from '@brigadir/contracts';
 import { useWorkspaces } from '../composables/useWorkspaces';
-import { useExecutors, useDeleteExecutor } from '../composables/useExecutors';
-import { ApiError } from '../api/client';
 import CredentialBadge from '../components/CredentialBadge.vue';
-import ExecutorForm from '../components/ExecutorForm/ExecutorForm.vue';
 import ConnectionForm from '../components/ConnectionForm/ConnectionForm.vue';
 import ConfigForm from '../components/ConfigForm/ConfigForm.vue';
 import FormDialog from '../components/FormDialog.vue';
 
 /**
  * Workspace Settings tab (feature 008). Renders the workspace configuration as
- * READ-ONLY `el-descriptions` blocks — Jira connection, configuration, and the
- * existing executors admin (kept verbatim, FR-009). Each editable block carries
- * an Edit button that opens the corresponding form body (ConnectionForm /
- * ConfigForm) inside the shared FormDialog; the modals SEED from the persisted
- * `WorkspaceResponse` (FR-014) and, on save, close + let vue-query refresh the
- * blocks in place (FR-007). Nullable values degrade to placeholders (FR-015).
+ * READ-ONLY `el-descriptions` blocks — Jira connection + Configuration. Each
+ * block carries an Edit button that opens the corresponding form body
+ * (ConnectionForm / ConfigForm) inside the shared FormDialog; the modals SEED
+ * from the persisted `WorkspaceResponse` (FR-014) and, on save, close + let
+ * vue-query refresh the blocks in place (FR-007). Nullable values degrade to
+ * placeholders (FR-015). The executors admin moved to the PLATFORM Settings
+ * page (/settings/executors, 2026-07-13) — executors are global capacity, not
+ * workspace config.
  */
 const props = defineProps<{ id: string }>();
 
@@ -50,36 +48,6 @@ function onConnectionSaved() {
 function onConfigSaved() {
   showConfig.value = false;
   ElMessage.success('Settings saved — effective on the next poller pass.');
-}
-
-// --- executors admin (kept verbatim from feature 006) ---
-const executorsQuery = useExecutors(props.id);
-const deleteExecutor = useDeleteExecutor(props.id);
-const showExecutorForm = ref(false);
-const editingExecutor = ref<ExecutorResponse | null>(null);
-const executorFormRef = ref<InstanceType<typeof ExecutorForm>>();
-
-function openCreateExecutor() {
-  editingExecutor.value = null;
-  showExecutorForm.value = true;
-}
-function openEditExecutor(ex: ExecutorResponse) {
-  editingExecutor.value = ex;
-  showExecutorForm.value = true;
-}
-function onExecutorSaved() {
-  showExecutorForm.value = false;
-  ElMessage.success('Executor saved.');
-}
-async function onDeleteExecutor(ex: ExecutorResponse) {
-  try {
-    await deleteExecutor.mutateAsync(ex.id);
-    ElMessage.success('Executor deleted.');
-  } catch (err) {
-    // 409 executor_in_use names the referencing agents — surface it verbatim.
-    const msg = err instanceof ApiError ? err.message : (err as Error)?.message ?? 'Delete failed.';
-    ElMessage.error(msg);
-  }
 }
 </script>
 
@@ -157,46 +125,6 @@ async function onDeleteExecutor(ex: ExecutorResponse) {
       </el-descriptions>
     </div>
 
-    <!-- Executors admin (unchanged, FR-009) -->
-    <div class="block" data-test="settings-executors-block">
-      <div class="block-head">
-        <h3>Executors</h3>
-        <el-button type="primary" data-test="new-executor" @click="openCreateExecutor">
-          New executor
-        </el-button>
-      </div>
-
-      <el-table
-        v-loading="executorsQuery.isLoading.value"
-        :data="executorsQuery.data.value?.items ?? []"
-        data-test="executors-table"
-      >
-        <el-table-column label="Name">
-          <template #default="{ row }">
-            <span data-test="executor-name-cell">{{ row.name }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="Type">
-          <template #default="{ row }">
-            <el-tag size="small" :type="row.type === 'claude_cli' ? 'primary' : 'info'">
-              {{ row.type }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="concurrency_limit" label="Concurrency" width="120" />
-        <el-table-column label="">
-          <template #default="{ row }">
-            <el-button link type="primary" :data-test="`executor-edit-${row.id}`" @click="openEditExecutor(row)">
-              Edit
-            </el-button>
-            <el-button link type="danger" :data-test="`executor-delete-${row.id}`" @click="onDeleteExecutor(row)">
-              Delete
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </div>
-
     <!-- Edit: Jira connection -->
     <FormDialog v-model="showConnection" title="Edit Jira connection">
       <ConnectionForm
@@ -239,30 +167,6 @@ async function onDeleteExecutor(ex: ExecutorResponse) {
           @click="configFormRef?.submit()"
         >
           Save settings
-        </el-button>
-      </template>
-    </FormDialog>
-
-    <!-- Executor create/edit -->
-    <FormDialog v-model="showExecutorForm" :title="editingExecutor ? 'Edit executor' : 'New executor'">
-      <ExecutorForm
-        v-if="showExecutorForm"
-        ref="executorFormRef"
-        :key="editingExecutor?.id ?? 'new'"
-        :workspace-id="id"
-        :executor="editingExecutor"
-        :repositories="workspace.repositories"
-        @saved="onExecutorSaved"
-      />
-      <template #footer>
-        <el-button data-test="executor-cancel" @click="showExecutorForm = false">Cancel</el-button>
-        <el-button
-          type="primary"
-          data-test="executor-save"
-          :loading="executorFormRef?.saving"
-          @click="executorFormRef?.submit()"
-        >
-          {{ editingExecutor ? 'Save' : 'Create executor' }}
         </el-button>
       </template>
     </FormDialog>

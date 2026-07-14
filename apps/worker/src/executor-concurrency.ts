@@ -1,17 +1,22 @@
 import type { Logger } from '@nestjs/common';
 import type { Worker } from 'bullmq';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { sql } from 'drizzle-orm';
 import { type BrigadirDb, schema } from '@brigadir/database';
 
 /**
- * Wire `executors.concurrency_limit` to the live BullMQ worker (checkpoint fix,
- * 2026-07-12): the @Processor decorator's `concurrency` is evaluated at
+ * TYPE CAPACITY: wire the sum of ENABLED profiles' `max_parallel_runs` to the
+ * live BullMQ worker (checkpoint fix 2026-07-12; named runner profiles
+ * 2026-07-14). The @Processor decorator's `concurrency` is evaluated at
  * composition time and CANNOT read the DB (CLAUDE.md rule #1), so it stays a
  * static fallback and the real limit is applied here at bootstrap, when the
- * worker instance exists. Several executors of one type (e.g. a subscription
+ * worker instance exists. Several profiles of one type (e.g. a subscription
  * runner + a team API-key runner) share the type's queue, so the worker's slot
- * count is their SUM. No rows → the decorator default stands.
+ * count is their SUM — the platform-wide ceiling for the type. The PER-PROFILE
+ * cap is enforced separately by the processor-side gate (executor-gate.ts),
+ * which counts running runs per executor_id before executing a job. A
+ * disabled profile contributes NO capacity (its jobs are held by the gate).
+ * No enabled rows → the decorator default stands.
  *
  * Called at bootstrap AND on a periodic timer (feature 006, FR-025): editing a
  * limit re-applies to the live worker within ~15 s with no restart. The DB is
@@ -25,9 +30,9 @@ export async function applyExecutorConcurrency(
   logger: Logger,
 ): Promise<void> {
   const [row] = await db
-    .select({ total: sql<number>`sum(${schema.executors.concurrencyLimit})::int` })
+    .select({ total: sql<number>`sum(${schema.executors.maxParallelRuns})::int` })
     .from(schema.executors)
-    .where(eq(schema.executors.type, executorType));
+    .where(and(eq(schema.executors.type, executorType), eq(schema.executors.enabled, true)));
 
   const total = row?.total;
   if (typeof total === 'number' && total > 0) {
@@ -35,7 +40,7 @@ export async function applyExecutorConcurrency(
     if (total === before) return; // unchanged → quiet no-op
     worker.concurrency = total;
     logger.log(
-      `run.${executorType} concurrency: ${total} (from executors.concurrency_limit; was ${before})`,
+      `run.${executorType} type capacity: ${total} (sum of enabled profiles' max_parallel_runs; was ${before})`,
     );
   }
 }

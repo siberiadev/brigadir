@@ -2,7 +2,6 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Test, type TestingModule } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
 import { join } from 'node:path';
-import { eq } from 'drizzle-orm';
 import { schema } from '@brigadir/database';
 import { BackendAppModule } from '../../apps/backend/src/app.module';
 import { startDatabase, startRedis, TEST_DASHBOARD_TOKEN, DbHarness, RedisHarness } from './harness';
@@ -11,11 +10,12 @@ import { mockJira, type MockJira } from './mock-jira';
 const GOOD = { email: 'bot@acme.com', token: 'good-token' };
 
 /**
- * T007 (US4, FR-022/SC-006): creating a workspace seeds EXACTLY one `claude_cli`
- * "claude" (repository = workspace default repo when present) + one `mock`
- * "mock". The picker is never empty for a fresh workspace.
+ * Platform-scoped executors (2026-07-13): creating a workspace seeds NO
+ * executors — the global type-scoped bootstrap backfill (see
+ * executor-backfill.spec) is the only default-seeding path, and it never
+ * duplicates a type that already exists.
  */
-describe('executor default seeding on workspace create (T007)', () => {
+describe('workspace creation does not seed executors', () => {
   let db: DbHarness;
   let redis: RedisHarness;
   let app: INestApplication;
@@ -51,56 +51,29 @@ describe('executor default seeding on workspace create (T007)', () => {
     jira.reset();
     jira.expectAuth(GOOD.email, GOOD.token);
     await db.db.delete(schema.workspaces);
+    await db.db.delete(schema.executors);
   });
 
-  const create = (body: unknown) =>
-    fetch(`${url}/api/workspaces`, { method: 'POST', headers: authHeaders, body: JSON.stringify(body) });
-
-  it('seeds exactly one claude_cli "claude" + one mock "mock"; claude.repository = default repo', async () => {
-    const res = await create({
-      name: 'Acme',
-      jira_site_url: jira.baseUrl,
-      jira_email: GOOD.email,
-      jira_api_token: GOOD.token,
-      expires_at: '2027-07-12T00:00:00.000Z',
-      board: '42',
-      repositories: [{ name: 'api', git_url: 'git@github.com:acme/api.git', default_branch: 'main' }],
+  it('POST /api/workspaces creates the workspace and inserts zero executor rows', async () => {
+    // The bootstrap backfill already ran at app init against the (then-empty)
+    // suite DB; the beforeEach wipe leaves the table empty, so any row after
+    // the create would have to come from the create path itself.
+    const res = await fetch(`${url}/api/workspaces`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({
+        name: 'Acme',
+        jira_site_url: jira.baseUrl,
+        jira_email: GOOD.email,
+        jira_api_token: GOOD.token,
+        expires_at: '2027-07-12T00:00:00.000Z',
+        board: '42',
+        repositories: [{ name: 'api', git_url: 'git@github.com:acme/api.git', default_branch: 'main' }],
+      }),
     });
     expect(res.status).toBe(201);
-    const ws = await res.json();
 
-    const rows = await db.db
-      .select()
-      .from(schema.executors)
-      .where(eq(schema.executors.workspaceId, ws.id));
-    expect(rows).toHaveLength(2);
-
-    const claude = rows.find((r) => r.type === 'claude_cli');
-    const mock = rows.find((r) => r.type === 'mock');
-    expect(claude?.name).toBe('claude');
-    expect(mock?.name).toBe('mock');
-    // repository = the workspace default repo (stored camelCase in config jsonb)
-    expect((claude?.config as { repository?: string }).repository).toBe('api');
-  });
-
-  it('a workspace with no repositories seeds claude with an empty repository', async () => {
-    const res = await create({
-      name: 'NoRepo',
-      jira_site_url: jira.baseUrl,
-      jira_email: GOOD.email,
-      jira_api_token: GOOD.token,
-      expires_at: '2027-07-12T00:00:00.000Z',
-      board: '42',
-      repositories: [],
-    });
-    expect(res.status).toBe(201);
-    const ws = await res.json();
-    const rows = await db.db
-      .select()
-      .from(schema.executors)
-      .where(eq(schema.executors.workspaceId, ws.id));
-    expect(rows).toHaveLength(2);
-    const claude = rows.find((r) => r.type === 'claude_cli');
-    expect((claude?.config as { repository?: string }).repository).toBe('');
+    const rows = await db.db.select().from(schema.executors);
+    expect(rows).toHaveLength(0);
   });
 });

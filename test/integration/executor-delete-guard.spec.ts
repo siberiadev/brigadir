@@ -8,16 +8,16 @@ import { BackendAppModule } from '../../apps/backend/src/app.module';
 import { startDatabase, startRedis, TEST_DASHBOARD_TOKEN, DbHarness, RedisHarness } from './harness';
 
 /**
- * T009 (US4, FR-024/SC-009): DELETE an unreferenced executor → 204; DELETE an
- * executor referenced by agents → 409 `executor_in_use` naming the agents, with
- * no orphaned references (the executor row stays).
+ * Delete guard for PLATFORM-scoped executors: DELETE an unreferenced executor →
+ * 204; DELETE an executor referenced by agents → 409 `executor_in_use` naming
+ * the agents ACROSS ALL WORKSPACES (an executor is global capacity), with no
+ * orphaned references (the executor row stays).
  */
-describe('executor delete guard (T009)', () => {
+describe('executor delete guard (cross-workspace)', () => {
   let db: DbHarness;
   let redis: RedisHarness;
   let app: INestApplication;
   let url: string;
-  let workspaceId: string;
 
   const authHeaders = { 'content-type': 'application/json', authorization: `Bearer ${TEST_DASHBOARD_TOKEN}` };
 
@@ -42,28 +42,32 @@ describe('executor delete guard (T009)', () => {
   });
 
   beforeEach(async () => {
-    await db.db.delete(schema.workspaces);
+    await db.db.delete(schema.workspaces); // cascades agents
+    await db.db.delete(schema.executors); // platform-scoped — no cascade from workspaces
+  });
+
+  const seedWorkspace = async (name: string) => {
     const [ws] = await db.db
       .insert(schema.workspaces)
       .values({
-        name: 'ws',
+        name,
         jiraSiteUrl: 'https://test.atlassian.net',
         jiraProjectKey: 'BRIG',
         jiraCredentials: Buffer.from('placeholder'),
       })
       .returning({ id: schema.workspaces.id });
-    workspaceId = ws.id;
-  });
+    return ws.id;
+  };
 
   const seedExecutor = async (name: string) => {
     const [row] = await db.db
       .insert(schema.executors)
-      .values({ workspaceId, type: 'mock', name, concurrencyLimit: 1, config: {} })
+      .values({ type: 'mock', name, maxParallelRuns: 1, config: {} })
       .returning({ id: schema.executors.id });
     return row.id;
   };
 
-  const seedAgent = async (executorId: string, name: string) => {
+  const seedAgent = async (workspaceId: string, executorId: string, name: string) => {
     await db.db.insert(schema.agents).values({
       workspaceId,
       executorId,
@@ -76,24 +80,20 @@ describe('executor delete guard (T009)', () => {
 
   it('DELETE an unreferenced executor → 204', async () => {
     const id = await seedExecutor('lonely');
-    const res = await fetch(`${url}/api/workspaces/${workspaceId}/executors/${id}`, {
-      method: 'DELETE',
-      headers: authHeaders,
-    });
+    const res = await fetch(`${url}/api/executors/${id}`, { method: 'DELETE', headers: authHeaders });
     expect(res.status).toBe(204);
     const rows = await db.db.select().from(schema.executors).where(eq(schema.executors.id, id));
     expect(rows).toHaveLength(0);
   });
 
-  it('DELETE a referenced executor → 409 executor_in_use naming the agents; the row survives', async () => {
+  it('DELETE an executor referenced by agents in DIFFERENT workspaces → 409 naming all of them; the row survives', async () => {
+    const wsA = await seedWorkspace('ws-a');
+    const wsB = await seedWorkspace('ws-b');
     const id = await seedExecutor('used');
-    await seedAgent(id, 'reviewer');
-    await seedAgent(id, 'migrator');
+    await seedAgent(wsA, id, 'reviewer');
+    await seedAgent(wsB, id, 'migrator');
 
-    const res = await fetch(`${url}/api/workspaces/${workspaceId}/executors/${id}`, {
-      method: 'DELETE',
-      headers: authHeaders,
-    });
+    const res = await fetch(`${url}/api/executors/${id}`, { method: 'DELETE', headers: authHeaders });
     expect(res.status).toBe(409);
     const body = await res.json();
     expect(body.error.code).toBe('executor_in_use');

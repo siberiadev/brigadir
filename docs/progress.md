@@ -169,7 +169,8 @@ same day: PipelineService / HumanTaskService / ResumeService moved off the
 global LIMIT-1 Jira client onto per-workspace `forWorkspace` resolution (the
 write-path half of multi-workspace, missed by the 006 spec's US5 scope).
 
-**Deferred to iteration 10 step 0 (decision 2026-07-13)**: the write-path live
+**Deferred to iteration 11 step 0 (decision 2026-07-13; renumbered from 10 when
+iteration 10 "Platform Settings + глобальные executors" was inserted)**: the write-path live
 scenarios — agent-via-UI + mock test-run with a real Jira transition/comment
 (gates T158/T070), the first live `claude_cli` run (T091), and the callback
 run request_human → queue → resume (T117) — plus journal gate entries
@@ -388,3 +389,111 @@ Frontend-only (FR-015): the diff is confined to `apps/web/src/App.vue`,
 authoritative gates green: `pnpm --filter @brigadir/web typecheck` (strict
 props/events), `pnpm --filter @brigadir/web test` (67 web component tests, the
 14 new alongside the existing 53), and root `pnpm lint`.
+
+## Iteration 10 — Platform Settings + Global Executors (done outside spec-kit, decision 2026-07-13)
+
+> Session 2 (2026-07-14) reshaped this same unmerged iteration into NAMED
+> RUNNER PROFILES — see the addendum at the end of this entry.
+
+### What shipped
+
+Executors moved from workspace scope to **platform scope**, retrospectively
+fixing the model: an executor is PHYSICAL capacity (the `claude` CLI on the
+host, a subscription or API key), and the system already treated it that way —
+one `run.<type>` BullMQ queue per type for the whole platform, and the worker's
+`applyExecutorConcurrency` summing `concurrency_limit` per type across all
+workspaces. The workspace scoping was inherited from the agents.yaml era and
+the config knob lied about its scope; this iteration makes the model honest.
+
+- **Schema (migration 0003 + `REVIEW-0003_platform_executors.md` + architecture
+  §3)**: `executors.workspace_id` (FK column) dropped; `executors_workspace_name`
+  replaced by a GLOBAL `UNIQUE(name)` (`executors_name`). Defensive dedupe:
+  colliding names are suffixed with an id fragment (row ids never change, so
+  `agents.executor_id` needs no rewrite; zero rows touched on the live DB).
+  Existing rows are kept; a leftover `repository` key in `config` is ignored.
+- **`repository` moved to the AGENT**: run-time resolution for `claude_cli` is
+  `agents.behavior.repository` (new OPTIONAL key in the existing behavior
+  jsonb — no agents DDL) → else the run workspace's default repository (first
+  `settings.repositories` entry; legacy yaml fallback kept). Stripped from the
+  executor typed config (`executor.schema.ts`), the ExecutorForm, and seeding.
+- **API**: workspace-scoped `/api/workspaces/:id/executors` replaced by global
+  `/api/executors` (GET/POST/PUT/DELETE, same bearer guard, same typed per-type
+  validation, global name-conflict 409, delete-guard 409 `executor_in_use`
+  counting referencing agents across ALL workspaces, secrets never serialized).
+  Workspace creation no longer seeds executors; one global TYPE-scoped backfill
+  at backend bootstrap inserts a type's default only when no executor of that
+  type exists at all (`claude` claude_cli / `mock` mock, both concurrency 2).
+- **UI**: new platform **Settings** surface — lucide `Settings` gear in the
+  70px rail (above Sign out, tooltip "Settings", active for `/settings/*`);
+  `/settings` → `/settings/executors`; the page has its own left sub-navigation
+  (single "Executors" item now, trivially extensible to General/Users/Usage).
+  The Executors section is REMOVED from the workspace Settings tab (Jira
+  connection + Configuration remain). AgentForm gained an optional Repository
+  select (workspace repositories + explicit "workspace default" empty option,
+  persisted into `behavior.repository`); its executor picker now lists the
+  global executors.
+
+### Tests
+
+Integration (testcontainers + mock-jira): global executors CRUD + name-conflict
++ cross-workspace delete guard + global type-scoped backfill + migration 0003
+(from scratch via the harness chain AND stepwise 0000–0002 with pre-seeded
+multi-workspace data, asserting kept rows/stable ids/dedup-suffix) + claude_cli
+repository resolution (behavior wins → workspace default → clear error when
+both missing). Web (msw): settings page + sub-nav, gear icon active state +
+tooltip, executor form without repository, agent form repository select +
+global executor picker; existing executor-scoped fixtures/specs updated for the
+new endpoint shapes.
+
+### Addendum (session 2, 2026-07-14) — named runner profiles
+
+The same unmerged branch/migration reshaped executors into **named runtime
+profiles**: transport type (code registry — rows cannot create behavior) +
+model + max_turns + max_parallel_runs + optional credentials + enabled.
+Agents are pure roles (instruction, statuses, behavior.repository) linked via
+the existing `agents.executor_id`; multiple profiles per type are legitimate
+("claude-sonnet", "claude-opus", "team-api-key").
+
+- **Schema (0003 amended in place — unmerged)**: `concurrency_limit` RENAMED to
+  `max_parallel_runs` (values preserved; snapshot hand-renamed, verified by a
+  no-op drizzle-kit generate). architecture §3 + REVIEW-0003 updated.
+- **Agent Model field REMOVED**: deleted from AgentForm and from
+  `AgentWriteRequest`; the profile's model is the single source of truth. The
+  runtime always read the model from the executor config only, so a legacy
+  `behavior.model` (live agent "TEST") is ignored unconditionally — pinned by
+  an argv-dump test; no data migration.
+- **Profile API key**: optional, write-only `api_key` on create/update, sealed
+  into the EXISTING `executors.secrets` bytea with the same AES-256-GCM
+  envelope as workspace Jira credentials (`secret-box.ts` extracted from the
+  credentials codec; key `BRIGADIR_CREDENTIALS_KEY`). Responses carry
+  `has_api_key` only; `api_key: null` clears; omitted keeps. Runtime: key set →
+  `ANTHROPIC_API_KEY` injected into the spawned claude env (billed by key);
+  unset → host subscription. The env allowlist still blocks the HOST's own
+  `ANTHROPIC_API_KEY`.
+- **Per-profile gate**: the run.<type> worker's own concurrency is the TYPE
+  CAPACITY (sum of ENABLED profiles' max_parallel_runs; boot + 15s re-apply);
+  before executing a job the processor counts `running` runs on the job's
+  profile (via the run's agent → executor_id) and at/over the limit — or for a
+  disabled profile — returns the job to waiting via the established rate-limit
+  path (`worker.rateLimit(short ttl)` + `Worker.RateLimitError`), consuming no
+  attempt. Documented tradeoffs: the rateLimit pause briefly affects the whole
+  type queue; the count-then-run check can transiently over-admit under a
+  simultaneous first pickup (bounded by type capacity).
+- **UI**: Settings→Executors table columns Type / Model (em-dash for mock) /
+  Name / Max parallel runs / API key set–— / Enabled; ExecutorForm field order
+  Type → Model → Name → rest, Name alias help tip, password api-key input with
+  configured/Replace/Clear states, "host subscription" placeholder; AgentForm
+  executor picker renders "<type> — <model> (<name>)" ("mock (<name>)"),
+  disabled profiles visible but unselectable, Model input gone.
+- **Carried live-incident fixes intact** (tests stay green): JQL since-format +
+  26h overlap, SSH_AUTH_SOCK allowlist, empty-leftover-branch worktree retry,
+  kick-off prompt on claude stdin (+ FAKE_CLAUDE_STDIN_DUMP assertions).
+
+Tests: rename migration fresh + stepwise on live-like data ("mock-exec",
+"claude-cli", "Claude Code CLI", agent TEST — rows/ids preserved); api_key
+write-only round-trip (has_api_key flips, plaintext never serialized, stored
+bytes sealed, clear); per-profile gate (limit-1 profile never exceeds 1 while
+a limit-2 profile executes; no attempt burned; disabled profile excluded from
+capacity and held, released on re-enable); ANTHROPIC_API_KEY in child env IFF
+key set; profile-model-beats-behavior.model. Web: table column order, picker
+format, Name tip, api-key form states, AgentForm without Model.

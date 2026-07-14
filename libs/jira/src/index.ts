@@ -8,6 +8,7 @@ export * from './transition-discovery';
 export * from './adf-composer';
 export * from './credentials.codec';
 export * from './credentials-key.provider';
+export * from './secret-box';
 export * from './credentials-migration';
 export * from './jira-client-factory';
 export * from './statuses.service';

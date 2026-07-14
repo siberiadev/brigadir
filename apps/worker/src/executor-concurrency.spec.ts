@@ -14,7 +14,7 @@ function fakeDb(total: number | null): BrigadirDb {
 
 const logger = { log: vi.fn() } as unknown as Logger;
 
-describe('applyExecutorConcurrency (executors.concurrency_limit → live worker)', () => {
+describe('applyExecutorConcurrency (executors.max_parallel_runs → live worker)', () => {
   it('applies the summed DB limit over the decorator default', async () => {
     const worker = { concurrency: 2 } as Worker;
     await applyExecutorConcurrency(fakeDb(1), worker, 'claude_cli', logger);

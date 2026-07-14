@@ -52,7 +52,8 @@ describe('agent CRUD + linter + test-run (T142/T143)', () => {
     // runs (and run_events) do NOT cascade from workspaces — clear them first.
     await db.db.delete(schema.runEvents);
     await db.db.delete(schema.runs);
-    await db.db.delete(schema.workspaces); // cascades executors/agents/tickets
+    await db.db.delete(schema.workspaces); // cascades agents/tickets
+    await db.db.delete(schema.executors); // platform-scoped — no longer cascades from workspaces
     const [ws] = await db.db
       .insert(schema.workspaces)
       .values({
@@ -66,7 +67,7 @@ describe('agent CRUD + linter + test-run (T142/T143)', () => {
     workspaceId = ws.id;
     const [exec] = await db.db
       .insert(schema.executors)
-      .values({ workspaceId, type: 'mock', name: 'mock-exec', concurrencyLimit: 2 })
+      .values({ type: 'mock', name: 'mock-exec', maxParallelRuns: 2 })
       .returning({ id: schema.executors.id });
     executorId = exec.id;
   });
