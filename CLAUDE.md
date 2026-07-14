@@ -17,6 +17,10 @@
 - `pnpm test:integration` — интеграционные (vitest + testcontainers, нужен Docker; общие контейнеры на прогон — см. `test/integration/global-setup.ts`)
 - `docker compose up --build` — полный стек (postgres, redis, backend, worker)
 
+## UI-конвенции
+
+- **Иконки — lucide (`lucide-vue-next`), и они анимируются на hover** (стиль lucide-animated.com, реш. 2026-07-14). Два яруса: (1) **универсальные эффекты целой иконки** — оборачивай в `<AnimatedIcon effect="spin|dip|pop|wiggle">` (`apps/web/src/components/AnimatedIcon.vue`); чтобы эффект срабатывал от наведения на родительскую кнопку/ссылку, повесь на неё класс `anim-trigger`. (2) **Пер-частные эффекты** (анимация отдельных path'ов глифа — плитки, стрелки) — ручной CSS рядом с местом использования; референсы — грид и logout в `AppSidebar.vue`. Для трансформов SVG-подэлементов обязательны `transform-box: fill-box` + `transform-origin: center`; `prefers-reduced-motion` уважать. Сверяй анатомию глифа с живым DOM — lucide меняет polyline/line на path между версиями.
+
 ## Выстраданные правила (нарушались — чинили)
 
 1. **Никакой инициализации ресурсов в аргументах `@Module()`-декоратора.** Всё внутри `imports: [X.register()]` выполняется при ИМПОРТЕ файла — до тестовых `beforeAll` и поздних env. Соединения/креды/URL — только через DI-фабрики (`forRootAsync`/`useFactory`). Никаких молчаливых фолбэков на `localhost` — лучше упасть с ошибкой «env не задан». Composition-time чтение допустимо только для статической структуры (имена очередей) и документируется на месте. (Итерация 1: eager Redis-коннект увёл все тесты в хостовый redis — флак 50%, см. progress.md.)

@@ -260,6 +260,10 @@ defineExpose({ submit, saving });
       </div>
     </el-form-item>
 
+    <el-form-item label="Trigger JQL (advanced)">
+      <el-input v-model="form.trigger_jql" data-test="trigger-jql-input" />
+    </el-form-item>
+
     <el-form-item label="Running status (recommended)" :error="errorFor('status_running')">
       <el-select
         v-model="form.status_running"
@@ -333,9 +337,6 @@ defineExpose({ submit, saving });
     </el-divider>
 
     <template v-if="showAdvanced">
-      <el-form-item label="Trigger JQL (advanced)">
-        <el-input v-model="form.trigger_jql" data-test="trigger-jql-input" />
-      </el-form-item>
       <el-form-item label="Branch prefix (empty = workspace default)">
         <el-input v-model="form.branch_prefix" data-test="branch-prefix-input" />
       </el-form-item>

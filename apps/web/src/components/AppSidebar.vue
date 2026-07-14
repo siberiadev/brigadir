@@ -2,6 +2,7 @@
 import type { Component } from 'vue';
 import { useRoute, type RouteLocationRaw } from 'vue-router';
 import { LayoutGrid, Inbox, LogOut, Settings } from 'lucide-vue-next';
+import AnimatedIcon from './AnimatedIcon.vue';
 
 /**
  * Icon rail (feature 009). PURE presentational: it takes the open-human-task
@@ -58,7 +59,7 @@ const route = useRoute();
       >
         <RouterLink
           :to="item.to"
-          class="nav-item"
+          class="nav-item anim-trigger"
           :class="{ 'is-active': item.isActive(route.path) }"
           :data-test="`nav-${item.key}`"
         >
@@ -70,8 +71,12 @@ const route = useRoute();
             :hidden="openCount === 0"
             type="danger"
           >
-            <component :is="item.icon" class="nav-icon" />
+            <AnimatedIcon effect="dip">
+              <component :is="item.icon" class="nav-icon" />
+            </AnimatedIcon>
           </el-badge>
+          <!-- Workspaces keeps a bespoke per-part animation (tiles pop in a
+               stagger) — see the CSS below and the AnimatedIcon two-tier note. -->
           <component v-else :is="item.icon" class="nav-icon" />
         </RouterLink>
       </el-tooltip>
@@ -81,11 +86,13 @@ const route = useRoute();
       <el-tooltip content="Settings" placement="right">
         <RouterLink
           to="/settings"
-          class="nav-item"
+          class="nav-item anim-trigger"
           :class="{ 'is-active': route.path.startsWith('/settings') }"
           data-test="nav-settings"
         >
-          <Settings class="nav-icon" />
+          <AnimatedIcon effect="spin">
+            <Settings class="nav-icon" />
+          </AnimatedIcon>
         </RouterLink>
       </el-tooltip>
       <el-tooltip content="Sign out" placement="right">
@@ -168,10 +175,11 @@ const route = useRoute();
 }
 
 // --- Animated icons (2026-07-14) ---------------------------------------------
-// Hover animations in the lucide-animated.com style, hand-rolled as pure CSS on
-// the existing lucide-vue-next SVGs: the Vue port of that library covers only
-// 2 of our 4 glyphs and would add a motion dependency for four icons. SVG
-// sub-element transforms require transform-box: fill-box + a center origin.
+// Two-tier convention (CLAUDE.md "UI-конвенции"): whole-icon effects ride the
+// AnimatedIcon wrapper (Inbox dip, Settings spin — the nav items carry
+// `anim-trigger`); PER-PART effects below are bespoke by nature — they depend
+// on each glyph's SVG anatomy. SVG sub-element transforms require
+// transform-box: fill-box + a center origin.
 .nav-item :deep(svg *) {
   transform-box: fill-box;
   transform-origin: center;
@@ -189,24 +197,6 @@ const route = useRoute();
 [data-test='nav-workspaces']:hover :deep(rect:nth-of-type(2)) { animation-delay: 0.07s; }
 [data-test='nav-workspaces']:hover :deep(rect:nth-of-type(3)) { animation-delay: 0.14s; }
 [data-test='nav-workspaces']:hover :deep(rect:nth-of-type(4)) { animation-delay: 0.21s; }
-
-// Human queue: the inbox dips down to "receive" an item.
-@keyframes inbox-dip {
-  0% { transform: translateY(0); }
-  45% { transform: translateY(2.5px); }
-  100% { transform: translateY(0); }
-}
-[data-test='nav-human-queue']:hover :deep(svg.nav-icon) {
-  animation: inbox-dip 0.4s ease;
-}
-
-// Settings: the gear turns while hovered and turns back on leave.
-[data-test='nav-settings'] :deep(svg.nav-icon) {
-  transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1);
-}
-[data-test='nav-settings']:hover :deep(svg.nav-icon) {
-  transform: rotate(120deg);
-}
 
 // Sign out: the arrow slides out of the door. Current lucide LogOut renders
 // three <path>s: arrowhead, shaft, door frame (in that order) — the first two

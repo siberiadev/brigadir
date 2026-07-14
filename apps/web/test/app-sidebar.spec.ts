@@ -129,10 +129,16 @@ describe('AppSidebar — platform Settings gear (2026-07-13)', () => {
 
     const gear = wrapper.find('[data-test="nav-settings"]');
     expect(gear.exists()).toBe(true);
-    // Both live in the bottom-pinned group, gear BEFORE sign out.
+    // Both live in the bottom-pinned group, gear BEFORE sign out. The gear's
+    // AnimatedIcon wrapper (spin effect, 2026-07-14) is filtered out — it is
+    // presentation inside the nav item, not a sibling control.
     const bottom = wrapper.find('.sidebar-bottom');
-    const order = bottom.findAll('[data-test]').map((n) => n.attributes('data-test'));
+    const order = bottom
+      .findAll('[data-test]')
+      .map((n) => n.attributes('data-test'))
+      .filter((t) => t !== 'animated-icon');
     expect(order).toEqual(['nav-settings', 'sidebar-sign-out']);
+    expect(wrapper.find('[data-test="nav-settings"] .animated-icon--spin').exists()).toBe(true);
 
     const tip = tooltips(wrapper).find((t) => t.content === 'Settings');
     expect(tip).toBeTruthy();

@@ -96,7 +96,6 @@ describe('AgentForm — statuses + linter mirror', () => {
     expect(wrapper.find('[data-test="trigger-status-error"]').text()).toContain('already triggers');
 
     // A distinct trigger_jql disambiguates → mirror clears, save is allowed.
-    await wrapper.find('[data-test="toggle-advanced"]').trigger('click');
     await wrapper.find('[data-test="trigger-jql-input"]').setValue('labels = special');
     await flush();
     expect(wrapper.find('[data-test="trigger-status-error"]').exists()).toBe(false);
