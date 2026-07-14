@@ -166,4 +166,65 @@ const route = useRoute();
   width: 22px;
   height: 22px;
 }
+
+// --- Animated icons (2026-07-14) ---------------------------------------------
+// Hover animations in the lucide-animated.com style, hand-rolled as pure CSS on
+// the existing lucide-vue-next SVGs: the Vue port of that library covers only
+// 2 of our 4 glyphs and would add a motion dependency for four icons. SVG
+// sub-element transforms require transform-box: fill-box + a center origin.
+.nav-item :deep(svg *) {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+// Workspaces: the four grid tiles pop in a quick stagger.
+@keyframes tile-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(0.55); }
+  100% { transform: scale(1); }
+}
+[data-test='nav-workspaces']:hover :deep(rect) {
+  animation: tile-pop 0.45s ease both;
+}
+[data-test='nav-workspaces']:hover :deep(rect:nth-of-type(2)) { animation-delay: 0.07s; }
+[data-test='nav-workspaces']:hover :deep(rect:nth-of-type(3)) { animation-delay: 0.14s; }
+[data-test='nav-workspaces']:hover :deep(rect:nth-of-type(4)) { animation-delay: 0.21s; }
+
+// Human queue: the inbox dips down to "receive" an item.
+@keyframes inbox-dip {
+  0% { transform: translateY(0); }
+  45% { transform: translateY(2.5px); }
+  100% { transform: translateY(0); }
+}
+[data-test='nav-human-queue']:hover :deep(svg.nav-icon) {
+  animation: inbox-dip 0.4s ease;
+}
+
+// Settings: the gear turns while hovered and turns back on leave.
+[data-test='nav-settings'] :deep(svg.nav-icon) {
+  transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+}
+[data-test='nav-settings']:hover :deep(svg.nav-icon) {
+  transform: rotate(120deg);
+}
+
+// Sign out: the arrow slides out of the door. Current lucide LogOut renders
+// three <path>s: arrowhead, shaft, door frame (in that order) — the first two
+// are the arrow (verified against the live DOM; no polyline/line anymore).
+[data-test='sidebar-sign-out'] :deep(path:nth-of-type(1)),
+[data-test='sidebar-sign-out'] :deep(path:nth-of-type(2)) {
+  transition: transform 0.25s ease;
+}
+[data-test='sidebar-sign-out']:hover :deep(path:nth-of-type(1)),
+[data-test='sidebar-sign-out']:hover :deep(path:nth-of-type(2)) {
+  transform: translateX(2.5px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-item :deep(svg),
+  .nav-item :deep(svg *) {
+    animation: none !important;
+    transition: none !important;
+  }
+}
 </style>
