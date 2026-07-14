@@ -18,10 +18,16 @@
 withDefaults(
   defineProps<{
     /**
-     * spin   — turns 120° while hovered, turns back on leave (gears, loaders)
-     * dip    — one-shot downward bounce (inboxes, downloads)
-     * pop    — one-shot scale pulse (default; fits anything)
-     * wiggle — one-shot ±8° shake (bells, alerts)
+     * All effects are ONE-SHOT on hover entry and end exactly where they
+     * started — nothing plays on unhover. (spin was transition-based at first
+     * and rotated BACK after the cursor left: a delayed, spooky reverse spin
+     * "at the end" — reported as a bug 2026-07-14. A full 360° one-shot ends
+     * identical to its start, so there is nothing to reverse.)
+     *
+     * spin   — one full 360° turn (gears, loaders, refresh)
+     * dip    — downward bounce (inboxes, downloads)
+     * pop    — scale pulse (default; fits anything)
+     * wiggle — ±8° shake (bells, alerts)
      */
     effect?: 'spin' | 'dip' | 'pop' | 'wiggle';
   }>(),
@@ -47,14 +53,18 @@ withDefaults(
   }
 }
 
-// spin is transition-based (reverses smoothly on unhover); the one-shot
-// effects are keyframe animations that restart on each hover entry.
-.animated-icon--spin :deep(svg) {
-  transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+// Every effect is a one-shot keyframe animation triggered on hover entry;
+// fill-mode stays `none` and every keyframe track ends at its 0% value, so an
+// animation that finishes leaves NO residual transform and unhover plays
+// nothing. Never use a transition-to-hover-state here: it animates BACK when
+// the hover ends — a delayed reverse motion long after the user moved on.
+@keyframes ai-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 .animated-icon--spin:hover :deep(svg),
 :global(.anim-trigger:hover) .animated-icon--spin :deep(svg) {
-  transform: rotate(120deg);
+  animation: ai-spin 0.6s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 @keyframes ai-dip {
