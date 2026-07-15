@@ -279,6 +279,28 @@ describe('ClaudeCliExecutor.run (T082)', () => {
     expect(result.exitStatus).toBe('cancelled');
   });
 
+  it('cancelled AFTER the terminal event was parsed still carries cost/usage on the result', async () => {
+    // The processor's cancel-poll kills the lingering process after a
+    // callback finalize/park — if the result event already streamed, its
+    // cost/usage are the run's only cost data and must ride the abort settle.
+    const group = makeGroup();
+    spawnGroupMock.mockReturnValue(group);
+    const executor = makeExecutor();
+    const controller = new AbortController();
+
+    const runPromise = executor.run(makeCtx(), controller.signal);
+    await waitForSpawn(spawnGroupMock);
+    for (const line of readFixtureLines('stream-success')) group.child.stdout.write(line + '\n');
+    await flush();
+    controller.abort('cancelled');
+
+    const result = await runPromise;
+    expect(result.exitStatus).toBe('cancelled');
+    expect(result.costUsd).toBe(0.0123);
+    expect(result.usage).toMatchObject({ input_tokens: 1200, output_tokens: 340 });
+    expect(result.externalRef).toBe('sess-success-1');
+  });
+
   it('a late stream-success arriving after cancellation does not revive/override the result', async () => {
     const group = makeGroup();
     spawnGroupMock.mockReturnValue(group);

@@ -21,6 +21,17 @@ export function relativeAge(iso: string, now: Date = new Date()): string {
   return `${Math.floor(h / 24)}d`;
 }
 
+/**
+ * 'HH:MM:SS' local wall-clock label for an ISO timestamp (timeline rows).
+ * Manual padding — `toLocaleTimeString` output varies across CI locales.
+ */
+export function formatClockTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
 /** A duration in ms as a compact "1m 5s" / "42s" label; null → em dash. */
 export function formatDuration(ms: number | null): string {
   if (ms == null) return '—';

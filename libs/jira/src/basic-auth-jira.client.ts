@@ -154,6 +154,16 @@ export class BasicAuthJiraClient implements JiraClient {
     return { epic, linked };
   }
 
+  async getIssue(issueKey: string): Promise<{ summary: string | null; description: ADFDoc | string | null }> {
+    const issue = await this.request<{
+      fields?: { summary?: string | null; description?: ADFDoc | string | null };
+    }>('GET', `/rest/api/3/issue/${issueKey}?fields=summary,description`);
+    return {
+      summary: issue.fields?.summary ?? null,
+      description: issue.fields?.description ?? null,
+    };
+  }
+
   async getMyself(): Promise<{ displayName: string }> {
     const me = await this.request<{ displayName?: string }>('GET', '/rest/api/3/myself');
     return { displayName: me.displayName ?? '' };

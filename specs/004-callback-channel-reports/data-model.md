@@ -20,7 +20,8 @@ Feature 004 uses columns already present:
 | `report` (jsonb) | `complete_task` report persisted here (via existing `RunsService.finalizeWithReport`). |
 | `outcome` | `success \| failure \| needs_human` from the report. |
 | `trigger_event` (jsonb) | Resume writes the human's answer + `source: 'human-resume'` here so the new attempt's wrapper can inject it (FR-018). |
-| `external_ref`, `worktree_path`, `cost_usd`, `usage`, `error`, `started_at`, `finished_at` | Unchanged from iteration 3. |
+| `external_ref`, `worktree_path`, `error`, `started_at`, `finished_at` | Unchanged from iteration 3. |
+| `cost_usd`, `usage` | **Revised post-004 (cost regression fix):** for callback-wired runs the `complete_task` finalize precedes the CLI process exit, so the terminal event's `total_cost_usd`/`usage` only become known when every status-guarded write is already a no-op. The processor now persists them via `RunsService.recordCostUsage` — a status-independent, best-effort (never-throws) UPDATE by run id issued after the executor settles, on every exit path. Overwrite semantics: the last CLI session that emitted a result event wins. |
 
 **Invariants preserved:** `runs_one_active` partial unique index `(ticket_id, agent_id) WHERE status
 IN ('queued','running','awaiting_human')` (idempotency level 3). Resume MUST supersede the old run

@@ -12,6 +12,9 @@ export default defineConfig({
       '@brigadir/contracts/agent-linter': fileURLToPath(
         new URL('../../packages/contracts/src/agent-linter.ts', import.meta.url),
       ),
+      '@brigadir/contracts/pagination': fileURLToPath(
+        new URL('../../packages/contracts/src/pagination.constants.ts', import.meta.url),
+      ),
     },
   },
   test: {

@@ -11,6 +11,7 @@ import type {
 // Runtime value: the SHARED linter, imported from its source module (ESM) so it
 // never drags the CJS barrel / node:crypto into the browser bundle.
 import { lintAgent } from '@brigadir/contracts/agent-linter';
+import { MAX_PAGE_SIZE } from '@brigadir/contracts/pagination';
 import { useStatuses } from '../../composables/useStatuses';
 import { useAgents, useCreateAgent, useUpdateAgent, useTestRun } from '../../composables/useAgents';
 import { useExecutors } from '../../composables/useExecutors';
@@ -31,13 +32,15 @@ const boardStatuses = computed<BoardStatus[]>(() => statusesQuery.data.value?.st
 const statusesUnavailable = computed(() => statusesQuery.isError.value);
 const statusById = computed(() => new Map(boardStatuses.value.map((s) => [s.name, s.id])));
 
-const agentsQuery = useAgents(props.workspaceId);
+// Потребители ВСЕГО списка (клиентский линтер + пикер) — не листают
+// (UI-конвенция 2026-07-15); >100 элементов не поддерживается осознанно.
+const agentsQuery = useAgents(props.workspaceId, { page: 1, page_size: MAX_PAGE_SIZE });
 // Named runner profiles (2026-07-14): the picker lists the global executor
 // PROFILES as "<type> — <model> (<name>)" (mock: "mock (<name>)"), never a raw
 // UUID; defaults to a claude_cli profile. Disabled profiles stay visible but
 // are not selectable. The profile's model is the single source of truth — the
 // agent has NO model field.
-const executorsQuery = useExecutors();
+const executorsQuery = useExecutors({ page: 1, page_size: MAX_PAGE_SIZE });
 const executorOptions = computed(() => executorsQuery.data.value?.items ?? []);
 
 function executorLabel(ex: { type: string; name: string; config: Record<string, unknown> }): string {
@@ -91,7 +94,7 @@ const candidate = computed<LintableAgent>(() => ({
 }));
 
 const others = computed<LintableAgent[]>(() =>
-  (agentsQuery.data.value ?? []).map((ag) => ({
+  (agentsQuery.data.value?.items ?? []).map((ag) => ({
     id: ag.id,
     name: ag.name,
     trigger_status: ag.trigger_status,
@@ -218,7 +221,12 @@ defineExpose({ submit, saving });
     </el-form-item>
 
     <el-form-item label="Instruction">
-      <el-input v-model="form.instruction" type="textarea" data-test="instruction-input" />
+      <el-input
+        v-model="form.instruction"
+        type="textarea"
+        :autosize="{ minRows: 3, maxRows: 15 }"
+        data-test="instruction-input"
+      />
     </el-form-item>
 
     <el-form-item label="Executor">

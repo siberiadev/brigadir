@@ -20,6 +20,10 @@ export default defineConfig({
       '@brigadir/contracts/agent-linter': fileURLToPath(
         new URL('../../packages/contracts/src/agent-linter.ts', import.meta.url),
       ),
+      // Same pattern for the pagination constants (dep-free TS source module).
+      '@brigadir/contracts/pagination': fileURLToPath(
+        new URL('../../packages/contracts/src/pagination.constants.ts', import.meta.url),
+      ),
     },
   },
   server: {

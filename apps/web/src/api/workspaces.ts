@@ -1,4 +1,6 @@
 import type {
+  PaginationQuery,
+  WorkspaceListResponse,
   WorkspaceResponse,
   WorkspaceVerifyRequest,
   VerifyResponse,
@@ -6,12 +8,14 @@ import type {
   WorkspaceRotateRequest,
   WorkspaceSettingsRequest,
 } from '@brigadir/contracts';
-import { apiClient, type ApiClient } from './client';
+import { apiClient, toQuery, type ApiClient } from './client';
 
 /** Workspace REST resource (contracts/dashboard-api.md — Workspaces). */
 export function workspacesApi(client: ApiClient = apiClient) {
   return {
-    list: () => client.get<WorkspaceResponse[]>('/api/workspaces'),
+    list: (params: Partial<PaginationQuery> = {}) =>
+      client.get<WorkspaceListResponse>(`/api/workspaces${toQuery(params)}`),
+    get: (id: string) => client.get<WorkspaceResponse>(`/api/workspaces/${id}`),
     verify: (body: WorkspaceVerifyRequest) =>
       client.post<VerifyResponse>('/api/workspaces/verify', body),
     create: (body: WorkspaceCreateRequest) =>

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { makePaginatedResponseSchema } from './pagination.schema';
 
 /**
  * Executors API contracts — NAMED RUNNER PROFILES (2026-07-14; platform-scoped
@@ -100,7 +101,5 @@ export const ExecutorResponseSchema = z
   .strict();
 export type ExecutorResponse = z.infer<typeof ExecutorResponseSchema>;
 
-export const ExecutorListResponseSchema = z
-  .object({ items: z.array(ExecutorResponseSchema) })
-  .strict();
+export const ExecutorListResponseSchema = makePaginatedResponseSchema(ExecutorResponseSchema);
 export type ExecutorListResponse = z.infer<typeof ExecutorListResponseSchema>;

@@ -90,6 +90,8 @@ describe('human queue list/count/resolve (T030)', () => {
     const body = await fetch(`${url}/api/human-tasks?status=closed`, { headers: authHeaders }).then((r) => r.json());
     expect(body.items).toHaveLength(1);
     expect(body.items[0]).toMatchObject({ status: 'resolved', resolution: 'looks good', resolved_by: 'dima' });
+    // Единый пагинированный конверт (реш. 2026-07-15); total считается по status-фильтру.
+    expect(body).toMatchObject({ page: 1, page_size: 10, total: 1 });
   });
 
   it('GET count → open count', async () => {

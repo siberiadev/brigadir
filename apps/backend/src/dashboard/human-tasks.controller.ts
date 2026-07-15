@@ -1,5 +1,5 @@
 import { Controller, Get, Inject, Query, UseGuards } from '@nestjs/common';
-import { desc, eq, inArray } from 'drizzle-orm';
+import { desc, eq, inArray, sql } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import {
   type HumanQueueCountResponse,
@@ -9,6 +9,7 @@ import {
   type HumanTaskClosedStatus,
 } from '@brigadir/contracts';
 import { DashboardTokenGuard } from './dashboard-token.guard';
+import { parsePagination } from './dashboard.helpers';
 
 /**
  * Dashboard human-queue surface (feature 006, US1). The queue is GLOBAL across
@@ -22,8 +23,22 @@ export class HumanTasksController {
   constructor(@Inject(DRIZZLE) private readonly db: BrigadirDb) {}
 
   @Get()
-  async list(@Query('status') statusRaw?: string): Promise<HumanQueueListResponse> {
+  async list(
+    @Query('status') statusRaw?: string,
+    @Query('page') pageRaw?: string,
+    @Query('page_size') pageSizeRaw?: string,
+  ): Promise<HumanQueueListResponse> {
     const closed = statusRaw === 'closed';
+    const { page, pageSize, limit, offset } = parsePagination(pageRaw, pageSizeRaw);
+
+    const where = closed
+      ? inArray(schema.humanTasks.status, ['resolved', 'dismissed'])
+      : eq(schema.humanTasks.status, 'open');
+
+    const [{ total }] = await this.db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(schema.humanTasks)
+      .where(where);
 
     const base = this.db
       .select({
@@ -52,12 +67,16 @@ export class HumanTasksController {
 
     const rows = closed
       ? await base
-          .where(inArray(schema.humanTasks.status, ['resolved', 'dismissed']))
+          .where(where)
           .orderBy(desc(schema.humanTasks.resolvedAt))
+          .limit(limit)
+          .offset(offset)
       : await base
-          .where(eq(schema.humanTasks.status, 'open'))
+          .where(where)
           // oldest-first: longest-waiting on top.
-          .orderBy(schema.humanTasks.createdAt);
+          .orderBy(schema.humanTasks.createdAt)
+          .limit(limit)
+          .offset(offset);
 
     return {
       items: rows.map((r) => {
@@ -80,6 +99,9 @@ export class HumanTasksController {
         }
         return item;
       }),
+      page,
+      page_size: pageSize,
+      total,
     };
   }
 

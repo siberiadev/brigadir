@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { WorkspaceRepositorySchema } from './jira.types';
+import { makePaginatedResponseSchema } from './pagination.schema';
 
 /**
  * Dashboard REST API request/response contracts (feature 005,
@@ -114,6 +115,10 @@ export const WorkspaceResponseSchema = z
   .strict();
 export type WorkspaceResponse = z.infer<typeof WorkspaceResponseSchema>;
 
+/** GET /api/workspaces — пагинированный конверт (реш. 2026-07-15; был голый массив). */
+export const WorkspaceListResponseSchema = makePaginatedResponseSchema(WorkspaceResponseSchema);
+export type WorkspaceListResponse = z.infer<typeof WorkspaceListResponseSchema>;
+
 export const VerifyResponseSchema = z
   .object({
     bot_display_name: z.string(),
@@ -192,6 +197,10 @@ export const AgentResponseSchema = z
   })
   .strict();
 export type AgentResponse = z.infer<typeof AgentResponseSchema>;
+
+/** GET /api/agents — пагинированный конверт (реш. 2026-07-15; был голый массив). */
+export const AgentListResponseSchema = makePaginatedResponseSchema(AgentResponseSchema);
+export type AgentListResponse = z.infer<typeof AgentListResponseSchema>;
 
 /** POST /api/agents/:id/test-run */
 export const TestRunRequestSchema = z.object({ ticket_key: z.string().min(1) }).strict();

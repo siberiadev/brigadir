@@ -19,7 +19,8 @@
     "types": ["vite/client", "node"],
     "baseUrl": ".",
     "paths": {
-      "@brigadir/contracts/agent-linter": ["../../packages/contracts/src/agent-linter.ts"]
+      "@brigadir/contracts/agent-linter": ["../../packages/contracts/src/agent-linter.ts"],
+      "@brigadir/contracts/pagination": ["../../packages/contracts/src/pagination.constants.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.vue", "test/**/*.ts", "vite.config.ts", "vitest.config.ts", "env.d.ts"]

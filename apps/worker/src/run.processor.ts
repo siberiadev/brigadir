@@ -7,17 +7,21 @@ import { runQueueName, backoffStrategy } from '@brigadir/queues';
 import { RunsService, mapExitStatusToRunStatus } from '@brigadir/runs';
 import { ExecutorRegistry, type ExecutorResult, type RunContext } from '@brigadir/executors';
 import { PipelineService } from '@brigadir/pipeline';
+import { JiraClientFactory } from '@brigadir/jira';
 import { applyExecutorConcurrency, startConcurrencyReapply } from './executor-concurrency';
 import { checkExecutorGate } from './executor-gate';
+import { fetchTicketDetail, type TicketDetail } from './ticket-detail';
 
 interface LoadedRun {
   runId: string;
+  workspaceId: string;
   executorType: string;
   triggerEvent: unknown;
   instruction: string;
   timeoutMinutes: number;
   ticketKey: string;
   ticketSummary: string | null;
+  jiraSiteUrl: string;
 }
 
 /**
@@ -46,6 +50,7 @@ export class RunProcessor extends WorkerHost implements OnApplicationBootstrap, 
     private readonly runs: RunsService,
     private readonly registry: ExecutorRegistry,
     private readonly pipeline: PipelineService,
+    private readonly jiraFactory: JiraClientFactory,
   ) {
     super();
   }
@@ -85,16 +90,23 @@ export class RunProcessor extends WorkerHost implements OnApplicationBootstrap, 
     // Optional in-progress Jira transition at job start (non-fatal on failure).
     await this.pipeline.onRunStarted(runId);
 
+    // Ticket description + browse URL, fetched lazily from Jira (non-fatal).
+    const detail = await fetchTicketDetail(this.jiraFactory, this.logger, loaded);
+
     let result: ExecutorResult;
     try {
       const executor = this.registry.resolve(loaded.executorType);
-      result = await executor.run(this.buildContext(loaded), new AbortController().signal);
+      result = await executor.run(this.buildContext(loaded, detail), new AbortController().signal);
     } catch (err) {
       result = {
         exitStatus: 'crashed',
         diagnostics: err instanceof Error ? err.message : String(err),
       };
     }
+
+    // Guaranteed no-op today (the mock executor never produces cost/usage) —
+    // kept so finalization stays a near-copy of ClaudeCliRunProcessor (FR-009).
+    await this.runs.recordCostUsage(runId, { costUsd: result.costUsd, usage: result.usage });
 
     if (result.exitStatus === 'completed') {
       try {
@@ -156,29 +168,32 @@ export class RunProcessor extends WorkerHost implements OnApplicationBootstrap, 
     const [row] = await this.db
       .select({
         runId: schema.runs.id,
+        workspaceId: schema.runs.workspaceId,
         executorType: schema.runs.executorType,
         triggerEvent: schema.runs.triggerEvent,
         instruction: schema.agents.instruction,
         timeoutMinutes: schema.agents.timeoutMinutes,
         ticketKey: schema.tickets.jiraKey,
         ticketSummary: schema.tickets.summary,
+        jiraSiteUrl: schema.workspaces.jiraSiteUrl,
       })
       .from(schema.runs)
       .innerJoin(schema.agents, eq(schema.runs.agentId, schema.agents.id))
       .innerJoin(schema.tickets, eq(schema.runs.ticketId, schema.tickets.id))
+      .innerJoin(schema.workspaces, eq(schema.runs.workspaceId, schema.workspaces.id))
       .where(eq(schema.runs.id, runId))
       .limit(1);
     return row;
   }
 
-  private buildContext(loaded: LoadedRun): RunContext {
+  private buildContext(loaded: LoadedRun, detail: TicketDetail): RunContext {
     return {
       runId: loaded.runId,
       ticket: {
         key: loaded.ticketKey,
         summary: loaded.ticketSummary ?? '',
-        description: '',
-        url: '',
+        description: detail.description,
+        url: detail.url,
       },
       instruction: loaded.instruction,
       workspaceDir: null,

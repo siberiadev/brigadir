@@ -17,6 +17,7 @@ import {
   resetFakeClaudeEnv,
   setFakeClaudeCallbacks,
   type ClaudeCliTestEnv,
+  type FakeClaudeCallbackStep,
 } from './claude-cli-harness';
 
 const BASE = 'https://mock.atlassian.net';
@@ -76,7 +77,7 @@ describe('callback completion (T104)', () => {
 
   async function seedAndTrigger(opts: {
     fixture?: string;
-    callbacks?: Array<{ tool: 'progress' | 'human' | 'complete'; body: Record<string, unknown> }>;
+    callbacks?: FakeClaudeCallbackStep[];
     executorConfigOverrides?: Record<string, unknown>;
   }): Promise<{ runId: string; ticketKey: string; workspaceId: string }> {
     resetFakeClaudeEnv();
@@ -106,13 +107,13 @@ describe('callback completion (T104)', () => {
 
   async function pollRun(
     runId: string,
-    until: (status: string) => boolean,
+    until: (row: typeof schema.runs.$inferSelect) => boolean,
     timeoutMs = 30_000,
   ): Promise<typeof schema.runs.$inferSelect> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const [row] = await db.db.select().from(schema.runs).where(eq(schema.runs.id, runId)).limit(1);
-      if (row && until(row.status)) return row;
+      if (row && until(row)) return row;
       if (Date.now() > deadline) {
         throw new Error(`run ${runId} stuck at ${row?.status} after ${timeoutMs}ms`);
       }
@@ -120,8 +121,8 @@ describe('callback completion (T104)', () => {
     }
   }
 
-  const TERMINAL = (s: string): boolean =>
-    ['succeeded', 'failed', 'timed_out', 'cancelled', 'awaiting_human'].includes(s);
+  const TERMINAL = (row: typeof schema.runs.$inferSelect): boolean =>
+    ['succeeded', 'failed', 'timed_out', 'cancelled', 'awaiting_human'].includes(row.status);
 
   it('success: complete_task{success} finalizes succeeded, checks persisted, ticket transitioned, 200 ACK', async () => {
     const { runId, ticketKey } = await seedAndTrigger({
@@ -160,6 +161,82 @@ describe('callback completion (T104)', () => {
     expect(row.status).toBe('failed');
     expect(row.report).toBeNull();
     expect(row.error).toBeTruthy();
+    // Cost/usage from the terminal event still land (recordCostUsage runs
+    // before the fail-closed status flip, so no extra polling is needed).
+    expect(Number(row.costUsd)).toBeCloseTo(0.0123, 4);
+    expect(row.usage).toMatchObject({ input_tokens: 1200, output_tokens: 340 });
+  });
+
+  it('cost: a callback-finalized run still gets cost_usd/usage from the terminal event after process exit', async () => {
+    // The fake CLI streams the fixture BEFORE playing callbacks, whereas the
+    // real CLI emits its result event last — irrelevant here: the executor
+    // only reads `terminal` at process close, and the processor persists
+    // cost only after run() settles. The sequence under test is: complete
+    // callback finalizes the run to succeeded, the process then exits, and
+    // the terminal event's total_cost_usd/usage must STILL be persisted
+    // (status-independent write) without clobbering the callback's finalize.
+    const { runId } = await seedAndTrigger({
+      fixture: 'stream-success',
+      callbacks: [
+        {
+          tool: 'complete',
+          body: {
+            schema_version: 1,
+            outcome: 'success',
+            summary: 'Finalized via callback, cost arrives later.',
+            checks: [],
+          },
+        },
+      ],
+    });
+
+    const row = await pollRun(runId, TERMINAL);
+    expect(row.status).toBe('succeeded');
+    // The callback's report owns the finalize — not the streamed structured_output.
+    expect(row.report).toMatchObject({ summary: 'Finalized via callback, cost arrives later.' });
+
+    // Cost lands only after the process exits, which post-dates the callback
+    // finalize — poll for it separately.
+    const withCost = await pollRun(runId, (r) => r.costUsd !== null);
+    expect(Number(withCost.costUsd)).toBeCloseTo(0.0123, 4);
+    expect(withCost.usage).toMatchObject({ input_tokens: 1200, output_tokens: 340 });
+    // No-clobber: the status the callback wrote survives the cost write.
+    expect(withCost.status).toBe('succeeded');
+    expect(withCost.report).toMatchObject({ outcome: 'success' });
+  });
+
+  it('cost: post-finalize grace lets the CLI emit its result event AFTER complete_task (production ordering)', async () => {
+    // The real CLI prints its terminal result event seconds AFTER the agent's
+    // complete_task callback lands (the model still finishes its turn). The
+    // cancel-poll (cancelPollMs=200 here) sees the run leave 'running' almost
+    // immediately — without the post-finalize grace it would SIGTERM the
+    // process during the sleep below, the result event would never exist, and
+    // cost_usd/usage would be unrecoverable (the live-run regression of
+    // 2026-07-15). The sleep(1000) >> cancelPollMs makes that race
+    // deterministic in the old code.
+    const { runId } = await seedAndTrigger({
+      callbacks: [
+        {
+          tool: 'complete',
+          body: {
+            schema_version: 1,
+            outcome: 'success',
+            summary: 'Callback first, result event later.',
+            checks: [],
+          },
+        },
+        { tool: 'sleep', ms: 1000 },
+        { tool: 'stream', fixture: 'stream-success' },
+      ],
+    });
+
+    const row = await pollRun(runId, TERMINAL);
+    expect(row.status).toBe('succeeded');
+
+    const withCost = await pollRun(runId, (r) => r.costUsd !== null);
+    expect(Number(withCost.costUsd)).toBeCloseTo(0.0123, 4);
+    expect(withCost.usage).toMatchObject({ input_tokens: 1200, output_tokens: 340 });
+    expect(withCost.status).toBe('succeeded');
   });
 
   it('invalid report: complete_task{needs_human} with no human_task → 422 with zod errors[], run NOT finalized', async () => {

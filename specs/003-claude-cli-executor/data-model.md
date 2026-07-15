@@ -16,8 +16,8 @@ already exists in `libs/database/src/schema/runs.ts` and `run-events.ts`
 | `external_ref` | text | finalize | stream `session_id` (D13) |
 | `worktree_path` | text | worktree prepared | `worktree.ts` (D3) |
 | `exit_code` | int | finalize | child exit code |
-| `cost_usd` | numeric(10,4) | finalize | result `total_cost_usd` (D11/D13) |
-| `usage` | jsonb | finalize | result `usage` (D13) |
+| `cost_usd` | numeric(10,4) | post-exit `recordCostUsage` (any exit path, status-independent); also rides finalize extras on non-callback runs | result `total_cost_usd` (D11/D13) |
+| `usage` | jsonb | post-exit `recordCostUsage` (any exit path, status-independent); also rides finalize extras on non-callback runs | result `usage` (D13) |
 | `error` | text | failure finalize | stderr tail + validation/budget diagnostic (D13) |
 | `report` | jsonb | finalize (success/failure/needs_human) | `structured_output`, zod-validated (D1) |
 | `outcome` | text | finalize | report.outcome (via `finalizeWithReport`) |

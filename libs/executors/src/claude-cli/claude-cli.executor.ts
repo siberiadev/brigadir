@@ -313,7 +313,18 @@ export class ClaudeCliExecutor implements AgentExecutor {
         signal.removeEventListener('abort', onAbort);
 
         if (abortReason) {
-          settle({ exitStatus: abortReason, externalRef, diagnostics: `run ${abortReason}` });
+          // The cancel-poll aborts a lingering process AFTER a callback
+          // finalize/park flipped the run off 'running' — exactly the path
+          // where a terminal event parsed before the kill carries the run's
+          // only cost/usage data. handleClose runs after 'close', so
+          // `terminal` holds whatever the parser captured; don't drop it.
+          settle({
+            exitStatus: abortReason,
+            externalRef,
+            costUsd: terminal?.totalCostUsd,
+            usage: terminal?.usage,
+            diagnostics: `run ${abortReason}`,
+          });
           return;
         }
 

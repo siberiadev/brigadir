@@ -1,5 +1,5 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import {
   DRIZZLE,
   type BrigadirDb,
@@ -19,13 +19,14 @@ import {
   WorkspaceCreateRequestSchema,
   WorkspaceRotateRequestSchema,
   WorkspaceSettingsRequestSchema,
+  type WorkspaceListResponse,
   type WorkspaceResponse,
   type VerifyResponse,
   type JiraBoardType,
 } from '@brigadir/contracts';
 import { DashboardTokenGuard } from './dashboard-token.guard';
-import { fieldError, statusesUnavailable, validationError } from './dashboard.errors';
-import { extractBoardId, deriveCredentialStatus } from './dashboard.helpers';
+import { fieldError, notFoundError, statusesUnavailable, validationError } from './dashboard.errors';
+import { extractBoardId, deriveCredentialStatus, parsePagination } from './dashboard.helpers';
 
 /**
  * Dashboard workspaces surface (feature 005, US1/US2/US4). All routes behind the
@@ -43,9 +44,27 @@ export class WorkspacesController {
   ) {}
 
   @Get()
-  async list(): Promise<WorkspaceResponse[]> {
-    const rows = await this.db.select().from(schema.workspaces);
-    return Promise.all(rows.map((r) => this.toResponse(r.id)));
+  async list(
+    @Query('page') pageRaw?: string,
+    @Query('page_size') pageSizeRaw?: string,
+  ): Promise<WorkspaceListResponse> {
+    const { page, pageSize, limit, offset } = parsePagination(pageRaw, pageSizeRaw);
+
+    const [{ total }] = await this.db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(schema.workspaces);
+
+    const rows = await this.db
+      .select({ id: schema.workspaces.id })
+      .from(schema.workspaces)
+      // Пагинация требует детерминированного порядка (UI-конвенция 2026-07-15).
+      .orderBy(schema.workspaces.createdAt)
+      .limit(limit)
+      .offset(offset);
+
+    // Per-row toResponse — N+1, приемлемо: ≤100 строк/страница, внутренний инструмент.
+    const items = await Promise.all(rows.map((r) => this.toResponse(r.id)));
+    return { items, page, page_size: pageSize, total };
   }
 
   @Post('verify')
@@ -106,6 +125,21 @@ export class WorkspacesController {
       if (err instanceof StatusesUnavailable) throw statusesUnavailable();
       throw err;
     }
+  }
+
+  /**
+   * Точечный detail-эндпоинт (реш. 2026-07-15): потребители «одного workspace»
+   * (шапка, настройки, лукапы по id) НЕ листают пагинированный список.
+   */
+  @Get(':id')
+  async get(@Param('id') id: string): Promise<WorkspaceResponse> {
+    const [row] = await this.db
+      .select({ id: schema.workspaces.id })
+      .from(schema.workspaces)
+      .where(eq(schema.workspaces.id, id))
+      .limit(1);
+    if (!row) throw notFoundError('workspace_not_found', 'Workspace not found.');
+    return this.toResponse(id);
   }
 
   @Put(':id/settings')

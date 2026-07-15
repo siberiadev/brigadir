@@ -1,5 +1,6 @@
+import { computed, toValue, type MaybeRefOrGetter } from 'vue';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query';
-import type { AgentWriteRequest } from '@brigadir/contracts';
+import type { AgentWriteRequest, PaginationQuery } from '@brigadir/contracts';
 import { agentsApi } from '../api/agents';
 
 const api = agentsApi();
@@ -8,10 +9,14 @@ export function agentsKey(workspaceId: string) {
   return ['agents', workspaceId] as const;
 }
 
-export function useAgents(workspaceId: string) {
+export function useAgents(
+  workspaceId: string,
+  params: MaybeRefOrGetter<Partial<PaginationQuery>> = {},
+) {
   return useQuery({
-    queryKey: agentsKey(workspaceId),
-    queryFn: () => api.list(workspaceId),
+    queryKey: computed(() => [...agentsKey(workspaceId), toValue(params)]),
+    queryFn: () => api.list(workspaceId, toValue(params)),
+    placeholderData: (prev) => prev,
   });
 }
 

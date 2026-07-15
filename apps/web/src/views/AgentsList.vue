@@ -3,18 +3,22 @@ import { computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { AgentResponse, ErrorIssue } from '@brigadir/contracts';
 import { useAgents, useDeleteAgent } from '../composables/useAgents';
-import { useWorkspaces } from '../composables/useWorkspaces';
+import { useWorkspace } from '../composables/useWorkspaces';
+import { usePagination } from '../composables/usePagination';
 import AgentForm from '../components/AgentForm/AgentForm.vue';
 import FormDialog from '../components/FormDialog.vue';
+import ListPagination from '../components/ListPagination.vue';
 
 const props = defineProps<{ id: string }>();
 
-const agentsQuery = useAgents(props.id);
-const workspacesQuery = useWorkspaces();
-const workspace = computed(() =>
-  (workspacesQuery.data.value ?? []).find((w) => w.id === props.id),
-);
-const repositories = computed(() => workspace.value?.repositories ?? []);
+const { page, pageSize, params, bindTotal } = usePagination();
+const agentsQuery = useAgents(props.id, params);
+const total = computed(() => agentsQuery.data.value?.total ?? 0);
+bindTotal(total);
+
+// Лукап по id — через detail-эндпоинт, не через пагинированный список.
+const workspaceQuery = useWorkspace(props.id);
+const repositories = computed(() => workspaceQuery.data.value?.repositories ?? []);
 
 const deleteAgent = useDeleteAgent(props.id);
 
@@ -50,7 +54,7 @@ async function onDelete(agent: AgentResponse) {
 <template>
   <section>
     <div class="header-row">
-      <h2>Agents — {{ workspace?.name ?? id }}</h2>
+      <h2>Agents</h2>
       <el-button type="primary" data-test="new-agent" @click="openCreate">
         New agent
       </el-button>
@@ -81,7 +85,7 @@ async function onDelete(agent: AgentResponse) {
 
     <el-table
       v-loading="agentsQuery.isLoading.value"
-      :data="agentsQuery.data.value ?? []"
+      :data="agentsQuery.data.value?.items ?? []"
       data-test="agents-table"
     >
       <el-table-column prop="name" label="Name" />
@@ -99,6 +103,8 @@ async function onDelete(agent: AgentResponse) {
         </template>
       </el-table-column>
     </el-table>
+
+    <ListPagination :total="total" v-model:page="page" v-model:page-size="pageSize" />
   </section>
 </template>
 

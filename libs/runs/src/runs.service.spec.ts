@@ -40,3 +40,50 @@ describe('RunsService.failIfStillRunning (T102, D7)', () => {
     await expect(service.failIfStillRunning('run-1', 'diag')).resolves.toBe(false);
   });
 });
+
+describe('RunsService.recordCostUsage', () => {
+  function costFakeDb(captured: { sets: unknown[] }, opts: { throwOnUpdate?: boolean } = {}): unknown {
+    return {
+      update: () => ({
+        set: (vals: unknown) => {
+          captured.sets.push(vals);
+          return {
+            where: async () => {
+              if (opts.throwOnUpdate) throw new Error('db down');
+            },
+          };
+        },
+      }),
+    };
+  }
+
+  it('writes cost_usd as a string and usage, without touching status', async () => {
+    const captured = { sets: [] as unknown[] };
+    const service = new RunsService(costFakeDb(captured) as never);
+    await service.recordCostUsage('run-1', { costUsd: 0.0123, usage: { input_tokens: 12 } });
+    expect(captured.sets).toHaveLength(1);
+    expect(captured.sets[0]).toEqual({ costUsd: '0.0123', usage: { input_tokens: 12 } });
+    expect(captured.sets[0]).not.toHaveProperty('status');
+  });
+
+  it('writes only the defined field — never nulls out the other', async () => {
+    const captured = { sets: [] as unknown[] };
+    const service = new RunsService(costFakeDb(captured) as never);
+    await service.recordCostUsage('run-1', { costUsd: 0.5 });
+    expect(captured.sets[0]).toEqual({ costUsd: '0.5' });
+    expect(captured.sets[0]).not.toHaveProperty('usage');
+  });
+
+  it('is a no-op (no UPDATE issued) when both values are undefined', async () => {
+    const captured = { sets: [] as unknown[] };
+    const service = new RunsService(costFakeDb(captured) as never);
+    await service.recordCostUsage('run-1', {});
+    expect(captured.sets).toHaveLength(0);
+  });
+
+  it('never throws — a DB error is swallowed and logged (best-effort contract)', async () => {
+    const captured = { sets: [] as unknown[] };
+    const service = new RunsService(costFakeDb(captured, { throwOnUpdate: true }) as never);
+    await expect(service.recordCostUsage('run-1', { costUsd: 0.1 })).resolves.toBeUndefined();
+  });
+});

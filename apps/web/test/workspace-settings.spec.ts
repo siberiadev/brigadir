@@ -34,7 +34,8 @@ afterEach(() => {
 });
 
 function serveWorkspace(ws: WorkspaceResponse) {
-  server.use(http.get('/api/workspaces', () => HttpResponse.json([ws])));
+  // Settings резолвит workspace через detail-эндпоинт (реш. 2026-07-15).
+  server.use(http.get('/api/workspaces/:id', () => HttpResponse.json(ws)));
 }
 
 async function mountSettings(ws: WorkspaceResponse = sampleWorkspace) {
@@ -145,7 +146,7 @@ describe('WorkspaceSettings — Edit modals (US2)', () => {
   it('opens the config modal seeded from PERSISTED values (not `feat`/empty) and updates the block', async () => {
     let current: WorkspaceResponse = { ...sampleWorkspace };
     server.use(
-      http.get('/api/workspaces', () => HttpResponse.json([current])),
+      http.get('/api/workspaces/:id', () => HttpResponse.json(current)),
       http.put('/api/workspaces/:id/settings', async ({ request }) => {
         const body = (await request.json()) as { branch_prefix?: string };
         current = { ...current, branch_prefix: body.branch_prefix ?? null };

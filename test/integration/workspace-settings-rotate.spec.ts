@@ -139,8 +139,8 @@ describe('workspace settings + rotation + expiry badge (T141)', () => {
       .set({ settings: { branch_prefix: 'feature', scope_jql: 'labels = ai-pipeline' } })
       .where(eq(schema.workspaces.id, id));
 
-    const list = await (await fetch(`${url}/api/workspaces`, { headers })).json();
-    const ws = list.find((w: { id: string }) => w.id === id);
+    const list = await (await fetch(`${url}/api/workspaces?page_size=100`, { headers })).json();
+    const ws = list.items.find((w: { id: string }) => w.id === id);
     expect(ws.bot_email).toBe('old@acme.io'); // decoded .email ONLY
     expect(ws.branch_prefix).toBe('feature');
     expect(ws.scope_jql).toBe('labels = ai-pipeline');
@@ -152,8 +152,8 @@ describe('workspace settings + rotation + expiry badge (T141)', () => {
   it('a settings blob lacking branch_prefix/scope_jql yields null (no throw, no default)', async () => {
     const id = await seedWorkspace(new Date(Date.now() + 100 * DAY)); // settings = {} (default)
 
-    const list = await (await fetch(`${url}/api/workspaces`, { headers })).json();
-    const ws = list.find((w: { id: string }) => w.id === id);
+    const list = await (await fetch(`${url}/api/workspaces?page_size=100`, { headers })).json();
+    const ws = list.items.find((w: { id: string }) => w.id === id);
     expect(ws.branch_prefix).toBeNull();
     expect(ws.scope_jql).toBeNull();
     expect(ws.bot_email).toBe('old@acme.io');
@@ -170,10 +170,10 @@ describe('workspace settings + rotation + expiry badge (T141)', () => {
       })
       .returning({ id: schema.workspaces.id });
 
-    const res = await fetch(`${url}/api/workspaces`, { headers });
+    const res = await fetch(`${url}/api/workspaces?page_size=100`, { headers });
     expect(res.status).toBe(200); // one corrupt row must never 500 the list
     const list = await res.json();
-    const row = list.find((w: { id: string }) => w.id === ws.id);
+    const row = list.items.find((w: { id: string }) => w.id === ws.id);
     expect(row.bot_email).toBeNull();
   });
 
@@ -182,10 +182,43 @@ describe('workspace settings + rotation + expiry badge (T141)', () => {
     const warn7 = await seedWorkspace(new Date(Date.now() + 5 * DAY));
     const expired = await seedWorkspace(new Date(Date.now() - 1 * DAY));
 
-    const list = await (await fetch(`${url}/api/workspaces`, { headers })).json();
-    const byId = new Map<string, string>(list.map((w: { id: string; credential_status: string }) => [w.id, w.credential_status]));
+    const list = await (await fetch(`${url}/api/workspaces?page_size=100`, { headers })).json();
+    const byId = new Map<string, string>(list.items.map((w: { id: string; credential_status: string }) => [w.id, w.credential_status]));
     expect(byId.get(warn30)).toBe('warn_30');
     expect(byId.get(warn7)).toBe('warn_7');
     expect(byId.get(expired)).toBe('expired');
+  });
+
+  // --- единая пагинация + detail-эндпоинт (реш. 2026-07-15) ---
+
+  it('GET list — пагинированный конверт, дефолт 10, порядок по createdAt', async () => {
+    for (let i = 0; i < 12; i += 1) {
+      await seedWorkspace(new Date(Date.now() + 100 * DAY));
+    }
+
+    const page1 = await (await fetch(`${url}/api/workspaces`, { headers })).json();
+    expect(page1).toMatchObject({ page: 1, page_size: 10, total: 12 });
+    expect(page1.items).toHaveLength(10);
+
+    const page2 = await (await fetch(`${url}/api/workspaces?page=2`, { headers })).json();
+    expect(page2.items).toHaveLength(2);
+  });
+
+  it('GET /api/workspaces/:id — 200 с полным WorkspaceResponse, 404 на неизвестный id', async () => {
+    const id = await seedWorkspace(new Date(Date.now() + 100 * DAY));
+
+    const res = await fetch(`${url}/api/workspaces/${id}`, { headers });
+    expect(res.status).toBe(200);
+    const ws = await res.json();
+    expect(ws.id).toBe(id);
+    expect(ws.bot_email).toBe('old@acme.io');
+    expect(ws.jira_api_token).toBeUndefined(); // credentials NEVER serialized
+
+    const missing = await fetch(
+      `${url}/api/workspaces/00000000-0000-0000-0000-000000000000`,
+      { headers },
+    );
+    expect(missing.status).toBe(404);
+    expect((await missing.json()).error.code).toBe('workspace_not_found');
   });
 });

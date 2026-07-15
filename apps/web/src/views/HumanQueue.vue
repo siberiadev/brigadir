@@ -3,18 +3,25 @@ import { computed, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { HumanQueueItem, HumanQueueStatus, ResolveHumanTaskInput } from '@brigadir/contracts';
 import { useHumanTasks, useResolveHumanTask } from '../composables/useHumanTasks';
+import { usePagination } from '../composables/usePagination';
 import { relativeAge } from '../utils/date';
 import { ApiError } from '../api/client';
+import ListPagination from '../components/ListPagination.vue';
+import MarkdownText from '../components/MarkdownText.vue';
 
 // The global (cross-workspace) needs-human queue (US1). Open tasks are
 // oldest-first (longest-waiting on top); history shows the closed tasks with
 // their resolution + resolver. Live via the composable's refetchInterval.
+// Одна пагинация на оба таба: переключение таба = смена фильтра → страница 1.
 const filter = ref<HumanQueueStatus>('open');
-const queue = useHumanTasks('open');
-const closedQueue = useHumanTasks('closed');
+const { page, pageSize, params, bindTotal } = usePagination({ resetOn: filter });
+const queue = useHumanTasks('open', params);
+const closedQueue = useHumanTasks('closed', params);
 
 const activeQuery = computed(() => (filter.value === 'open' ? queue : closedQueue));
 const items = computed<HumanQueueItem[]>(() => activeQuery.value.data.value?.items ?? []);
+const total = computed(() => activeQuery.value.data.value?.total ?? 0);
+bindTotal(total);
 
 // Per-task resolution form state, keyed by task id.
 type Draft = { action: ResolveHumanTaskInput['action']; answer: string };
@@ -92,7 +99,7 @@ const kindTagType: Record<string, string> = {
           <span class="muted" data-test="task-age">· {{ relativeAge(item.created_at) }} ago</span>
         </div>
 
-        <p v-if="item.details" class="details">{{ item.details }}</p>
+        <MarkdownText v-if="item.details" class="details" :source="item.details" data-test="task-details" />
 
         <!-- open: resolution form -->
         <template v-if="filter === 'open'">
@@ -132,6 +139,8 @@ const kindTagType: Record<string, string> = {
         </div>
       </el-card>
     </div>
+
+    <ListPagination :total="total" v-model:page="page" v-model:page-size="pageSize" />
   </section>
 </template>
 

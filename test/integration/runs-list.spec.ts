@@ -48,14 +48,15 @@ describe('runs table list (T025)', () => {
     ticket2 = t2.id;
 
     // 3 runs, deterministic created_at ordering (desc → r3, r2, r1).
-    const mk = (agentId: string, ticketId: string, status: string, iso: string) =>
+    const mk = (agentId: string, ticketId: string, status: string, iso: string, startedIso?: string) =>
       db.db.insert(schema.runs).values({
         workspaceId, ticketId, agentId, executorType: 'mock', status, attempt: 1,
         createdAt: new Date(iso),
+        startedAt: startedIso ? new Date(startedIso) : undefined,
       });
-    await mk(agentA, ticket1, 'succeeded', '2026-07-10T00:00:00.000Z'); // r1
+    await mk(agentA, ticket1, 'succeeded', '2026-07-10T00:00:00.000Z'); // r1 (never started)
     await mk(agentB, ticket2, 'failed', '2026-07-11T00:00:00.000Z'); // r2
-    await mk(agentA, ticket1, 'running', '2026-07-12T00:00:00.000Z'); // r3
+    await mk(agentA, ticket1, 'running', '2026-07-12T00:00:00.000Z', '2026-07-12T00:00:30.000Z'); // r3
 
     const moduleRef: TestingModule = await Test.createTestingModule({ imports: [BackendAppModule] }).compile();
     app = moduleRef.createNestApplication();
@@ -80,6 +81,12 @@ describe('runs table list (T025)', () => {
     expect(body.items[0].status).toBe('running'); // newest
     expect(body.items[2].status).toBe('succeeded'); // oldest
     expect(body.items[0].ticket.jira_url).toContain('/browse/BRIG-1');
+  });
+
+  it('exposes started_at (live-ticker anchor) — ISO on a started run, null otherwise', async () => {
+    const body = await listRuns();
+    expect(body.items[0].started_at).toBe('2026-07-12T00:00:30.000Z'); // running
+    expect(body.items[2].started_at).toBeNull(); // never started
   });
 
   it('filters by agent; total reflects the filtered set', async () => {
@@ -108,6 +115,11 @@ describe('runs table list (T025)', () => {
     expect(page1.page_size).toBe(2);
     const page2 = await listRuns('?page=2&page_size=2');
     expect(page2.items).toHaveLength(1);
+  });
+
+  it('defaults to page 1 / page_size 10 (единая пагинация, реш. 2026-07-15)', async () => {
+    const body = await listRuns('');
+    expect(body).toMatchObject({ page: 1, page_size: 10 });
   });
 
   it('an empty workspace returns items: [] (not an error)', async () => {

@@ -45,7 +45,10 @@ const TOOL_DEFS = [
   {
     name: 'request_human',
     description:
-      'Ask a human a question or flag a blocker. Set blocking=true to park the run until answered; blocking=false leaves a note without stopping.',
+      'Ask a human a question or flag a blocker. Set blocking=true to park the run until answered; ' +
+      'blocking=false leaves a note without stopping. Write `details` in GitHub-flavored Markdown ' +
+      '(headings, lists, `code`, fenced code blocks, **bold**, links) — it is shown in a rendered ' +
+      'viewer, so structure it to be scannable; keep `title` a plain-text one-liner.',
     schema: CallbackTools.request_human,
   },
   {

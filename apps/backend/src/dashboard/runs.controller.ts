@@ -13,9 +13,7 @@ import {
 } from '@brigadir/contracts';
 import { DashboardTokenGuard } from './dashboard-token.guard';
 import { conflictError, notFoundError } from './dashboard.errors';
-
-const DEFAULT_PAGE_SIZE = 25;
-const MAX_PAGE_SIZE = 100;
+import { parsePagination } from './dashboard.helpers';
 
 const PERIOD_HOURS: Record<string, number> = { '24h': 24, '7d': 24 * 7, '30d': 24 * 30 };
 
@@ -46,8 +44,7 @@ export class RunsController {
     @Query('page') pageRaw?: string,
     @Query('page_size') pageSizeRaw?: string,
   ): Promise<RunListResponse> {
-    const page = Math.max(1, Number(pageRaw) || 1);
-    const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Number(pageSizeRaw) || DEFAULT_PAGE_SIZE));
+    const { page, pageSize, limit, offset } = parsePagination(pageRaw, pageSizeRaw);
 
     const filters = [eq(schema.runs.workspaceId, workspaceId)];
     if (agent) filters.push(eq(schema.runs.agentId, agent));
@@ -82,8 +79,8 @@ export class RunsController {
       .innerJoin(schema.agents, eq(schema.runs.agentId, schema.agents.id))
       .where(where)
       .orderBy(desc(schema.runs.createdAt))
-      .limit(pageSize)
-      .offset((page - 1) * pageSize);
+      .limit(limit)
+      .offset(offset);
 
     return {
       items: rows.map((r) => ({
@@ -93,6 +90,7 @@ export class RunsController {
         status: r.status as RunStatus,
         attempt: r.attempt,
         duration_ms: durationMs(r.startedAt, r.finishedAt),
+        started_at: r.startedAt ? r.startedAt.toISOString() : null,
         cost_usd: r.costUsd ?? null,
         created_at: r.createdAt.toISOString(),
       })),
@@ -192,6 +190,7 @@ export class RunsController {
     return {
       run: {
         run_id: run.runId,
+        workspace_id: run.workspaceId,
         status: run.status as RunStatus,
         attempt: run.attempt,
         executor_type: run.executorType,

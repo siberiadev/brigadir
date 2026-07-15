@@ -26,6 +26,8 @@ interface StoredIssue {
   key: string;
   id: string;
   summary: string | null;
+  /** ADF body returned by GET /issue/{key} (run-dispatch description fetch). */
+  description?: ADFDoc;
   statusName: string;
   updated: string;
   issueType: string;
@@ -60,6 +62,7 @@ export interface MockJira {
       status: string;
       id?: string;
       summary?: string;
+      description?: ADFDoc;
       updated?: string;
       issueType?: string;
       sprintId?: number;
@@ -74,6 +77,8 @@ export interface MockJira {
   setBotDisplayName(name: string): void;
   /** feature 005: arm a one-shot 500 on the next project-statuses fetch (→ 502 upstream). */
   arm500OnStatuses(): void;
+  /** Arm a one-shot 500 on the next GET /issue/{key} (run-dispatch description fetch fallback). */
+  arm500OnNextIssueGet(): void;
   addBlockedByLink(key: string, blockerKey: string): void;
   /** feature 004 (T114): set this issue's epic (parent) key. */
   setEpic(key: string, epicKey: string): void;
@@ -108,6 +113,7 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
   let expectedAuthHeader: string | null = null; // feature 005: /myself auth check
   let botDisplayName = 'BRIGADIR Bot';
   let armed500Statuses = false;
+  let armed500IssueGet = false;
 
   const catOf = (status: string): StatusCategoryKey => category[status] ?? 'indeterminate';
 
@@ -258,6 +264,10 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
     http.get(`${baseUrl}/rest/api/3/issue/:key`, ({ params }) => {
       const r = maybe429();
       if (r) return r;
+      if (armed500IssueGet) {
+        armed500IssueGet = false;
+        return HttpResponse.json({ errorMessages: ['boom'] }, { status: 500 });
+      }
       const issue = issues.get(params.key as string);
       if (!issue) return HttpResponse.json({ errorMessages: ['not found'] }, { status: 404 });
       const epic = issue.epicKey ? issues.get(issue.epicKey) : undefined;
@@ -278,6 +288,8 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
           status: { name: issue.statusName, statusCategory: { key: catOf(issue.statusName) } },
           issuetype: { name: issue.issueType },
           project: { key: projectKey },
+          summary: issue.summary,
+          description: issue.description ?? null,
           parent: epic ? { key: epic.key, fields: { status: { name: epic.statusName } } } : undefined,
           issuelinks: issue.linked.map((linkedKey) => ({ outwardIssue: linkRef(linkedKey) })),
         },
@@ -322,6 +334,7 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
         key,
         id: opts.id ?? String(++idSeq),
         summary: opts.summary ?? key,
+        description: opts.description,
         statusName: opts.status,
         updated: opts.updated ?? new Date().toISOString(),
         issueType: opts.issueType ?? 'Task',
@@ -346,6 +359,9 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
     },
     arm500OnStatuses() {
       armed500Statuses = true;
+    },
+    arm500OnNextIssueGet() {
+      armed500IssueGet = true;
     },
     addBlockedByLink(key, blockerKey) {
       const issue = issues.get(key);
@@ -399,6 +415,7 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
       expectedAuthHeader = null;
       botDisplayName = 'BRIGADIR Bot';
       armed500Statuses = false;
+      armed500IssueGet = false;
       for (const k of Object.keys(category)) {
         if (!(k in DEFAULT_CATEGORY)) delete category[k];
         else category[k] = DEFAULT_CATEGORY[k];

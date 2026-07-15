@@ -9,8 +9,10 @@ import { RunsService, mapExitStatusToRunStatus } from '@brigadir/runs';
 import { ExecutorRegistry, type ExecutorResult, type RunContext } from '@brigadir/executors';
 import { PipelineService } from '@brigadir/pipeline';
 import { signRunToken } from '@brigadir/contracts';
+import { JiraClientFactory } from '@brigadir/jira';
 import { applyExecutorConcurrency, startConcurrencyReapply } from './executor-concurrency';
 import { checkExecutorGate } from './executor-gate';
+import { fetchTicketDetail, type TicketDetail } from './ticket-detail';
 
 interface LoadedRun {
   runId: string;
@@ -22,7 +24,9 @@ interface LoadedRun {
   maxBudgetUsd: string | null;
   ticketKey: string;
   ticketSummary: string | null;
+  jiraSiteUrl: string;
   cancelPollMs: number;
+  postFinalizeGraceMs: number;
   /** Feature 004 (D6): explicit opt-in to the MCP callback channel. */
   useCallbackChannel: boolean;
 }
@@ -31,6 +35,15 @@ interface LoadedRun {
  * knowable, so absent a fresher signal we fall back to this heuristic. */
 const DEFAULT_RATE_LIMIT_TTL_MS = 15 * 60_000;
 const DEFAULT_CANCEL_POLL_MS = 3000;
+/**
+ * Natural-exit grace after a callback finalize (succeeded/failed) before the
+ * cancel-poll aborts the lingering process. The CLI's terminal result event —
+ * the ONLY carrier of cost_usd/usage — is printed several seconds AFTER the
+ * agent's complete_task callback lands (the model still finishes its turn);
+ * killing immediately guarantees the cost data never exists. Bounded so a
+ * wedged process can't hold the worker slot: the run timeout still applies.
+ */
+const DEFAULT_POST_FINALIZE_GRACE_MS = 30_000;
 /** Run-token TTL grace beyond the run's own timeout (contracts/run-jwt.md, plan.md). */
 const RUN_TOKEN_GRACE_SECONDS = 300;
 const DEFAULT_CALLBACK_BASE_URL = 'http://localhost:3000/api/callbacks';
@@ -65,6 +78,7 @@ export class ClaudeCliRunProcessor
     private readonly runs: RunsService,
     private readonly registry: ExecutorRegistry,
     private readonly pipeline: PipelineService,
+    private readonly jiraFactory: JiraClientFactory,
   ) {
     super();
   }
@@ -112,6 +126,10 @@ export class ClaudeCliRunProcessor
     }
     await this.pipeline.onRunStarted(runId);
 
+    // Ticket description + browse URL, fetched lazily from Jira (non-fatal).
+    // BEFORE the timeout timer starts — fetch time must not eat the run budget.
+    const detail = await fetchTicketDetail(this.jiraFactory, this.logger, loaded);
+
     const controller = new AbortController();
     // Test/operator override, same established precedent as the mock
     // executor's `rate_limit_ttl_ms` on triggerEvent (TriggerEventSchema is
@@ -123,10 +141,25 @@ export class ClaudeCliRunProcessor
       ?.timeout_ms_override;
     const timeoutMs = timeoutMsOverride ?? loaded.timeoutMinutes * 60_000;
     const timeoutTimer = setTimeout(() => controller.abort('timeout'), timeoutMs);
+    // Set on the first poll tick that observes a callback finalize; the abort
+    // is deferred until this deadline so the CLI can print its terminal result
+    // event (sole carrier of cost_usd/usage) and exit naturally.
+    let finalizeGraceDeadline: number | undefined;
     const cancelPoll = setInterval(() => {
-      void this.isStillActive(runId)
-        .then((active) => {
-          if (!active) controller.abort('cancelled');
+      void this.loadStatus(runId)
+        .then((status) => {
+          if (status === undefined || status === 'running') return;
+          if (status === 'succeeded' || status === 'failed') {
+            // Legitimate callback finalize — bounded natural-exit grace.
+            // Everything else keeps the immediate abort: an explicit user
+            // cancel must kill now, and an `awaiting_human` park means the
+            // process is wedged on the blocking MCP call and will never
+            // exit on its own (D7 — the guarded finalizes make the eventual
+            // 'cancelled' outcome a no-op either way).
+            finalizeGraceDeadline ??= Date.now() + loaded.postFinalizeGraceMs;
+            if (Date.now() < finalizeGraceDeadline) return;
+          }
+          controller.abort('cancelled');
         })
         // Best-effort poll: a transient DB error (e.g. the pool closing during
         // shutdown/teardown) must not become an unhandled rejection — the run
@@ -137,7 +170,7 @@ export class ClaudeCliRunProcessor
     let result: ExecutorResult;
     try {
       const executor = this.registry.resolve(loaded.executorType);
-      result = await executor.run(this.buildContext(loaded), controller.signal);
+      result = await executor.run(this.buildContext(loaded, detail), controller.signal);
     } catch (err) {
       result = {
         exitStatus: 'crashed',
@@ -147,6 +180,15 @@ export class ClaudeCliRunProcessor
       clearTimeout(timeoutTimer);
       clearInterval(cancelPoll);
     }
+
+    // Cost/usage are status-independent data columns — persisted once per
+    // attempt regardless of which branch (or an earlier callback) owns the
+    // status. For callback-wired runs this is the ONLY writer that ever sees
+    // cost: the complete_task callback finalized the run before the process
+    // exited, so every status-guarded write below is a no-op by then.
+    // recordCostUsage is best-effort (never throws) — a throw here would burn
+    // the attempt between the executor settling and finalize.
+    await this.runs.recordCostUsage(runId, { costUsd: result.costUsd, usage: result.usage });
 
     if (result.exitStatus === 'completed') {
       if (loaded.useCallbackChannel) {
@@ -236,13 +278,13 @@ export class ClaudeCliRunProcessor
     }
   }
 
-  private async isStillActive(runId: string): Promise<boolean> {
+  private async loadStatus(runId: string): Promise<string | undefined> {
     const [row] = await this.db
       .select({ status: schema.runs.status })
       .from(schema.runs)
       .where(eq(schema.runs.id, runId))
       .limit(1);
-    return row?.status === 'running';
+    return row?.status;
   }
 
   /**
@@ -280,11 +322,13 @@ export class ClaudeCliRunProcessor
         maxBudgetUsd: schema.agents.maxBudgetUsd,
         ticketKey: schema.tickets.jiraKey,
         ticketSummary: schema.tickets.summary,
+        jiraSiteUrl: schema.workspaces.jiraSiteUrl,
         executorConfig: schema.executors.config,
       })
       .from(schema.runs)
       .innerJoin(schema.agents, eq(schema.runs.agentId, schema.agents.id))
       .innerJoin(schema.tickets, eq(schema.runs.ticketId, schema.tickets.id))
+      .innerJoin(schema.workspaces, eq(schema.runs.workspaceId, schema.workspaces.id))
       .innerJoin(schema.executors, eq(schema.agents.executorId, schema.executors.id))
       .where(eq(schema.runs.id, runId))
       .limit(1);
@@ -292,7 +336,7 @@ export class ClaudeCliRunProcessor
     if (!row) return undefined;
 
     const executorConfig = row.executorConfig as
-      | { cancelPollMs?: number; useCallbackChannel?: boolean }
+      | { cancelPollMs?: number; postFinalizeGraceMs?: number; useCallbackChannel?: boolean }
       | null;
     return {
       runId: row.runId,
@@ -304,12 +348,14 @@ export class ClaudeCliRunProcessor
       maxBudgetUsd: row.maxBudgetUsd,
       ticketKey: row.ticketKey,
       ticketSummary: row.ticketSummary,
+      jiraSiteUrl: row.jiraSiteUrl,
       cancelPollMs: executorConfig?.cancelPollMs ?? DEFAULT_CANCEL_POLL_MS,
+      postFinalizeGraceMs: executorConfig?.postFinalizeGraceMs ?? DEFAULT_POST_FINALIZE_GRACE_MS,
       useCallbackChannel: executorConfig?.useCallbackChannel === true,
     };
   }
 
-  private buildContext(loaded: LoadedRun): RunContext {
+  private buildContext(loaded: LoadedRun, detail: TicketDetail): RunContext {
     const httpBaseUrl = process.env.BRIGADIR_CALLBACK_BASE_URL ?? DEFAULT_CALLBACK_BASE_URL;
     // Real per-run JWT only minted for callback-wired runs (contracts/run-jwt.md);
     // non-callback runs never call the callback API, so the placeholder is inert.
@@ -330,8 +376,8 @@ export class ClaudeCliRunProcessor
       ticket: {
         key: loaded.ticketKey,
         summary: loaded.ticketSummary ?? '',
-        description: '',
-        url: '',
+        description: detail.description,
+        url: detail.url,
       },
       instruction: this.instructionWithResumeAnswer(loaded),
       workspaceDir: null,

@@ -6,6 +6,7 @@ export * from './basic-auth-jira.client';
 export * from './lazy-jira.client';
 export * from './transition-discovery';
 export * from './adf-composer';
+export * from './adf-to-markdown';
 export * from './credentials.codec';
 export * from './credentials-key.provider';
 export * from './secret-box';

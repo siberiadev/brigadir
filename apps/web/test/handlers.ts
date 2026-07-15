@@ -1,5 +1,7 @@
 import { http, HttpResponse } from 'msw';
 import type {
+  AgentListResponse,
+  WorkspaceListResponse,
   WorkspaceResponse,
   VerifyResponse,
   StatusesResponse,
@@ -11,6 +13,11 @@ import type {
   RunCostResponse,
   RunListResponse,
 } from '@brigadir/contracts';
+
+/** Обернуть элементы в единый пагинированный конверт (реш. 2026-07-15). */
+export function paginated<T>(items: T[], page = 1, pageSize = 10) {
+  return { items, page, page_size: pageSize, total: items.length };
+}
 
 /**
  * Default msw handlers for `/api/*` — the real HTTP boundary the component tests
@@ -159,14 +166,28 @@ export const sampleRunListItem: RunListResponse['items'][number] = {
   status: 'succeeded',
   attempt: 1,
   duration_ms: 42000,
+  started_at: '2026-07-12T10:00:05.000Z',
   cost_usd: '0.1234',
   created_at: '2026-07-12T10:00:00.000Z',
+};
+
+/** A currently-active run — pulse dot + live-ticking Duration in the table. */
+export const sampleRunningListItem: RunListResponse['items'][number] = {
+  run_id: 'run-2',
+  agent: { id: 'ag-1', name: 'Implementer' },
+  ticket: { key: 'BRIG-2', summary: 'Fix logout', jira_url: 'https://acme.atlassian.net/browse/BRIG-2' },
+  status: 'running',
+  attempt: 1,
+  duration_ms: 5000,
+  started_at: '2026-07-12T11:00:00.000Z',
+  cost_usd: null,
+  created_at: '2026-07-12T11:00:00.000Z',
 };
 
 export const sampleRunList: RunListResponse = {
   items: [sampleRunListItem],
   page: 1,
-  page_size: 25,
+  page_size: 10,
   total: 1,
 };
 
@@ -179,6 +200,7 @@ export const sampleRunCost: RunCostResponse = {
 export const sampleRunCard: RunCardResponse = {
   run: {
     run_id: 'run-1',
+    workspace_id: 'ws-1',
     status: 'failed',
     attempt: 2,
     executor_type: 'claude_cli',
@@ -203,6 +225,39 @@ export const sampleRunCard: RunCardResponse = {
   events: [
     { id: '1', type: 'started', payload: {}, created_at: '2026-07-12T10:00:05.000Z' },
     { id: '2', type: 'report', payload: { ok: false }, created_at: '2026-07-12T10:00:47.000Z' },
+    {
+      id: '3',
+      type: 'log',
+      payload: {
+        model: 'claude-sonnet-5',
+        session_id: 's-1',
+        tools: ['Bash', 'Edit'],
+        mcp_servers: [{ name: 'brigadir', status: 'connected' }],
+      },
+      created_at: '2026-07-12T10:00:06.000Z',
+    },
+    {
+      id: '4',
+      type: 'progress',
+      payload: { message: 'Implementing the fix', stage: 'implement', percent: 40 },
+      created_at: '2026-07-12T10:00:10.000Z',
+    },
+    {
+      id: '5',
+      type: 'tool_call',
+      // claude-cli path: input arrives as a JSON.stringify'd string, not an object.
+      payload: {
+        name: 'Bash',
+        input: JSON.stringify({ command: 'pnpm test', description: 'Run unit tests' }),
+      },
+      created_at: '2026-07-12T10:00:20.000Z',
+    },
+    {
+      id: '6',
+      type: 'jira_action',
+      payload: { commented: true, transitioned_to: 'Review' },
+      created_at: '2026-07-12T10:00:46.000Z',
+    },
   ],
   history: [
     {
@@ -229,12 +284,15 @@ export const sampleRunCard: RunCardResponse = {
 };
 
 export const sampleHumanQueueOpen: HumanQueueListResponse = {
+  page: 1,
+  page_size: 10,
+  total: 2,
   items: [
     {
       id: 'ht-1',
       kind: 'blocker',
       title: 'Which auth provider?',
-      details: 'Need a decision before wiring the callback.',
+      details: '## Decision needed\n\nPick one before wiring `request_human`:\n\n- **OAuth** — more setup\n- **Basic** — quicker',
       blocking: true,
       ticket: { key: 'BRIG-1', jira_url: 'https://acme.atlassian.net/browse/BRIG-1' },
       agent: { id: 'ag-1', name: 'Implementer' },
@@ -256,6 +314,9 @@ export const sampleHumanQueueOpen: HumanQueueListResponse = {
 };
 
 export const sampleHumanQueueClosed: HumanQueueListResponse = {
+  page: 1,
+  page_size: 10,
+  total: 1,
   items: [
     {
       id: 'ht-9',
@@ -276,20 +337,24 @@ export const sampleHumanQueueClosed: HumanQueueListResponse = {
 };
 
 export const defaultHandlers = [
-  http.get('/api/workspaces', () => HttpResponse.json([sampleWorkspace])),
+  http.get('/api/workspaces', () =>
+    HttpResponse.json<WorkspaceListResponse>(paginated([sampleWorkspace])),
+  ),
   http.post('/api/workspaces/verify', () => HttpResponse.json(sampleVerify)),
   http.post('/api/workspaces', () => HttpResponse.json(sampleWorkspace, { status: 201 })),
   http.get('/api/workspaces/:id/statuses', () => HttpResponse.json(sampleStatuses)),
   http.put('/api/workspaces/:id/settings', () => HttpResponse.json(sampleWorkspace)),
   http.put('/api/workspaces/:id/jira-connection', () => HttpResponse.json(sampleWorkspace)),
-  http.get('/api/agents', () => HttpResponse.json([sampleAgent])),
+  // Detail-эндпоинт (реш. 2026-07-15): шапка/настройки резолвят workspace по id.
+  http.get('/api/workspaces/:id', () => HttpResponse.json(sampleWorkspace)),
+  http.get('/api/agents', () => HttpResponse.json<AgentListResponse>(paginated([sampleAgent]))),
   http.post('/api/agents', () => HttpResponse.json(sampleAgent, { status: 201 })),
   http.put('/api/agents/:id', () => HttpResponse.json(sampleAgent)),
   http.post('/api/agents/:id/test-run', () => HttpResponse.json({ run_id: 'run-1' }, { status: 202 })),
 
   // executors CRUD (platform-scoped — global /api/executors)
   http.get('/api/executors', () =>
-    HttpResponse.json<ExecutorListResponse>({ items: sampleExecutors }),
+    HttpResponse.json<ExecutorListResponse>(paginated(sampleExecutors)),
   ),
   http.post('/api/executors', () => HttpResponse.json(sampleExecutors[0], { status: 201 })),
   http.put('/api/executors/:executorId', () => HttpResponse.json(sampleExecutors[0])),

@@ -2,9 +2,10 @@ import type {
   HumanQueueCountResponse,
   HumanQueueListResponse,
   HumanQueueStatus,
+  PaginationQuery,
   ResolveHumanTaskInput,
 } from '@brigadir/contracts';
-import { apiClient, type ApiClient } from './client';
+import { apiClient, toQuery, type ApiClient } from './client';
 
 /** Resolve endpoint response (feature 004 — reused unchanged, guarded in 006). */
 export type ResolveResult =
@@ -18,8 +19,8 @@ export type ResolveResult =
  */
 export function humanTasksApi(client: ApiClient = apiClient) {
   return {
-    list: (status: HumanQueueStatus = 'open') =>
-      client.get<HumanQueueListResponse>(`/api/human-tasks?status=${status}`),
+    list: (status: HumanQueueStatus = 'open', params: Partial<PaginationQuery> = {}) =>
+      client.get<HumanQueueListResponse>(`/api/human-tasks${toQuery({ status, ...params })}`),
     count: () => client.get<HumanQueueCountResponse>('/api/human-tasks/count'),
     resolve: (id: string, body: ResolveHumanTaskInput) =>
       client.post<ResolveResult>(`/api/human-tasks/${id}/resolve`, body),

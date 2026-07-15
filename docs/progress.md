@@ -497,3 +497,159 @@ a limit-2 profile executes; no attempt burned; disabled profile excluded from
 capacity and held, released on re-enable); ANTHROPIC_API_KEY in child env IFF
 key set; profile-model-beats-behavior.model. Web: table column order, picker
 format, Name tip, api-key form states, AgentForm without Model.
+
+## Iteration 11 — Ticket description in RunContext (lazy Jira fetch, ADF → markdown; 2026-07-14)
+
+Trigger: live incident — the Planner agent on ST3-799 reported "ticket had no
+description" and planned from a code diagnosis, while the Jira ticket carried a
+full spec. Root cause: `description` was never read anywhere in the pipeline —
+the poller requests only status/summary/updated/issuelinks, `tickets` has no
+description column, and BOTH run processors hardcoded `description: ''` /
+`url: ''` into RunContext, so the wrapper's description slot (wrapper.ts) was
+permanently empty. architecture §4 and spec.md ("description как markdown")
+promised the field all along; this closes the gap. Chosen shape: **lazy fetch
+at run dispatch** via the per-workspace client — NOT via the poller/DB (bodies
+are large and hot; the ingest loop stays a cheap status diff, no schema change).
+
+- **`JiraClient.getIssue(key)`** (interface + BasicAuthJiraClient +
+  LazyJiraClient delegation): `GET /issue/{key}?fields=summary,description`,
+  returns Jira ground truth — `description` as raw ADF (`string` tolerated
+  defensively for Server/v2). Conversion is the caller's concern.
+- **`adf-to-markdown.ts`** (libs/jira, pure, dependency-free — reverse of
+  adf-composer): paragraphs/headings/lists (nested, ordered `attrs.order`),
+  codeBlock/blockquote/panel/rule/table/taskList/media/expand, inline
+  mention/emoji/inlineCard/status/date, marks strong/em/code/strike/link.
+  Unknown nodes NEVER throw — they recurse into `content` (future Jira nodes
+  degrade to their inner text). `jiraDescriptionToMarkdown(...)` tolerates
+  null/string/ADF and hard-bounds output at 10k chars with an explicit
+  truncation marker (wrapper has no budget guard of its own; feature-context
+  SECTION_MAX_BYTES precedent).
+- **`ticket-detail.ts`** (apps/worker, shared by both processors — same pattern
+  as executor-gate): resolves the per-workspace client
+  (`JiraClientFactory.forWorkspace`, multi-workspace-correct), fetches, converts.
+  A Jira failure MUST NOT fail the job (pipeline.onRunStarted idiom): warn +
+  empty description, run proceeds, no attempt burned. The browse URL
+  (`{jiraSiteUrl}/browse/{key}`) is built from the DB row OUTSIDE the try — a
+  Jira outage still yields a correct link. In the claude_cli processor the
+  fetch happens BEFORE the timeout timer starts, so fetch time never eats the
+  run budget. Both `load()`s join `workspaces` for `jiraSiteUrl`;
+  `buildContext(loaded, detail)` stays sync and pure.
+- **Known side effect**: suites seeding placeholder credentials hit
+  `decodeJiraCredentials` throw BEFORE any HTTP → instant fallback, no network,
+  one warn line — the fallback branch is exercised implicitly across the whole
+  existing integration suite.
+
+Tests: adf-to-markdown unit (23 — every node family, mark combos, unknown-node
+fallback, truncation, null/string passthrough; literal expected strings + one
+composite snapshot); getIssue unit (URL + null-safe parse); integration
+(wrapper-feature-context, reusing the suite's live testcontainers stack): ADF
+description seeded in mock-jira lands in `wrapper.txt` as markdown (heading,
+bold, list, fenced code), and an armed one-shot 500 on GET /issue → run still
+`succeeded`, attempt 1, wrapper free of the description text. mock-jira: issue
+GET now returns summary+description, `seedIssue({description})`,
+`arm500OnNextIssueGet()`.
+
+## Iteration 12 — Human-task details as Markdown (agent instruction + UI reader; 2026-07-14)
+
+Trigger: human-queue task bodies arrived as one unformatted text blob (the
+ST3-799 Planner question was a wall of prose) — hard to scan. Two-sided fix:
+tell agents to author `details` in Markdown, and render it on the UI.
+
+- **Agent side**: `.describe()` added to the `details` (Markdown) and `title`
+  (plain-text one-liner) fields of BOTH `RequestHumanSchema`
+  (callback-tools.schema) and `ReportHumanTaskSchema` (report.schema) — the
+  text flows through `zodToJsonSchema` into the MCP tool `inputSchema` AND into
+  the claude_cli `--json-schema` for complete_task, so the agent sees the
+  Markdown expectation on every human-task path. Reinforced in the MCP tool
+  `description` (mcp-server/main.ts) and the callback-tools section of the
+  instruction wrapper (wrapper.ts). buildArgs snapshot updated (expected —
+  now carries the field descriptions).
+- **UI side**: `utils/markdown.ts` — a tiny dependency-free Markdown → HTML
+  renderer (we add NO markdown/DOMPurify dep). SECURITY: escapes the source
+  FIRST, then emits only a curated tag subset (headings, ul/ol, fenced/inline
+  code, blockquote, hr, paragraphs, **bold**/*italic*/~~strike~~, links with
+  http/https/mailto-only hrefs) — so the `<div v-html>` in the new
+  `MarkdownText.vue` carries no author-controlled markup. Wired into
+  HumanQueue's task `details` slot; scoped styles size headings/code/lists for
+  the card.
+
+Tests: markdown unit (renderer subset + XSS guard: `<img onerror>` escaped,
+`javascript:` link degraded to text; emphasis inside code stays literal);
+human-queue component test upgraded — the ht-1 fixture is now Markdown and the
+spec asserts the rendered `h2`/`code`/`li`×2/`strong` in the mounted view, and
+that a details-less task renders no markdown body. Web unit 102 green,
+vue-tsc + vite build green. NOT live-dogfooded in a browser (would need the
+full testcontainers + backend + worker stack to seed a real queue); the
+component test drives the exact render path in jsdom instead.
+
+## Iteration 13 — Persist cost_usd/usage for callback-wired runs (bugfix, 2026-07-15)
+
+Trigger: the Cost column on the Runs page was always empty — verified in the
+live DB: 0 of 19 production runs (all `claude_cli` with
+`useCallbackChannel: true`) had `cost_usd` set.
+
+Root cause (a feature-004 regression — its data-model marked cost_usd/usage
+"unchanged from iteration 3" without revisiting WHEN they are written): cost
+exists only in the CLI's terminal stream event (`total_cost_usd`/`usage`),
+which arrives at process exit — but a callback-wired run is finalized EARLIER
+by the `complete_task` HTTP callback (`finalizeWithReport` with no extra). By
+the time the process exits, every status-writing path is a
+`WHERE status='running'` no-op (rule #7 — correctly protecting the status),
+and the `completed`+callback branch went through `failIfStillRunning`, which
+doesn't accept cost at all. Bonus gap: the executor's abort settle dropped an
+already-parsed terminal's cost (the cancel-poll kills the lingering process
+right after a callback finalize — exactly that path). run_events never carried
+cost either, so historic runs are unrecoverable — no backfill.
+
+Fix (minimal, status machine untouched):
+- `RunsService.recordCostUsage(runId, {costUsd?, usage?})` — status-independent
+  UPDATE by run id (cost/usage are data columns, not state; same precedent as
+  the executor's direct `worktree_path` write). Overwrite semantics — the last
+  CLI session that emitted a result event wins (user decision; matches the
+  pre-existing non-callback meaning). Best-effort, NEVER throws: it sits
+  between the executor settling and finalize, and a throw there would fail the
+  job and re-run a non-idempotent agent via BullMQ retry (rule #2).
+- `ClaudeCliRunProcessor.process`: one `recordCostUsage` call right after the
+  executor settles, before any finalize branching — covers all exit paths
+  including callback-`completed` (previously lost entirely). Existing finalize
+  extras untouched (non-callback double-write is byte-identical).
+- Executor abort branch now carries `terminal?.totalCostUsd`/`usage` into the
+  settle (handleClose runs post-close, so `terminal` holds whatever was parsed
+  before the kill).
+- Mock `RunProcessor` gets the same call (guaranteed no-op — mock produces no
+  cost) to keep the processors near-copies (FR-009).
+
+Tests: runs.service unit (string conversion, no `status` key in the set,
+defined-fields-only, both-undefined → no UPDATE, never-throws); executor unit
+(cancelled AFTER terminal parsed → result carries cost/usage); integration
+callback-completion — new test: callback finalizes `succeeded`, then cost/usage
+land post-exit without clobbering status/report; fail-closed test now also
+asserts cost. The limits cancel test deliberately unchanged (its 1s line delay
+means the terminal never parses — asserting null would encode timing). Docs:
+specs/003 + specs/004 data-model field tables revised, architecture §4 note on
+cost post-dating callback finalize.
+
+### Iteration 13 addendum — post-finalize grace (live-run regression, same day)
+
+The first live run through the fixed worker (93ba690e, ST3-870) STILL had no
+cost — layer two of the bug: the real CLI prints its terminal result event
+seconds AFTER complete_task lands (the model still finishes its turn), and the
+processor's cancel-poll saw the run leave 'running' and SIGTERM'd the process
+within ~1s of the callback finalize. The result event never existed, so there
+was nothing for recordCostUsage to record (the abort-branch fix only helps
+when the terminal was parsed before the kill).
+
+Fix: the cancel-poll now distinguishes WHY the run left 'running'. A callback
+finalize (succeeded/failed) grants a bounded natural-exit grace
+(`postFinalizeGraceMs`, executor-config-overridable, default 30s) before
+aborting, so the CLI can emit its result and exit on its own; an explicit user
+cancel ('cancelled') and an `awaiting_human` park (process wedged on the
+blocking MCP call — it will never exit naturally) abort immediately, exactly
+as before (D7 races unchanged; the run timeout still bounds everything).
+
+Test: fake-claude gains a `{tool:'stream', fixture}` step so a scripted run
+can emit the result event AFTER its callbacks (production ordering);
+callback-completion gets a regression test (complete → sleep 1s ≫
+cancelPollMs → stream result) that fails without the grace and proves
+cost/usage land with it. `FakeClaudeCallbackStep` widened to the
+sleep/stream union in the harness.

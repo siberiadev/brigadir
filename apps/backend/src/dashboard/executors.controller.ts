@@ -8,10 +8,11 @@ import {
   Param,
   Post,
   Put,
+  Query,
   Res,
   UseGuards,
 } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import {
   ExecutorCreateRequestSchema,
@@ -23,6 +24,7 @@ import {
 import { sealExecutorSecrets } from '@brigadir/executors';
 import { DashboardTokenGuard } from './dashboard-token.guard';
 import { conflictError, notFoundError, validationError } from './dashboard.errors';
+import { parsePagination } from './dashboard.helpers';
 
 type ExecutorRow = typeof schema.executors.$inferSelect;
 
@@ -51,9 +53,24 @@ export class ExecutorsController {
   constructor(@Inject(DRIZZLE) private readonly db: BrigadirDb) {}
 
   @Get()
-  async list(): Promise<ExecutorListResponse> {
-    const rows = await this.db.select().from(schema.executors).orderBy(schema.executors.name);
-    return { items: rows.map(toExecutorResponse) };
+  async list(
+    @Query('page') pageRaw?: string,
+    @Query('page_size') pageSizeRaw?: string,
+  ): Promise<ExecutorListResponse> {
+    const { page, pageSize, limit, offset } = parsePagination(pageRaw, pageSizeRaw);
+
+    const [{ total }] = await this.db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(schema.executors);
+
+    const rows = await this.db
+      .select()
+      .from(schema.executors)
+      .orderBy(schema.executors.name)
+      .limit(limit)
+      .offset(offset);
+
+    return { items: rows.map(toExecutorResponse), page, page_size: pageSize, total };
   }
 
   @Post()

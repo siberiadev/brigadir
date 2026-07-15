@@ -1,5 +1,10 @@
+import { computed, toValue, type MaybeRefOrGetter } from 'vue';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query';
-import type { ExecutorCreateRequest, ExecutorUpdateRequest } from '@brigadir/contracts';
+import type {
+  ExecutorCreateRequest,
+  ExecutorUpdateRequest,
+  PaginationQuery,
+} from '@brigadir/contracts';
 import { executorsApi } from '../api/executors';
 
 const api = executorsApi();
@@ -10,10 +15,11 @@ export function executorsKey() {
 }
 
 /** Platform executors. Feeds both the Settings admin list and the agent picker. */
-export function useExecutors() {
+export function useExecutors(params: MaybeRefOrGetter<Partial<PaginationQuery>> = {}) {
   return useQuery({
-    queryKey: executorsKey(),
-    queryFn: () => api.list(),
+    queryKey: computed(() => [...executorsKey(), toValue(params)]),
+    queryFn: () => api.list(toValue(params)),
+    placeholderData: (prev) => prev,
   });
 }
 

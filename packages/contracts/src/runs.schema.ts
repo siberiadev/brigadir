@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { makePaginatedResponseSchema } from './pagination.schema';
 
 /**
  * Runs API contracts (feature 006, contracts/runs-api.md) — the runs table
@@ -50,20 +51,16 @@ export const RunListItemSchema = z
     status: RunStatusSchema,
     attempt: z.number().int(),
     duration_ms: z.number().int().nullable(),
+    // Anchor for the client-side live duration ticker on `running` rows —
+    // `duration_ms` is computed at response time and goes stale between polls.
+    started_at: z.string().nullable(),
     cost_usd: z.string().nullable(),
     created_at: z.string(),
   })
   .strict();
 export type RunListItem = z.infer<typeof RunListItemSchema>;
 
-export const RunListResponseSchema = z
-  .object({
-    items: z.array(RunListItemSchema),
-    page: z.number().int(),
-    page_size: z.number().int(),
-    total: z.number().int(),
-  })
-  .strict();
+export const RunListResponseSchema = makePaginatedResponseSchema(RunListItemSchema);
 export type RunListResponse = z.infer<typeof RunListResponseSchema>;
 
 // --- GET /api/workspaces/:id/runs/cost — lite cost figure ---
@@ -119,6 +116,9 @@ export type RunCardHistoryItem = z.infer<typeof RunCardHistoryItemSchema>;
 export const RunCardRunSchema = z
   .object({
     run_id: z.string(),
+    // Owning workspace — lets the card deep-link back to the workspace's
+    // runs list (the card route is addressed by run id alone).
+    workspace_id: z.string(),
     status: RunStatusSchema,
     attempt: z.number().int(),
     executor_type: z.string(),

@@ -2,9 +2,17 @@
 import { computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { RunCheckStatus, RunStatus } from '@brigadir/contracts';
+import { CircleDollarSign, Copy, Hash, RotateCcw, Timer, X } from 'lucide-vue-next';
 import { useRunCard, useCancelRun, useRetryRun } from '../composables/useRunCard';
+import { useNow } from '../composables/useNow';
+import BackLink from '../components/BackLink.vue';
+import RunStatusTag from '../components/RunStatusTag.vue';
+import RunTimeline from '../components/RunTimeline/RunTimeline.vue';
+import { presentEvents } from '../components/RunTimeline/presenter';
 import { ApiError } from '../api/client';
 import { formatDuration } from '../utils/date';
+import { formatCost, formatCostUsd } from '../utils/currency';
+import { pluralize } from '../utils/pluralize';
 
 const props = defineProps<{ id: string }>();
 
@@ -47,11 +55,12 @@ async function onRetry() {
   }
 }
 
-// Expandable check reasons, keyed by position.
-const expanded = ref<Record<number, boolean>>({});
-function toggle(position: number) {
-  expanded.value[position] = !expanded.value[position];
-}
+// Content tabs: live view (report + timeline) | run history.
+const activeTab = ref('report');
+
+// Expanded check positions (el-collapse v-model). Reasons are kept out of the
+// DOM until expanded so tests/screen-readers see them only when open.
+const activeChecks = ref<number[]>([]);
 
 const CHECK_GLYPH: Record<RunCheckStatus, string> = {
   pass: '✅',
@@ -60,135 +69,186 @@ const CHECK_GLYPH: Record<RunCheckStatus, string> = {
   skip: '⏭️',
 };
 
-const statusTagType: Record<string, string> = {
-  succeeded: 'success',
-  running: 'primary',
-  failed: 'danger',
-  timed_out: 'danger',
-  cancelled: 'info',
-  superseded: 'info',
-  awaiting_human: 'warning',
-  queued: 'info',
-};
+// Steps the model made in this session = timeline items after presentation
+// (the report_progress tool_call/progress duplicates count as one step).
+const stepCount = computed(() => presentEvents(card.value?.events ?? []).length);
 
-function eventPayload(payload: unknown): string {
-  if (payload == null) return '';
-  if (typeof payload === 'string') return payload;
+// Executor tag: type + the actual model; session id for the copy button.
+// Both live only in the session-init `log` event (the run record has neither).
+function logEventField(field: 'model' | 'session_id'): string | null {
+  for (const e of card.value?.events ?? []) {
+    if (e.type !== 'log') continue;
+    const payload = e.payload as Record<string, unknown> | null;
+    const value = payload?.[field];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
+}
+const executorModel = computed(() => logEventField('model'));
+const sessionId = computed(() => logEventField('session_id'));
+
+async function onCopySessionId() {
+  if (!sessionId.value) return;
   try {
-    return JSON.stringify(payload);
+    await navigator.clipboard.writeText(sessionId.value);
+    ElMessage.success('Session id copied.');
   } catch {
-    return '';
+    ElMessage.error('Copy failed — clipboard unavailable.');
   }
 }
+const executorLabel = computed(() => {
+  const type = run.value?.executor_type ?? '';
+  return executorModel.value ? `${type} · ${executorModel.value}` : type;
+});
+
+// Live Duration while running: tick from `started_at` every second; otherwise
+// the server-computed `duration_ms` (same rule as the Runs table).
+const now = useNow();
+const liveDuration = computed(() => {
+  if (run.value?.status === 'running' && run.value.started_at) {
+    return formatDuration(Math.max(0, now.value.getTime() - Date.parse(run.value.started_at)));
+  }
+  return formatDuration(run.value?.duration_ms ?? null);
+});
 </script>
 
 <template>
   <section v-if="card && run" class="run-card">
-    <!-- Header: ticket + status + Jira deep link -->
+    <BackLink :to="`/workspaces/${run.workspace_id}/runs`" label="Runs" class="back" />
+    <!-- Header: ticket + status + cancel on ONE line; run meta below -->
     <div class="header-row">
-      <div>
-        <h2 data-test="ticket-key">
-          <a :href="card.ticket.jira_url" target="_blank" rel="noopener">{{ card.ticket.key }}</a>
-          <span class="summary">{{ card.ticket.summary ?? '(no summary)' }}</span>
-        </h2>
-        <div class="sub muted">
-          {{ run.agent.name }} · {{ run.executor_type }} · attempt {{ run.attempt }} ·
-          {{ formatDuration(run.duration_ms) }} ·
-          {{ run.cost_usd != null ? `$${run.cost_usd}` : 'no cost' }}
-        </div>
-      </div>
+      <h2 class="title" data-test="ticket-key">
+        <a :href="card.ticket.jira_url" target="_blank" rel="noopener">{{ card.ticket.key }}</a>
+        <span class="summary">{{ card.ticket.summary ?? '(no summary)' }}</span>
+      </h2>
       <div class="header-actions">
-        <el-tag :type="statusTagType[run.status] ?? 'info'" data-test="run-status">{{ run.status }}</el-tag>
+        <RunStatusTag :status="run.status" />
+        <el-button
+          v-if="sessionId"
+          plain
+          size="small"
+          aria-label="Copy session id"
+          :title="`Copy session id ${sessionId}`"
+          data-test="copy-session-id"
+          @click="onCopySessionId"
+        >
+          <Copy :size="12" />
+          <span class="btn-label">Copy session id</span>
+        </el-button>
         <el-button
           v-if="isRunning"
           type="danger"
           plain
+          size="small"
+          aria-label="Cancel run"
+          title="Cancel run"
           data-test="cancel-run"
           :loading="cancel.isPending.value"
           @click="onCancel"
         >
-          Cancel
+          <X :size="12" />
+          <span class="btn-label">Cancel</span>
         </el-button>
         <el-button
           v-if="isTerminal"
           type="primary"
           plain
+          size="small"
+          aria-label="Retry run"
+          title="Retry run"
           data-test="retry-run"
           :loading="retry.isPending.value"
           @click="onRetry"
         >
-          Retry
+          <RotateCcw :size="12" />
         </el-button>
       </div>
     </div>
+    <div class="sub muted">
+      <el-tag type="success" size="small" data-test="agent-tag">{{ run.agent.name }}</el-tag>
+      <el-tag type="primary" size="small" data-test="executor-tag">{{ executorLabel }}</el-tag>
+      <!-- Meta items: STATIC lucide icon + value (icons replace the text
+           labels; the CircleDollarSign glyph carries the "$", so the value is
+           bare). No hover animation — that's sidebar-only (CLAUDE.md). -->
+      <span class="meta-item" title="Attempt" data-test="meta-attempt">
+        <Hash :size="13" />
+        {{ run.attempt }}
+      </span>
+      <span class="meta-item" title="Duration" data-test="meta-duration">
+        <Timer :size="13" />
+        {{ liveDuration }}
+      </span>
+      <span class="meta-item" title="Cost" data-test="meta-cost">
+        <CircleDollarSign :size="13" />
+        {{ formatCost(run.cost_usd) ?? '—' }}
+      </span>
+    </div>
 
-    <!-- Report checklist -->
-    <el-card class="block">
-      <template #header>Report</template>
-      <el-empty v-if="card.checks.length === 0" description="No report checks (partial report)." data-test="checks-empty" />
-      <ul v-else class="checks" data-test="checks">
-        <li v-for="c in card.checks" :key="c.position" :data-test="`check-${c.position}`">
-          <button
-            type="button"
-            class="check-row"
-            :data-test="`check-toggle-${c.position}`"
-            @click="toggle(c.position)"
-          >
-            <span class="glyph" :data-test="`glyph-${c.position}`">{{ CHECK_GLYPH[c.status] }}</span>
-            <span class="check-name">{{ c.name }}</span>
-            <span v-if="c.reason" class="muted expand-hint">{{ expanded[c.position] ? '▾' : '▸' }}</span>
-          </button>
-          <div
-            v-if="c.reason && expanded[c.position]"
-            class="reason"
-            :data-test="`reason-${c.position}`"
-          >
-            {{ c.reason }}
-          </div>
-        </li>
-      </ul>
-    </el-card>
+    <!-- Content tabs: the live view (report once ready + timeline) | history -->
+    <el-tabs v-model="activeTab" class="content-tabs" data-test="run-tabs">
+      <el-tab-pane label="Report & Timeline" name="report">
+        <!-- Failure diagnostics -->
+        <section v-if="run.error" class="section">
+          <h3>Failure diagnostics</h3>
+          <pre class="diagnostics" data-test="run-error">{{ run.error }}</pre>
+          <a v-if="run.external_ref" :href="run.external_ref" target="_blank" rel="noopener" data-test="external-ref">
+            {{ run.external_ref }}
+          </a>
+        </section>
 
-    <!-- Failure diagnostics -->
-    <el-card v-if="run.error" class="block">
-      <template #header>Failure diagnostics</template>
-      <pre class="diagnostics" data-test="run-error">{{ run.error }}</pre>
-      <a v-if="run.external_ref" :href="run.external_ref" target="_blank" rel="noopener" data-test="external-ref">
-        {{ run.external_ref }}
-      </a>
-    </el-card>
+        <!-- Report checklist — hidden until checks arrive (partial report) -->
+        <section v-if="card.checks.length > 0" class="section">
+          <h3>Report</h3>
+          <el-collapse v-model="activeChecks" class="checks" data-test="checks">
+            <el-collapse-item
+              v-for="c in card.checks"
+              :key="c.position"
+              :name="c.position"
+              :disabled="!c.reason"
+              :data-test="`check-${c.position}`"
+            >
+              <template #title>
+                <span class="check-row" :data-test="`check-toggle-${c.position}`">
+                  <span class="glyph" :data-test="`glyph-${c.position}`">{{ CHECK_GLYPH[c.status] }}</span>
+                  <span class="check-name">{{ c.name }}</span>
+                </span>
+              </template>
+              <div
+                v-if="c.reason && activeChecks.includes(c.position)"
+                class="reason"
+                :data-test="`reason-${c.position}`"
+              >
+                {{ c.reason }}
+              </div>
+            </el-collapse-item>
+          </el-collapse>
+        </section>
 
-    <!-- Run history for the ticket -->
-    <el-card class="block">
-      <template #header>Run history</template>
-      <el-table :data="card.history" data-test="history-table">
-        <el-table-column prop="agent" label="Agent" />
-        <el-table-column prop="executor_type" label="Executor" />
-        <el-table-column prop="attempt" label="Attempt" width="90" />
-        <el-table-column label="Duration">
-          <template #default="{ row }">{{ formatDuration(row.duration_ms) }}</template>
-        </el-table-column>
-        <el-table-column label="Cost">
-          <template #default="{ row }">{{ row.cost_usd != null ? `$${row.cost_usd}` : '—' }}</template>
-        </el-table-column>
-        <el-table-column prop="status" label="Outcome" />
-      </el-table>
-    </el-card>
+        <!-- Event timeline -->
+        <section class="section">
+          <h3>
+            Timeline
+            <el-tag size="small" type="info" round data-test="timeline-count">{{ pluralize(stepCount, 'step') }}</el-tag>
+          </h3>
+          <RunTimeline :events="card.events" />
+        </section>
+      </el-tab-pane>
 
-    <!-- Event timeline -->
-    <el-card class="block">
-      <template #header>Timeline</template>
-      <el-timeline data-test="timeline">
-        <el-timeline-item
-          v-for="e in card.events"
-          :key="e.id"
-          :timestamp="new Date(e.created_at).toLocaleString()"
-        >
-          <strong>{{ e.type }}</strong>
-          <span v-if="eventPayload(e.payload)" class="muted"> — {{ eventPayload(e.payload) }}</span>
-        </el-timeline-item>
-      </el-timeline>
-    </el-card>
+      <el-tab-pane label="Run history" name="history">
+        <el-table :data="card.history" data-test="history-table">
+          <el-table-column prop="agent" label="Agent" />
+          <el-table-column prop="executor_type" label="Executor" />
+          <el-table-column prop="attempt" label="Attempt" width="90" />
+          <el-table-column label="Duration">
+            <template #default="{ row }">{{ formatDuration(row.duration_ms) }}</template>
+          </el-table-column>
+          <el-table-column label="Cost">
+            <template #default="{ row }">{{ formatCostUsd(row.cost_usd) ?? '—' }}</template>
+          </el-table-column>
+          <el-table-column prop="status" label="Outcome" />
+        </el-table>
+      </el-tab-pane>
+    </el-tabs>
   </section>
 
   <el-empty
@@ -205,16 +265,32 @@ function eventPayload(payload: unknown): string {
 .run-card {
   max-width: 900px;
 }
+.back {
+  margin-bottom: $space-sm;
+}
 .header-row {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: $space-lg;
+  gap: $space-sm;
+}
+.title {
+  margin: 0;
+  min-width: 0;
 }
 .header-actions {
   display: flex;
   align-items: center;
   gap: $space-sm;
+  flex-shrink: 0;
+}
+// el-button applies `margin-left` to a sibling button; the flex gap already
+// spaces the group, so neutralize it for whichever action button renders first.
+.header-actions .el-button {
+  margin-left: 0;
+}
+.btn-label {
+  margin-left: $space-xs;
 }
 .summary {
   font-weight: $font-weight-regular;
@@ -222,40 +298,65 @@ function eventPayload(payload: unknown): string {
   color: var(--el-text-color-regular);
 }
 .sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: $space-sm;
   font-size: 13px;
+  margin: $space-sm 0 $space-lg;
 }
 .muted {
   color: var(--el-text-color-secondary);
 }
-.block {
-  margin-bottom: $space-lg;
+.meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
+.content-tabs {
+  margin-top: $space-sm;
+}
+.section {
+  margin-bottom: $space-lg;
+
+  h3 {
+    margin: 0 0 $space-sm;
+    font-size: 14px;
+    font-weight: $font-weight-medium;
+    color: var(--el-text-color-secondary);
+  }
+}
+// Bare collapse (no card around it): drop its outer top/bottom borders and
+// keep only the thin separators between items.
 .checks {
-  list-style: none;
-  padding: 0;
-  margin: 0;
+  --el-collapse-header-height: 40px;
+  border-top: none;
+  border-bottom: none;
+
+  :deep(.el-collapse-item:last-child .el-collapse-item__header) {
+    border-bottom: none;
+  }
+  // Checks without a reason are `disabled`: not expandable, but they are not
+  // "inactive" — show them in the normal text color and without a chevron.
+  :deep(.el-collapse-item.is-disabled .el-collapse-item__header) {
+    color: inherit;
+    cursor: default;
+  }
+  :deep(.el-collapse-item.is-disabled .el-collapse-item__arrow) {
+    display: none;
+  }
 }
 .check-row {
   display: flex;
   align-items: center;
   gap: $space-sm;
-  width: 100%;
-  background: none;
-  border: none;
-  padding: $space-xs 0;
-  cursor: pointer;
-  text-align: left;
-  font: inherit;
-  color: inherit;
+  min-width: 0;
 }
 .glyph {
   width: 1.4em;
 }
-.expand-hint {
-  margin-left: auto;
-}
 .reason {
-  margin: 0 0 $space-sm 1.9em;
+  margin: 0 0 0 1.9em;
   color: var(--el-text-color-regular);
   font-size: 13px;
 }

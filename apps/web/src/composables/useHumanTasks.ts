@@ -1,6 +1,10 @@
-import { toValue, type MaybeRefOrGetter } from 'vue';
+import { computed, toValue, type MaybeRefOrGetter } from 'vue';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query';
-import type { HumanQueueStatus, ResolveHumanTaskInput } from '@brigadir/contracts';
+import type {
+  HumanQueueStatus,
+  PaginationQuery,
+  ResolveHumanTaskInput,
+} from '@brigadir/contracts';
 import { humanTasksApi } from '../api/humanTasks';
 
 const api = humanTasksApi();
@@ -15,11 +19,15 @@ export const humanTasksCountKey = ['human-tasks', 'count'] as const;
  * (research R1 — no SSE, no bearer in any URL). The open list refreshes on a
  * short cadence so a resolved task drops off; closed history does not poll.
  */
-export function useHumanTasks(status: HumanQueueStatus = 'open') {
+export function useHumanTasks(
+  status: HumanQueueStatus = 'open',
+  params: MaybeRefOrGetter<Partial<PaginationQuery>> = {},
+) {
   return useQuery({
-    queryKey: humanTasksKey(status),
-    queryFn: () => api.list(status),
+    queryKey: computed(() => [...humanTasksKey(status), toValue(params)]),
+    queryFn: () => api.list(status, toValue(params)),
     refetchInterval: status === 'open' ? 4000 : false,
+    placeholderData: (prev) => prev,
   });
 }
 

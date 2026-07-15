@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from './server';
 import { mountWithProviders, flush } from './mount';
@@ -31,6 +31,16 @@ describe('RunCard — report + diagnostics', () => {
     expect(wrapper.find('[data-test="reason-1"]').text()).toContain('3 tests failed');
   });
 
+  it('deep-links back to the owning workspace runs list', async () => {
+    const wrapper = mountCard();
+    await flush();
+
+    const back = wrapper.find('[data-test="back-link"]');
+    expect(back.exists()).toBe(true);
+    expect(back.text()).toContain('Runs');
+    expect(back.attributes('href')).toBe('/workspaces/ws-1/runs');
+  });
+
   it('renders the timeline, history table, and failure diagnostics', async () => {
     const wrapper = mountCard();
     await flush();
@@ -41,17 +51,45 @@ describe('RunCard — report + diagnostics', () => {
     const history = wrapper.find('[data-test="history-table"]');
     expect(history.text()).toContain('Implementer');
 
+    // Header meta: agent name in a green tag, executor type + model in a blue one.
+    expect(wrapper.find('[data-test="agent-tag"]').text()).toBe('Implementer');
+    expect(wrapper.find('[data-test="executor-tag"]').text()).toBe('claude_cli · claude-sonnet-5');
+
     expect(wrapper.find('[data-test="run-error"]').text()).toContain('boom: exit code 1');
     expect(wrapper.find('[data-test="external-ref"]').text()).toContain('pull/9');
   });
 
-  it('renders a partial report (no checks) without crashing', async () => {
+  it('renders events as human-readable items with the body visible inline', async () => {
+    const wrapper = mountCard();
+    await flush();
+
+    const timeline = wrapper.find('[data-test="timeline"]');
+    // Newest first: the API returns events chronologically, the component
+    // reverses — the fixture's last event (jira_action, id 6) leads the list.
+    expect(timeline.find('.row').attributes('data-test')).toBe('event-6');
+    // The Bash tool_call: tool name as the title, the full command in the
+    // grey body block right away — no click, no stringified input.
+    expect(timeline.text()).toContain('Bash');
+    expect(wrapper.find('[data-test="event-body-5"]').text()).toBe('pnpm test');
+    expect(timeline.text()).not.toContain('"command"');
+    // progress shows a capitalized stage + percent; jira_action a composed body.
+    expect(timeline.text()).toContain('Implement');
+    expect(timeline.text()).toContain('40%');
+    expect(timeline.text()).toContain('→ Review');
+    // The `started` event (empty payload) has no body block.
+    expect(wrapper.find('[data-test="event-body-1"]').exists()).toBe(false);
+    // The header counter shows the number of presented steps (6 fixture events, no dedup).
+    expect(wrapper.find('[data-test="timeline-count"]').text()).toBe('6 steps');
+  });
+
+  it('hides the report section entirely while there are no checks; the timeline still shows', async () => {
     server.use(
       http.get('/api/runs/:id', () => HttpResponse.json({ ...sampleRunCard, checks: [] })),
     );
     const wrapper = mountCard();
     await flush();
-    expect(wrapper.find('[data-test="checks-empty"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="checks"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="timeline"]').exists()).toBe(true);
   });
 
   it('shows a not-found empty state on a 404', async () => {
@@ -66,6 +104,33 @@ describe('RunCard — report + diagnostics', () => {
     const wrapper = mountCard();
     await flush();
     expect(wrapper.find('[data-test="run-not-found"]').exists()).toBe(true);
+  });
+});
+
+describe('RunCard — copy session id', () => {
+  it('copies the session id from the log event to the clipboard', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+
+    const wrapper = mountCard();
+    await flush();
+
+    await wrapper.find('[data-test="copy-session-id"]').trigger('click');
+    expect(writeText).toHaveBeenCalledWith('s-1');
+  });
+
+  it('hides the button when no log event carries a session id', async () => {
+    server.use(
+      http.get('/api/runs/:id', () =>
+        HttpResponse.json({
+          ...sampleRunCard,
+          events: sampleRunCard.events.filter((e) => e.type !== 'log'),
+        }),
+      ),
+    );
+    const wrapper = mountCard();
+    await flush();
+    expect(wrapper.find('[data-test="copy-session-id"]').exists()).toBe(false);
   });
 });
 

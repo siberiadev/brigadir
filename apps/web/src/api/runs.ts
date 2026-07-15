@@ -6,7 +6,7 @@ import type {
   RunListResponse,
   RunRetryResponse,
 } from '@brigadir/contracts';
-import { apiClient, type ApiClient } from './client';
+import { apiClient, toQuery, type ApiClient } from './client';
 
 /** Filters for the workspace-scoped runs table (contracts/runs-api.md, US3). */
 export interface RunListParams {
@@ -15,15 +15,6 @@ export interface RunListParams {
   ticket?: string;
   page?: number;
   page_size?: number;
-}
-
-function toQuery(params: Record<string, string | number | undefined>): string {
-  const q = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== '') q.set(k, String(v));
-  }
-  const s = q.toString();
-  return s ? `?${s}` : '';
 }
 
 /** Runs REST resource (contracts/runs-api.md — table, card, cost, cancel, retry). */

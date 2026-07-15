@@ -208,9 +208,12 @@ claude -p "<prompt>" \
 
 ## 1.5 REST API для дашборда
 
+Пагинация (единая, решение 2026-07-15): каждый list-эндпоинт (`GET /api/workspaces`, `GET /api/agents`, `GET /api/executors`, `GET /api/human-tasks`, `GET /api/workspaces/:id/runs`) принимает `page`/`page_size` (дефолт 10, максимум 100) и отвечает конвертом `{ items, page, page_size, total }` с детерминированным `ORDER BY` (схемы — фабрика `makePaginatedResponseSchema` в `packages/contracts/src/pagination.schema.ts`).
+
 ```
 # workspaces (создание/подключение Jira — решение 2026-07-10)
-GET  /api/workspaces
+GET  /api/workspaces                      # пагинированный конверт {items, page, page_size, total}
+GET  /api/workspaces/:id                  # detail (2026-07-15) — для шапки/настроек, не листать список
 POST /api/workspaces                      # {name, jira_site_url, jira_email, jira_api_token, board}
                                           # board — id или URL борды (id извлекается из URL)
                                           # перед сохранением: GET /myself (валидация токена) +

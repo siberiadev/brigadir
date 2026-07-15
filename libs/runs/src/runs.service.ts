@@ -145,6 +145,36 @@ export class RunsService {
     return flipped;
   }
 
+  /**
+   * Status-independent cost/usage write. Callback-wired runs are finalized by
+   * the complete_task callback BEFORE the CLI process exits, so the terminal
+   * stream event's total_cost_usd/usage only become known post-exit — when
+   * every status-writing path is (correctly, CLAUDE.md rule #7) a
+   * `WHERE status='running'` no-op. cost_usd/usage are data columns, not
+   * state: writing them by id clobbers nothing the callbacks own. Overwrite
+   * semantics: the last CLI session that emitted a result event wins (a
+   * retried attempt's terminal replaces a rate-limited attempt's partial
+   * cost). Best-effort — NEVER throws: this call sits between the executor
+   * settling and finalize, and a throw there would fail the job and re-run a
+   * non-idempotent agent via BullMQ retry (rule #2).
+   */
+  async recordCostUsage(
+    runId: string,
+    values: { costUsd?: number; usage?: unknown },
+  ): Promise<void> {
+    const set: { costUsd?: string; usage?: unknown } = {};
+    // Drizzle numeric columns carry strings; convert explicitly here (the
+    // finalize paths rely on runtime coercion instead — see guardedFinalize).
+    if (values.costUsd !== undefined) set.costUsd = String(values.costUsd);
+    if (values.usage !== undefined) set.usage = values.usage;
+    if (Object.keys(set).length === 0) return;
+    try {
+      await this.db.update(schema.runs).set(set).where(eq(schema.runs.id, runId));
+    } catch (err) {
+      this.logger.error(`recordCostUsage failed for run ${runId}: ${String(err)}`);
+    }
+  }
+
   /** Finalize to a terminal status without a report (timeout, crash-exhausted, cancelled). */
   async finalizeStatus(
     runId: string,

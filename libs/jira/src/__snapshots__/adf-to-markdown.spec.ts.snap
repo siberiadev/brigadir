@@ -1,0 +1,19 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`adfToMarkdown > composite document snapshot 1`] = `
+"## Expected Behavior
+
+Output must be \`{ linkedFlags, totalFlags }\`.
+
+- no \`processingTime\`
+- **confirmation-gated**
+
+  - reject when absent
+
+\`\`\`json
+{ "linkedFlags": [] }
+\`\`\`
+
+> **[note]**
+> Phase 2 is a follow-up."
+`;

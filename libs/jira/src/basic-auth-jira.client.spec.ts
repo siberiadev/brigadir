@@ -24,6 +24,27 @@ describe('BasicAuthJiraClient read surface (T134)', () => {
     expect(await client.getMyself()).toEqual({ displayName: 'BRIGADIR Bot' });
   });
 
+  it('getIssue returns summary and the raw ADF description', async () => {
+    const adf = {
+      version: 1,
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'body' }] }],
+    };
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(jsonResponse({ fields: { summary: 'Fix it', description: adf } }));
+
+    expect(await client.getIssue('BRIG-1')).toEqual({ summary: 'Fix it', description: adf });
+    expect(String(spy.mock.calls[0][0])).toBe(
+      'https://acme.atlassian.net/rest/api/3/issue/BRIG-1?fields=summary,description',
+    );
+  });
+
+  it('getIssue tolerates a missing description and summary', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ fields: {} }));
+    expect(await client.getIssue('BRIG-2')).toEqual({ summary: null, description: null });
+  });
+
   it('getProjectStatuses flattens statuses across issue types and de-dupes by id', async () => {
     // Same status id (10001) appears under two issue types → collapsed to one.
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(

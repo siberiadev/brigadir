@@ -335,6 +335,8 @@ export interface AgentExecutor {
 
 Маппинг `ExecutorResult.exitStatus` → `runs.status`: `completed` → по отчёту (`succeeded` / `failed` / `awaiting_human`), `crashed` → `failed` (с ретраями по backoff), `timeout` → `timed_out`, `rate_limited` → job возвращается в очередь (run остаётся активным), `cancelled` → `cancelled`.
 
+`cost_usd`/`usage` приходят только в terminal-событии стрима CLI и потому для callback-прогонов пост-датируют финализацию (`complete_task` срабатывает до выхода процесса). Worker пишет их отдельным status-independent апдейтом по run id (`RunsService.recordCostUsage`, best-effort, вне state-machine статусов) после settle executor'а — на любом exit-пути; побеждает последняя CLI-сессия, приславшая result-событие. Чтобы result-событие вообще успело родиться, cancel-poll после **callback-финализации** (succeeded/failed) даёт процессу ограниченный grace на естественный выход (`postFinalizeGraceMs`, дефолт 30 с) вместо немедленного kill; явная отмена пользователем (`cancelled`) и парковка `awaiting_human` (процесс завис на blocking-вызове) по-прежнему убиваются сразу.
+
 ### Очереди и backpressure
 
 - Очередь на executor-тип; `setGlobalConcurrency(executor.concurrency_limit)`.

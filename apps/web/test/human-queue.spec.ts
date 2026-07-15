@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from './server';
 import { mountWithProviders, flush } from './mount';
-import { sampleHumanQueueOpen, sampleHumanQueueClosed } from './handlers';
+import { paginated, sampleHumanQueueOpen, sampleHumanQueueClosed } from './handlers';
 import HumanQueue from '../src/views/HumanQueue.vue';
 
 /**
@@ -26,6 +26,15 @@ describe('HumanQueue — open list + resolution', () => {
     expect(wrapper.find('[data-test="task-ht-1"] [data-test="task-ticket"]').text()).toContain(
       'BRIG-1',
     );
+
+    // details render as Markdown → HTML (heading, inline code, bold, list).
+    const details = wrapper.find('[data-test="task-ht-1"] [data-test="task-details"]');
+    expect(details.find('h2').text()).toBe('Decision needed');
+    expect(details.find('code').text()).toBe('request_human');
+    expect(details.findAll('li')).toHaveLength(2);
+    expect(details.find('strong').text()).toBe('OAuth');
+    // ht-2 has no details → no markdown body rendered.
+    expect(wrapper.find('[data-test="task-ht-2"] [data-test="task-details"]').exists()).toBe(false);
   });
 
   it('resume posts the answer + action, then the resolved task leaves the list', async () => {
@@ -45,7 +54,7 @@ describe('HumanQueue — open list + resolution', () => {
     // After resolving ht-1, the refreshed open list no longer includes it.
     server.use(
       http.get('/api/human-tasks', () =>
-        HttpResponse.json({ items: sampleHumanQueueOpen.items.filter((t) => t.id !== 'ht-1') }),
+        HttpResponse.json(paginated(sampleHumanQueueOpen.items.filter((t) => t.id !== 'ht-1'))),
       ),
     );
 

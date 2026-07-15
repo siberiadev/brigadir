@@ -25,8 +25,19 @@ export const ReportCheckSchema = z
 export const ReportHumanTaskSchema = z
   .object({
     kind: z.enum(HUMAN_TASK_KINDS),
-    title: z.string().max(120),
-    details: z.string().max(4000).optional(),
+    title: z
+      .string()
+      .max(120)
+      .describe('One-line summary, plain text (no markdown) — shown as the task headline.'),
+    details: z
+      .string()
+      .max(4000)
+      .optional()
+      .describe(
+        'The task body in GitHub-flavored Markdown — the human reads this in a rendered viewer. ' +
+          'Use headings, bullet/numbered lists, `inline code`, fenced ```code blocks```, **bold**, ' +
+          'links, and blockquotes to make it scannable. Do NOT wrap the whole thing in a single code fence.',
+      ),
   })
   .strict();
 

@@ -84,5 +84,15 @@ export function createApiClient(options: ApiClientOptions = {}) {
 
 export type ApiClient = ReturnType<typeof createApiClient>;
 
+/** Query-string builder shared by the list resources (skips undefined/empty). */
+export function toQuery(params: Record<string, string | number | undefined>): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== '') q.set(k, String(v));
+  }
+  const s = q.toString();
+  return s ? `?${s}` : '';
+}
+
 /** The app-wide singleton (tests build their own via {@link createApiClient}). */
 export const apiClient: ApiClient = createApiClient();

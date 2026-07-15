@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from './server';
 import { mountWithProviders, flush } from './mount';
-import { sampleWorkspace } from './handlers';
+import { paginated, sampleWorkspace } from './handlers';
 import WorkspaceList from '../src/views/WorkspaceList.vue';
 
 /**
@@ -20,7 +20,9 @@ describe('WorkspaceList — status + inline pause', () => {
 
   it('shows the Paused status for a disabled workspace', async () => {
     server.use(
-      http.get('/api/workspaces', () => HttpResponse.json([{ ...sampleWorkspace, enabled: false }])),
+      http.get('/api/workspaces', () =>
+        HttpResponse.json(paginated([{ ...sampleWorkspace, enabled: false }])),
+      ),
     );
     const wrapper = mountWithProviders(WorkspaceList);
     await flush();

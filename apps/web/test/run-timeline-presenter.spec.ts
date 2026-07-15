@@ -1,0 +1,155 @@
+import { describe, it, expect } from 'vitest';
+import type { RunCardEvent } from '@brigadir/contracts';
+import {
+  presentEvent,
+  presentEvents,
+  prettifyToolName,
+} from '../src/components/RunTimeline/presenter';
+
+/**
+ * Pure presenter units: RunCardEvent → TimelineItem (`time · icon · title` +
+ * an always-visible body block). Payload is untyped in the contract, and
+ * tool_call.input arrives as a possibly-truncated JSON string — every shape
+ * here mirrors what the stream parser actually emits.
+ */
+
+function event(type: string, payload: unknown, id = 'e-1'): RunCardEvent {
+  return { id, type, payload, created_at: '2026-07-12T10:00:05.000Z' };
+}
+
+describe('presentEvent — tool_call', () => {
+  it('Bash: title = tool name, body = full command', () => {
+    const item = presentEvent(
+      event('tool_call', {
+        name: 'Bash',
+        input: JSON.stringify({ command: 'pnpm test\npnpm lint', description: 'Run checks' }),
+      }),
+    );
+    expect(item.typeKey).toBe('tool_call');
+    expect(item.title).toBe('Bash');
+    expect(item.body).toBe('pnpm test\npnpm lint');
+  });
+
+  it('Edit: body falls back to file_path when there is no command', () => {
+    const item = presentEvent(
+      event('tool_call', {
+        name: 'Edit',
+        input: JSON.stringify({ file_path: '/a/b/c.ts', old_string: 'x', new_string: 'y' }),
+      }),
+    );
+    expect(item.title).toBe('Edit');
+    expect(item.body).toBe('/a/b/c.ts');
+  });
+
+  it('truncated unparseable input becomes the body with an ellipsis, no crash', () => {
+    const raw = `{"file_path":"/a/b.ts","content":"${'x'.repeat(500)}`.slice(0, 500);
+    const item = presentEvent(event('tool_call', { name: 'Write', input: raw }));
+    expect(item.title).toBe('Write');
+    expect(item.body?.startsWith('{"file_path"')).toBe(true);
+    expect(item.body?.endsWith('…')).toBe(true);
+  });
+
+  it('prettifies MCP tool names and uses message as the body', () => {
+    expect(prettifyToolName('mcp__jira__report_progress')).toBe('report_progress (jira)');
+    expect(prettifyToolName('Bash')).toBe('Bash');
+    const item = presentEvent(
+      event('tool_call', {
+        name: 'mcp__jira__report_progress',
+        input: JSON.stringify({ message: 'stage done' }),
+      }),
+    );
+    expect(item.title).toBe('report_progress (jira)');
+    expect(item.body).toBe('stage done');
+  });
+});
+
+describe('presentEvent — other types', () => {
+  it('progress: capitalized stage title, message body, percent', () => {
+    const item = presentEvent(
+      event('progress', { message: 'Implementing', stage: 'implement', percent: 40 }),
+    );
+    expect(item.title).toBe('Implement');
+    expect(item.body).toBe('Implementing');
+    expect(item.percent).toBe(40);
+  });
+
+  it('progress without a stage is titled Progress', () => {
+    const item = presentEvent(event('progress', { message: 'Working on it' }));
+    expect(item.title).toBe('Progress');
+    expect(item.body).toBe('Working on it');
+    expect(item.percent).toBeNull();
+  });
+
+  it('log: Session started with a model/tools/mcp summary body', () => {
+    const item = presentEvent(
+      event('log', {
+        model: 'claude-sonnet-5',
+        session_id: 's-1',
+        tools: ['Bash', 'Edit'],
+        mcp_servers: [{ name: 'brigadir', status: 'connected' }],
+      }),
+    );
+    expect(item.title).toBe('Session started');
+    expect(item.body).toBe('claude-sonnet-5 · 2 tools · mcp: brigadir (connected)');
+  });
+
+  it('jira_action: composed body', () => {
+    const item = presentEvent(event('jira_action', { commented: true, transitioned_to: 'Review' }));
+    expect(item.title).toBe('Jira');
+    expect(item.body).toBe('commented · → Review');
+  });
+
+  it('api_retry: error + attempt + delay body', () => {
+    const item = presentEvent(
+      event('api_retry', { error: 'overloaded', retry_delay_ms: 2000, attempt: 2 }),
+    );
+    expect(item.title).toBe('API retry');
+    expect(item.body).toBe('overloaded · attempt 2 · retry in 2000ms');
+  });
+
+  it('unknown type with an empty payload: raw type title, no body', () => {
+    const item = presentEvent(event('started', {}));
+    expect(item.typeKey).toBe('unknown');
+    expect(item.title).toBe('started');
+    expect(item.body).toBeNull();
+  });
+
+  it('non-object payloads never crash', () => {
+    expect(presentEvent(event('progress', null)).body).toBeNull();
+    expect(presentEvent(event('whatever', 'short note')).body).toBe('short note');
+    expect(presentEvent(event('whatever', 42)).body).toBe('42');
+    expect(presentEvent(event('tool_call', 'not-an-object')).title).toBe('tool_call');
+  });
+});
+
+describe('presentEvents — report_progress dedup', () => {
+  it('collapses a report_progress tool_call + progress pair with the same message', () => {
+    const items = presentEvents([
+      event(
+        'tool_call',
+        {
+          name: 'mcp__brigadir__report_progress',
+          input: JSON.stringify({ stage: 'implement', message: 'Working on it', percent: 25 }),
+        },
+        'e-1',
+      ),
+      event('progress', { stage: 'implement', message: 'Working on it', percent: 25 }, 'e-2'),
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0].id).toBe('e-2');
+    expect(items[0].typeKey).toBe('progress');
+    expect(items[0].percent).toBe(25);
+  });
+
+  it('keeps a report_progress tool_call whose message differs from the next progress', () => {
+    const items = presentEvents([
+      event(
+        'tool_call',
+        { name: 'mcp__brigadir__report_progress', input: JSON.stringify({ message: 'A' }) },
+        'e-1',
+      ),
+      event('progress', { message: 'B' }, 'e-2'),
+    ]);
+    expect(items).toHaveLength(2);
+  });
+});

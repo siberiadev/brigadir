@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { makePaginatedResponseSchema } from './pagination.schema';
 
 /**
  * Human Queue API contracts (feature 006, contracts/human-queue-api.md) — the
@@ -43,9 +44,7 @@ export const HumanQueueItemSchema = z
   .strict();
 export type HumanQueueItem = z.infer<typeof HumanQueueItemSchema>;
 
-export const HumanQueueListResponseSchema = z
-  .object({ items: z.array(HumanQueueItemSchema) })
-  .strict();
+export const HumanQueueListResponseSchema = makePaginatedResponseSchema(HumanQueueItemSchema);
 export type HumanQueueListResponse = z.infer<typeof HumanQueueListResponseSchema>;
 
 export const HumanQueueStatusSchema = z.enum(['open', 'closed']);

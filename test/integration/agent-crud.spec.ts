@@ -165,4 +165,32 @@ describe('agent CRUD + linter + test-run (T142/T143)', () => {
     expect(second.status).toBe(200);
     expect((await second.json()).deduplicated).toBe(true);
   });
+
+  it('GET list — пагинированный конверт, дефолт 10, порядок по name (реш. 2026-07-15)', async () => {
+    // Линтер запрещает дублирующий триггер среди enabled-агентов — сеем напрямую в БД.
+    await db.db.insert(schema.agents).values(
+      Array.from({ length: 12 }, (_, i) => ({
+        workspaceId,
+        executorId,
+        name: `agent-${String(i).padStart(2, '0')}`,
+        instruction: 'x',
+        triggerStatus: `Status ${i}`,
+        statusSuccess: 'Code Review',
+        statusFailure: 'Blocked',
+      })),
+    );
+
+    const page1 = await (
+      await fetch(`${url}/api/agents?workspace=${workspaceId}`, { headers })
+    ).json();
+    expect(page1).toMatchObject({ page: 1, page_size: 10, total: 12 });
+    expect(page1.items).toHaveLength(10);
+    expect(page1.items[0].name).toBe('agent-00'); // детерминированный ORDER BY name
+
+    const page2 = await (
+      await fetch(`${url}/api/agents?workspace=${workspaceId}&page=2`, { headers })
+    ).json();
+    expect(page2.items).toHaveLength(2);
+    expect(page2.items[0].name).toBe('agent-10');
+  });
 });

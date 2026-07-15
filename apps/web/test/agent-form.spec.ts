@@ -3,7 +3,7 @@ import { http, HttpResponse } from 'msw';
 import type { VueWrapper } from '@vue/test-utils';
 import { server } from './server';
 import { mountWithProviders, flush } from './mount';
-import { sampleStatuses, sampleAgent, sampleExecutors, sampleDisabledExecutor } from './handlers';
+import { paginated, sampleStatuses, sampleAgent, sampleExecutors, sampleDisabledExecutor } from './handlers';
 import AgentForm from '../src/components/AgentForm/AgentForm.vue';
 
 /**
@@ -131,7 +131,7 @@ describe('AgentForm — statuses + linter mirror', () => {
   it('a disabled profile stays visible in the picker but is not selectable', async () => {
     server.use(
       http.get('/api/executors', () =>
-        HttpResponse.json({ items: [...sampleExecutors, sampleDisabledExecutor] }),
+        HttpResponse.json(paginated([...sampleExecutors, sampleDisabledExecutor])),
       ),
     );
     const wrapper = mountForm();

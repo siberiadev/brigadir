@@ -155,4 +155,119 @@ describe('wrapper feature-context (T115)', () => {
     expect(wrapperText).toContain('branch: feat/BRIG-SIB');
     expect(wrapperText).toContain('PR: https://github.com/acme/repo/pull/7');
   }, 60_000);
+
+  it('wrapper carries the ticket description fetched from Jira, converted ADF → markdown', async () => {
+    mock.seedIssue('BRIG-DESC', {
+      status: 'Ready for Dev',
+      summary: 'Ticket with a body',
+      description: {
+        version: 1,
+        type: 'doc',
+        content: [
+          { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Expected Behavior' }] },
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: 'Output must be ' },
+              { type: 'text', text: 'confirmation-gated', marks: [{ type: 'strong' }] },
+              { type: 'text', text: '.' },
+            ],
+          },
+          {
+            type: 'bulletList',
+            content: [
+              {
+                type: 'listItem',
+                content: [{ type: 'paragraph', content: [{ type: 'text', text: 'no processingTime in output' }] }],
+              },
+            ],
+          },
+          { type: 'codeBlock', attrs: { language: 'json' }, content: [{ type: 'text', text: '{ "linkedFlags": [] }' }] },
+        ],
+      },
+    });
+
+    const p = await seedPipeline(db.db, {
+      executorType: 'claude_cli',
+      executorConfig: baseExecutorConfig(env, { useCallbackChannel: true, keepFailedWorktrees: true }),
+      behavior: { allowed_tools: ['Read', 'Edit', 'Bash(git *)'], branch_prefix: 'feat' },
+      ticketKey: 'BRIG-DESC',
+      jiraSiteUrl: BASE,
+      jiraCredentials: encodeJiraCredentials({ email: 'bot@acme.io', api_token: 'tok' }),
+    });
+
+    resetFakeClaudeEnv();
+    setFakeClaudeCallbacks([
+      {
+        tool: 'complete',
+        body: { schema_version: 1, outcome: 'success', summary: 'Implemented BRIG-DESC.', checks: [] },
+      },
+    ]);
+
+    const res = await trigger.trigger({
+      ticketId: p.ticketId,
+      agentId: p.agentId,
+      triggerEvent: { source: 'manual' },
+    });
+    if (res.deduplicated) throw new Error('unexpected dedup');
+
+    const row = await pollRun(res.runId, TERMINAL);
+    expect(row.status).toBe('succeeded');
+
+    const wrapperText = await readFile(join(row.worktreePath!, '.brigadir', 'wrapper.txt'), 'utf8');
+    // The markdown body sits right under the ticket title line (wrapper.ts).
+    expect(wrapperText).toContain('## Expected Behavior');
+    expect(wrapperText).toContain('Output must be **confirmation-gated**.');
+    expect(wrapperText).toContain('- no processingTime in output');
+    expect(wrapperText).toContain('```json\n{ "linkedFlags": [] }\n```');
+  }, 60_000);
+
+  it('a failed description fetch falls back to an empty description without failing the run', async () => {
+    mock.seedIssue('BRIG-D500', {
+      status: 'Ready for Dev',
+      summary: 'Ticket whose body fetch 500s',
+      description: {
+        version: 1,
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'MUST-NOT-APPEAR-IN-WRAPPER' }] }],
+      },
+    });
+
+    const p = await seedPipeline(db.db, {
+      executorType: 'claude_cli',
+      executorConfig: baseExecutorConfig(env, { useCallbackChannel: true, keepFailedWorktrees: true }),
+      behavior: { allowed_tools: ['Read', 'Edit', 'Bash(git *)'], branch_prefix: 'feat' },
+      ticketKey: 'BRIG-D500',
+      jiraSiteUrl: BASE,
+      jiraCredentials: encodeJiraCredentials({ email: 'bot@acme.io', api_token: 'tok' }),
+    });
+
+    resetFakeClaudeEnv();
+    setFakeClaudeCallbacks([
+      {
+        tool: 'complete',
+        body: { schema_version: 1, outcome: 'success', summary: 'Implemented BRIG-D500.', checks: [] },
+      },
+    ]);
+
+    // One-shot 500 on the next GET /issue: the agent has no statusRunning, so
+    // onRunStarted performs no transition discovery — the armed 500 is consumed
+    // by the description fetch itself, not by an unrelated issue GET.
+    mock.arm500OnNextIssueGet();
+
+    const res = await trigger.trigger({
+      ticketId: p.ticketId,
+      agentId: p.agentId,
+      triggerEvent: { source: 'manual' },
+    });
+    if (res.deduplicated) throw new Error('unexpected dedup');
+
+    const row = await pollRun(res.runId, TERMINAL);
+    expect(row.status).toBe('succeeded'); // fetch failure never fails the job
+    expect(row.attempt).toBe(1); // and never burns an attempt
+
+    const wrapperText = await readFile(join(row.worktreePath!, '.brigadir', 'wrapper.txt'), 'utf8');
+    expect(wrapperText).toContain('BRIG-D500');
+    expect(wrapperText).not.toContain('MUST-NOT-APPEAR-IN-WRAPPER');
+  }, 60_000);
 });

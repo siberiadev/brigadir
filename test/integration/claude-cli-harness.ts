@@ -130,11 +130,16 @@ export function resetFakeClaudeEnv(): void {
   delete process.env.FAKE_CLAUDE_CALLBACKS;
 }
 
-/** One scripted callback the fake CLI makes against the real callback API (T096). */
-export interface FakeClaudeCallbackStep {
-  tool: 'progress' | 'human' | 'complete';
-  body: Record<string, unknown>;
-}
+/**
+ * One scripted step the fake CLI plays (T096): an HTTP callback against the
+ * real callback API, a linger (`sleep`), or an ndjson fixture emitted to
+ * stdout mid-sequence (`stream` — models the real CLI printing its terminal
+ * result event AFTER the agent's callbacks).
+ */
+export type FakeClaudeCallbackStep =
+  | { tool: 'progress' | 'human' | 'complete'; body: Record<string, unknown> }
+  | { tool: 'sleep'; ms: number }
+  | { tool: 'stream'; fixture: string };
 
 /** Sets FAKE_CLAUDE_CALLBACKS so the fake CLI plays this scripted sequence (quickstart.md pattern 1). */
 export function setFakeClaudeCallbacks(steps: FakeClaudeCallbackStep[]): void {

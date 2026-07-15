@@ -1,4 +1,25 @@
-import type { CredentialStatus } from '@brigadir/contracts';
+import { PaginationQuerySchema, type CredentialStatus } from '@brigadir/contracts';
+
+/**
+ * Единый парсинг `page`/`page_size` для всех list-эндпоинтов (реш. 2026-07-15).
+ * `.catch()` в схеме держит толерантность к мусору в query string (`?page=abc`
+ * → 1), как исторически клампил runs.controller. Дефолт page_size = 10.
+ */
+export function parsePagination(
+  pageRaw?: string,
+  pageSizeRaw?: string,
+): { page: number; pageSize: number; limit: number; offset: number } {
+  const parsed = PaginationQuerySchema.parse({
+    ...(pageRaw !== undefined ? { page: pageRaw } : {}),
+    ...(pageSizeRaw !== undefined ? { page_size: pageSizeRaw } : {}),
+  });
+  return {
+    page: parsed.page,
+    pageSize: parsed.page_size,
+    limit: parsed.page_size,
+    offset: (parsed.page - 1) * parsed.page_size,
+  };
+}
 
 /**
  * Extract a board id from a bare id or a Jira board URL (FR-006). Handles the

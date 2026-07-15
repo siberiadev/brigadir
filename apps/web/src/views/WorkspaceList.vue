@@ -1,14 +1,19 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import type { WorkspaceResponse } from '@brigadir/contracts';
 import { useWorkspaces, useSetWorkspaceEnabled } from '../composables/useWorkspaces';
+import { usePagination } from '../composables/usePagination';
 import CredentialBadge from '../components/CredentialBadge.vue';
 import FormDialog from '../components/FormDialog.vue';
+import ListPagination from '../components/ListPagination.vue';
 import WorkspaceForm from '../components/WorkspaceForm/WorkspaceForm.vue';
 
-const { data: workspaces, isLoading, isError, error } = useWorkspaces();
+const { page, pageSize, params, bindTotal } = usePagination();
+const { data: workspaces, isLoading, isError, error } = useWorkspaces(params);
+const total = computed(() => workspaces.value?.total ?? 0);
+bindTotal(total);
 const router = useRouter();
 
 // --- create workspace (flat form in a modal) ---
@@ -62,7 +67,7 @@ async function togglePause(row: WorkspaceResponse) {
     <el-table
       v-else
       v-loading="isLoading"
-      :data="workspaces ?? []"
+      :data="workspaces?.items ?? []"
       data-test="workspaces-table"
       class="workspaces-table"
       @row-click="openWorkspace"
@@ -106,6 +111,8 @@ async function togglePause(row: WorkspaceResponse) {
         </template>
       </el-table-column>
     </el-table>
+
+    <ListPagination :total="total" v-model:page="page" v-model:page-size="pageSize" />
 
     <!-- Create workspace -->
     <FormDialog v-model="showCreate" title="New workspace">

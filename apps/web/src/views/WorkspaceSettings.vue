@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
-import { useWorkspaces } from '../composables/useWorkspaces';
+import { useWorkspace } from '../composables/useWorkspaces';
 import CredentialBadge from '../components/CredentialBadge.vue';
 import ConnectionForm from '../components/ConnectionForm/ConnectionForm.vue';
 import ConfigForm from '../components/ConfigForm/ConfigForm.vue';
@@ -20,10 +20,9 @@ import FormDialog from '../components/FormDialog.vue';
  */
 const props = defineProps<{ id: string }>();
 
-const workspacesQuery = useWorkspaces();
-const workspace = computed(() =>
-  (workspacesQuery.data.value ?? []).find((w) => w.id === props.id),
-);
+// Detail-запрос, не поиск по пагинированному списку (UI-конвенция 2026-07-15).
+const workspaceQuery = useWorkspace(props.id);
+const workspace = computed(() => workspaceQuery.data.value);
 
 const tokenExpiry = computed(() => {
   const iso = workspace.value?.expires_at;

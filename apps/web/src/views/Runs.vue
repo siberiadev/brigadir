@@ -1,21 +1,22 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import type { RunCostPeriod, RunListItem, RunStatus } from '@brigadir/contracts';
+import { MAX_PAGE_SIZE } from '@brigadir/contracts/pagination';
 import { useRuns, useRunsCost } from '../composables/useRuns';
 import { useAgents } from '../composables/useAgents';
-import { useWorkspaces } from '../composables/useWorkspaces';
+import { usePagination } from '../composables/usePagination';
+import { useNow } from '../composables/useNow';
+import ListPagination from '../components/ListPagination.vue';
+import RunStatusTag from '../components/RunStatusTag.vue';
 import { formatDuration } from '../utils/date';
+import { formatCostUsd } from '../utils/currency';
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
 
-const workspacesQuery = useWorkspaces();
-const workspace = computed(() =>
-  (workspacesQuery.data.value ?? []).find((w) => w.id === props.id),
-);
-
-const agentsQuery = useAgents(props.id);
+// Пикер: потребитель ВСЕГО списка агентов — не листает (UI-конвенция 2026-07-15).
+const agentsQuery = useAgents(props.id, { page: 1, page_size: MAX_PAGE_SIZE });
 
 const STATUS_OPTIONS: RunStatus[] = [
   'queued',
@@ -28,41 +29,38 @@ const STATUS_OPTIONS: RunStatus[] = [
   'superseded',
 ];
 
-// Filters + pagination. Any filter change resets to page 1.
-const filters = reactive({ agent: '', status: '', ticket: '', page: 1, page_size: 25 });
-watch(
-  () => [filters.agent, filters.status, filters.ticket],
-  () => {
-    filters.page = 1;
-  },
-);
+// Filters + pagination. Any filter change resets to page 1 (usePagination).
+const filters = reactive({ agent: '', status: '', ticket: '' });
+const { page, pageSize, params, bindTotal } = usePagination({
+  resetOn: () => [filters.agent, filters.status, filters.ticket],
+});
 
 const listParams = computed(() => ({
   agent: filters.agent || undefined,
   status: filters.status || undefined,
   ticket: filters.ticket || undefined,
-  page: filters.page,
-  page_size: filters.page_size,
+  ...params.value,
 }));
 
 const runsQuery = useRuns(props.id, listParams);
 const rows = computed<RunListItem[]>(() => runsQuery.data.value?.items ?? []);
 const total = computed(() => runsQuery.data.value?.total ?? 0);
+bindTotal(total);
 
 // Cost header with period presets.
 const period = ref<RunCostPeriod>('7d');
 const costQuery = useRunsCost(props.id, period);
 
-const statusTagType: Record<string, string> = {
-  succeeded: 'success',
-  running: 'primary',
-  failed: 'danger',
-  timed_out: 'danger',
-  cancelled: 'info',
-  superseded: 'info',
-  awaiting_human: 'warning',
-  queued: 'info',
-};
+// Live Duration on `running` rows: tick from `started_at` every second instead
+// of the server-computed `duration_ms`, which goes stale between 5 s polls.
+const now = useNow();
+function liveDuration(row: RunListItem): string {
+  if (row.status === 'running' && row.started_at) {
+    // Clamped: client/server clock skew must not render a negative duration.
+    return formatDuration(Math.max(0, now.value.getTime() - Date.parse(row.started_at)));
+  }
+  return formatDuration(row.duration_ms);
+}
 
 function openRun(row: RunListItem) {
   router.push(`/runs/${row.run_id}`);
@@ -72,7 +70,7 @@ function openRun(row: RunListItem) {
 <template>
   <section class="runs">
     <div class="header-row">
-      <h2>Runs — {{ workspace?.name ?? id }}</h2>
+      <h2>Runs</h2>
       <div class="cost" data-test="cost-header">
         <el-radio-group v-model="period" size="small" data-test="cost-period">
           <el-radio-button label="24h" value="24h">24h</el-radio-button>
@@ -80,7 +78,7 @@ function openRun(row: RunListItem) {
           <el-radio-button label="30d" value="30d">30d</el-radio-button>
         </el-radio-group>
         <span class="cost-total" data-test="cost-total">
-          ${{ costQuery.data.value?.total_cost_usd ?? '0' }}
+          {{ formatCostUsd(costQuery.data.value?.total_cost_usd) ?? '$0.00' }}
           <span class="muted">· {{ costQuery.data.value?.run_count ?? 0 }} runs</span>
         </span>
       </div>
@@ -95,7 +93,7 @@ function openRun(row: RunListItem) {
         class="filter-control"
       >
         <el-option
-          v-for="ag in agentsQuery.data.value ?? []"
+          v-for="ag in agentsQuery.data.value?.items ?? []"
           :key="ag.id"
           :label="ag.name"
           :value="ag.id"
@@ -145,27 +143,19 @@ function openRun(row: RunListItem) {
       </el-table-column>
       <el-table-column label="Status">
         <template #default="{ row }">
-          <el-tag :type="statusTagType[row.status] ?? 'info'" size="small">{{ row.status }}</el-tag>
+          <RunStatusTag :status="row.status" size="small" />
         </template>
       </el-table-column>
       <el-table-column prop="attempt" label="Attempt" width="90" />
       <el-table-column label="Duration">
-        <template #default="{ row }">{{ formatDuration(row.duration_ms) }}</template>
+        <template #default="{ row }">{{ liveDuration(row) }}</template>
       </el-table-column>
       <el-table-column label="Cost">
-        <template #default="{ row }">{{ row.cost_usd != null ? `$${row.cost_usd}` : '—' }}</template>
+        <template #default="{ row }">{{ formatCostUsd(row.cost_usd) ?? '—' }}</template>
       </el-table-column>
     </el-table>
 
-    <el-pagination
-      v-if="total > filters.page_size"
-      layout="prev, pager, next"
-      :total="total"
-      :page-size="filters.page_size"
-      :current-page="filters.page"
-      data-test="runs-pagination"
-      @current-change="(p: number) => (filters.page = p)"
-    />
+    <ListPagination :total="total" v-model:page="page" v-model:page-size="pageSize" />
   </section>
 </template>
 

@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { ExecutorResponse } from '@brigadir/contracts';
 import { useExecutors, useDeleteExecutor } from '../../composables/useExecutors';
+import { usePagination } from '../../composables/usePagination';
 import { ApiError } from '../../api/client';
 import ExecutorForm from '../../components/ExecutorForm/ExecutorForm.vue';
 import FormDialog from '../../components/FormDialog.vue';
+import ListPagination from '../../components/ListPagination.vue';
 
 /**
  * Executors panel of the platform Settings page (2026-07-13). The executors
@@ -13,7 +15,10 @@ import FormDialog from '../../components/FormDialog.vue';
  * ExecutorForm modal — now against the global `/api/executors` surface and
  * without the repository field (repository is an agent choice).
  */
-const executorsQuery = useExecutors();
+const { page, pageSize, params, bindTotal } = usePagination();
+const executorsQuery = useExecutors(params);
+const total = computed(() => executorsQuery.data.value?.total ?? 0);
+bindTotal(total);
 const deleteExecutor = useDeleteExecutor();
 const showExecutorForm = ref(false);
 const editingExecutor = ref<ExecutorResponse | null>(null);
@@ -99,6 +104,8 @@ async function onDeleteExecutor(ex: ExecutorResponse) {
         </template>
       </el-table-column>
     </el-table>
+
+    <ListPagination :total="total" v-model:page="page" v-model:page-size="pageSize" />
 
     <!-- Executor create/edit -->
     <FormDialog v-model="showExecutorForm" :title="editingExecutor ? 'Edit executor' : 'New executor'">

@@ -88,6 +88,8 @@ describe('executors CRUD (global /api/executors)', () => {
     const body = await res.json();
     expect(body.items).toHaveLength(2);
     expect(body.items.every((e: { secrets?: unknown }) => e.secrets === undefined)).toBe(true);
+    // Единый пагинированный конверт (реш. 2026-07-15).
+    expect(body).toMatchObject({ page: 1, page_size: 10, total: 2 });
   });
 
   it('PUT updates max_parallel_runs and name (200)', async () => {

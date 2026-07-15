@@ -97,6 +97,16 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function streamFixture(name) {
+  const fixturePath = join(__dirname, `${name}.ndjson`);
+  const rl = createInterface({ input: createReadStream(fixturePath), crlfDelay: Infinity });
+  for await (const line of rl) {
+    if (line.trim().length === 0) continue;
+    process.stdout.write(line + '\n');
+    await sleep(lineDelayMs);
+  }
+}
+
 /** Find `--mcp-config <path>` in this process's own argv (never a control var). */
 function findMcpConfigPath() {
   const idx = process.argv.indexOf('--mcp-config');
@@ -125,6 +135,14 @@ async function runCallbacks() {
     // cancel-poll → abort → finalize race regression).
     if (step.tool === 'sleep') {
       await sleep(step.ms ?? 1000);
+      continue;
+    }
+    // { tool: 'stream', fixture } — emit an ndjson fixture to stdout mid-steps:
+    // models the REAL CLI's ordering, where the terminal result event (the sole
+    // carrier of total_cost_usd/usage) is printed AFTER the agent's callbacks
+    // land — i.e. after a complete_task already finalized the run.
+    if (step.tool === 'stream') {
+      await streamFixture(step.fixture);
       continue;
     }
     const res = await fetch(`${base}/runs/${runId}/${step.tool === 'human' ? 'human' : step.tool}`, {
@@ -157,13 +175,7 @@ async function main() {
   }
 
   if (fixtureName) {
-    const fixturePath = join(__dirname, `${fixtureName}.ndjson`);
-    const rl = createInterface({ input: createReadStream(fixturePath), crlfDelay: Infinity });
-    for await (const line of rl) {
-      if (line.trim().length === 0) continue;
-      process.stdout.write(line + '\n');
-      await sleep(lineDelayMs);
-    }
+    await streamFixture(fixtureName);
   }
 
   if (callbacksRaw) {

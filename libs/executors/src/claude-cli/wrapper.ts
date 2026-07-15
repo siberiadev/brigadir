@@ -30,7 +30,9 @@ function callbackToolsSection(): string[] {
       'so your progress is visible on the run timeline.',
     '- mcp__brigadir__request_human(kind, title, details, blocking) — ask a human a question or ' +
       'flag a blocker. blocking=true pauses the run until a person answers; blocking=false leaves ' +
-      'a note without stopping your work.',
+      'a note without stopping your work. Write `details` in Markdown (headings, lists, `code`, ' +
+      'fenced code blocks, **bold**, links) — a person reads it in a rendered viewer, so structure ' +
+      'it to be scannable; keep `title` a plain-text one-liner.',
     '- mcp__brigadir__complete_task(schema_version, outcome, summary, checks[, human_task]' +
       '[, artifacts]) — finish the run. This is the single normal way to end a session.',
     '- outcome="success" ONLY if every required check actually passed in this session. Never ' +

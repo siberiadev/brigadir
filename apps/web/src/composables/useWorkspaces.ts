@@ -1,5 +1,7 @@
+import { computed, toValue, type MaybeRefOrGetter } from 'vue';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query';
 import type {
+  PaginationQuery,
   WorkspaceVerifyRequest,
   WorkspaceCreateRequest,
   WorkspaceRotateRequest,
@@ -11,8 +13,24 @@ const api = workspacesApi();
 
 export const workspacesKey = ['workspaces'] as const;
 
-export function useWorkspaces() {
-  return useQuery({ queryKey: workspacesKey, queryFn: () => api.list() });
+export function workspaceKey(id: string) {
+  return ['workspace', id] as const;
+}
+
+export function useWorkspaces(params: MaybeRefOrGetter<Partial<PaginationQuery>> = {}) {
+  return useQuery({
+    queryKey: computed(() => [...workspacesKey, toValue(params)]),
+    queryFn: () => api.list(toValue(params)),
+    placeholderData: (prev) => prev,
+  });
+}
+
+/**
+ * Точечный detail-запрос (реш. 2026-07-15): потребители «одного workspace»
+ * (шапка, настройки, лукапы по id) НЕ ищут его в пагинированном списке.
+ */
+export function useWorkspace(id: string) {
+  return useQuery({ queryKey: workspaceKey(id), queryFn: () => api.get(id) });
 }
 
 export function useVerifyWorkspace() {
@@ -31,7 +49,10 @@ export function useRotateConnection(workspaceId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: WorkspaceRotateRequest) => api.rotate(workspaceId, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: workspacesKey }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: workspacesKey });
+      qc.invalidateQueries({ queryKey: workspaceKey(workspaceId) });
+    },
   });
 }
 
@@ -39,7 +60,10 @@ export function useUpdateSettings(workspaceId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: WorkspaceSettingsRequest) => api.updateSettings(workspaceId, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: workspacesKey }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: workspacesKey });
+      qc.invalidateQueries({ queryKey: workspaceKey(workspaceId) });
+    },
   });
 }
 
@@ -53,6 +77,9 @@ export function useSetWorkspaceEnabled() {
   return useMutation({
     mutationFn: ({ workspaceId, enabled }: { workspaceId: string; enabled: boolean }) =>
       api.updateSettings(workspaceId, { enabled }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: workspacesKey }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: workspacesKey });
+      qc.invalidateQueries({ queryKey: workspaceKey(vars.workspaceId) });
+    },
   });
 }

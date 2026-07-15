@@ -1,5 +1,11 @@
-import type { AgentResponse, AgentWriteRequest, ErrorIssue } from '@brigadir/contracts';
-import { apiClient, type ApiClient } from './client';
+import type {
+  AgentListResponse,
+  AgentResponse,
+  AgentWriteRequest,
+  ErrorIssue,
+  PaginationQuery,
+} from '@brigadir/contracts';
+import { apiClient, toQuery, type ApiClient } from './client';
 
 /** An agent write response may carry non-blocking linter warnings (status_cycle). */
 export type AgentWriteResponse = AgentResponse & { warnings?: ErrorIssue[] };
@@ -11,8 +17,8 @@ export type TestRunResult =
 /** Agents REST resource (contracts/dashboard-api.md — Agents). */
 export function agentsApi(client: ApiClient = apiClient) {
   return {
-    list: (workspaceId: string) =>
-      client.get<AgentResponse[]>(`/api/agents?workspace=${workspaceId}`),
+    list: (workspaceId: string, params: Partial<PaginationQuery> = {}) =>
+      client.get<AgentListResponse>(`/api/agents${toQuery({ workspace: workspaceId, ...params })}`),
     create: (body: AgentWriteRequest) => client.post<AgentWriteResponse>('/api/agents', body),
     update: (id: string, body: AgentWriteRequest) =>
       client.put<AgentWriteResponse>(`/api/agents/${id}`, body),

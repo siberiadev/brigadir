@@ -12,7 +12,7 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import { StatusesService, StatusesUnavailable } from '@brigadir/jira';
 import { RunTriggerService } from '@brigadir/runs';
@@ -20,6 +20,7 @@ import {
   AgentWriteRequestSchema,
   TestRunRequestSchema,
   lintAgent,
+  type AgentListResponse,
   type AgentResponse,
   type BoardStatus,
   type ErrorIssue,
@@ -27,6 +28,7 @@ import {
 } from '@brigadir/contracts';
 import { DashboardTokenGuard } from './dashboard-token.guard';
 import { statusesUnavailable, validationError } from './dashboard.errors';
+import { parsePagination } from './dashboard.helpers';
 
 type AgentRow = typeof schema.agents.$inferSelect;
 
@@ -52,12 +54,29 @@ export class AgentsController {
   ) {}
 
   @Get()
-  async list(@Query('workspace') workspaceId: string): Promise<AgentResponse[]> {
+  async list(
+    @Query('workspace') workspaceId: string,
+    @Query('page') pageRaw?: string,
+    @Query('page_size') pageSizeRaw?: string,
+  ): Promise<AgentListResponse> {
+    const { page, pageSize, limit, offset } = parsePagination(pageRaw, pageSizeRaw);
+    const where = eq(schema.agents.workspaceId, workspaceId);
+
+    const [{ total }] = await this.db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(schema.agents)
+      .where(where);
+
     const rows = await this.db
       .select()
       .from(schema.agents)
-      .where(eq(schema.agents.workspaceId, workspaceId));
-    return rows.map(toAgentResponse);
+      .where(where)
+      // Детерминированный порядок обязателен для пагинации; createdAt у агентов нет.
+      .orderBy(schema.agents.name)
+      .limit(limit)
+      .offset(offset);
+
+    return { items: rows.map(toAgentResponse), page, page_size: pageSize, total };
   }
 
   @Post()
