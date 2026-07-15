@@ -6,6 +6,7 @@ import {
   schema,
   getWorkspaceSettings,
   patchWorkspaceSettings,
+  seedOrchestratorAgent,
 } from '@brigadir/database';
 import {
   JiraClientFactory,
@@ -109,6 +110,10 @@ export class WorkspacesController {
     // Executors are PLATFORM-scoped (2026-07-13): workspace creation seeds
     // nothing — the global type-scoped backfill at bootstrap keeps the
     // agent-form picker non-empty.
+
+    // feature 010 (FR-018): every workspace gets a "brigadir" orchestrator,
+    // with the current default instruction copied in (FR-022, D9/D10).
+    await seedOrchestratorAgent(this.db, row.id);
 
     return this.toResponse(row.id);
   }

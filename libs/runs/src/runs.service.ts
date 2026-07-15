@@ -70,8 +70,11 @@ export class RunsService {
     extra: FinalizeExtra = {},
   ): Promise<boolean> {
     const report = ReportSchema.parse(rawReport);
+    // `routed` is a terminal SUCCESS of the orchestrator's triage turn (feature
+    // 010): the run did its job and produced a decision; the pipeline's
+    // orchestrator-completion branch then acts on it. Only `needs_human` parks.
     const status: TerminalStatus =
-      report.outcome === 'success'
+      report.outcome === 'success' || report.outcome === 'routed'
         ? 'succeeded'
         : report.outcome === 'failure'
           ? 'failed'

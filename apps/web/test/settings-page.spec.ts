@@ -34,9 +34,18 @@ async function mountAt(initialPath: string) {
 }
 
 describe('PlatformSettings — sub-nav + executors panel', () => {
-  it('/settings redirects to /settings/executors', async () => {
-    const wrapper = await mountAt('/settings');
-    expect(wrapper.vm.$route.path).toBe('/settings/executors');
+  it('/settings redirects to /settings/general', async () => {
+    setDashboardToken('test-token');
+    server.use(http.get('/api/human-tasks/count', () => HttpResponse.json({ open: 0 })));
+    server.use(
+      http.get('/api/general-settings', () =>
+        HttpResponse.json({ default_orchestrator_instruction: 'default' }),
+      ),
+    );
+    const wrapper = mountWithProviders(App, { routes, initialPath: '/settings' });
+    await wrapper.vm.$router.isReady();
+    await flush();
+    expect(wrapper.vm.$route.path).toBe('/settings/general');
   });
 
   it('renders the left sub-navigation with the active Executors item', async () => {

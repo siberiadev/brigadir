@@ -50,8 +50,12 @@ function executorLabel(ex: { type: string; name: string; config: Record<string, 
 }
 
 const a = props.agent;
+// feature 010 (FR-019): the per-workspace orchestrator is non-deletable and its
+// name is fixed; its description is the roster line shown to it in the handoff.
+const isOrchestrator = computed(() => props.agent?.is_orchestrator === true);
 const form = reactive({
   name: a?.name ?? '',
+  description: a?.description ?? '',
   instruction: a?.instruction ?? '',
   executor_id: a?.executor_id ?? '',
   trigger_status: a?.trigger_status ?? '',
@@ -139,6 +143,7 @@ function buildRequest(): AgentWriteRequest {
   return {
     workspace_id: props.workspaceId,
     name: form.name,
+    description: form.description || null,
     instruction: form.instruction,
     executor_id: form.executor_id,
     trigger_status: form.trigger_status,
@@ -217,7 +222,17 @@ defineExpose({ submit, saving });
     />
 
     <el-form-item label="Name">
-      <el-input v-model="form.name" data-test="name-input" />
+      <el-input v-model="form.name" :disabled="isOrchestrator" data-test="name-input" />
+    </el-form-item>
+
+    <el-form-item label="Description (roster line shown to the orchestrator)">
+      <el-input
+        v-model="form.description"
+        type="textarea"
+        :autosize="{ minRows: 1, maxRows: 4 }"
+        placeholder="What this agent does — the orchestrator uses this to route."
+        data-test="description-input"
+      />
     </el-form-item>
 
     <el-form-item label="Instruction">

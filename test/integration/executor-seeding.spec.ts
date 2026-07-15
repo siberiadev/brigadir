@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Test, type TestingModule } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
 import { join } from 'node:path';
-import { schema } from '@brigadir/database';
+import { schema, ORCHESTRATOR_EXECUTOR_NAME } from '@brigadir/database';
 import { BackendAppModule } from '../../apps/backend/src/app.module';
 import { startDatabase, startRedis, TEST_DASHBOARD_TOKEN, DbHarness, RedisHarness } from './harness';
 import { mockJira, type MockJira } from './mock-jira';
@@ -10,12 +10,13 @@ import { mockJira, type MockJira } from './mock-jira';
 const GOOD = { email: 'bot@acme.com', token: 'good-token' };
 
 /**
- * Platform-scoped executors (2026-07-13): creating a workspace seeds NO
- * executors — the global type-scoped bootstrap backfill (see
- * executor-backfill.spec) is the only default-seeding path, and it never
- * duplicates a type that already exists.
+ * Platform-scoped executors (2026-07-13): creating a workspace seeds NO WORKER
+ * executor defaults (claude/mock) — the global type-scoped bootstrap backfill
+ * (see executor-backfill.spec) is the only default-seeding path. Feature 010
+ * adds one exception: workspace creation seeds the orchestrator's dedicated
+ * cheap no-repo executor profile (insert-if-absent, shared platform-wide).
  */
-describe('workspace creation does not seed executors', () => {
+describe('workspace creation seeds only the orchestrator executor profile', () => {
   let db: DbHarness;
   let redis: RedisHarness;
   let app: INestApplication;
@@ -54,10 +55,10 @@ describe('workspace creation does not seed executors', () => {
     await db.db.delete(schema.executors);
   });
 
-  it('POST /api/workspaces creates the workspace and inserts zero executor rows', async () => {
+  it('POST /api/workspaces seeds only the orchestrator executor profile (no worker defaults)', async () => {
     // The bootstrap backfill already ran at app init against the (then-empty)
     // suite DB; the beforeEach wipe leaves the table empty, so any row after
-    // the create would have to come from the create path itself.
+    // the create must come from the create path itself.
     const res = await fetch(`${url}/api/workspaces`, {
       method: 'POST',
       headers: authHeaders,
@@ -73,7 +74,8 @@ describe('workspace creation does not seed executors', () => {
     });
     expect(res.status).toBe(201);
 
+    // Only the orchestrator's own profile — never the worker (claude/mock) defaults.
     const rows = await db.db.select().from(schema.executors);
-    expect(rows).toHaveLength(0);
+    expect(rows.map((r) => r.name)).toEqual([ORCHESTRATOR_EXECUTOR_NAME]);
   });
 });

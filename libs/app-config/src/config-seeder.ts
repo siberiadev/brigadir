@@ -1,6 +1,6 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
-import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
+import { DRIZZLE, type BrigadirDb, schema, seedOrchestratorAgent } from '@brigadir/database';
 import type { AgentsConfig } from '@brigadir/contracts';
 import { AGENTS_CONFIG } from './agents-config.provider';
 
@@ -153,6 +153,10 @@ export class ConfigSeeder {
           .returning({ id: schema.agents.id });
         agentIds[agent.name] = row.id;
       }
+
+      // feature 010 (FR-018): ensure the per-workspace "brigadir" orchestrator
+      // exists (insert-if-absent, its own cheap no-repo executor profile).
+      await seedOrchestratorAgent(tx, workspaceId);
 
       this.logger.log(
         `${inserted ? 'seeded' : 'reconciled'} workspace "${workspaceName}" (insert-if-absent: ${Object.keys(executorIds).length} executors, ${Object.keys(agentIds).length} agents)`,

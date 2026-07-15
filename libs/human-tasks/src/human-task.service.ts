@@ -37,6 +37,22 @@ export class HumanTaskService {
     private readonly jiraFactory: JiraClientFactory,
   ) {}
 
+  /**
+   * Non-blocking human task from a pipeline fallback (feature 010, FR-005/009/
+   * 010) — the triage-limit, routing-override, and orchestrator-failure paths.
+   * Delegates to {@link createFromRequest} with `blocking=false`: it queues the
+   * task (deduped to one open task per run) and never parks the run or moves the
+   * ticket (the ticket already sits in its failure status). `title`/`details`
+   * must already be scrubbed by the caller (system-composed here, or read back
+   * from an already-scrubbed report field).
+   */
+  async createNonBlocking(
+    runId: string,
+    input: { kind: HumanTaskKind; title: string; details?: string },
+  ): Promise<CreateHumanTaskResult> {
+    return this.createFromRequest(runId, { ...input, blocking: false });
+  }
+
   async createFromRequest(runId: string, input: CreateHumanTaskInput): Promise<CreateHumanTaskResult> {
     const [run] = await this.db
       .select({

@@ -10,6 +10,9 @@ export const ResolveHumanTaskSchema = z
     action: z.enum(['resume', 'done_manually', 'dismiss']),
     answer: z.string().max(4000).optional(),
     resolved_by: z.string().max(200).optional(),
+    // feature 010 (FR-015): resume can target a DIFFERENT enabled worker agent
+    // in the same workspace. Absent ⇒ resume the original agent (attempt+1).
+    target_agent_id: z.string().uuid().optional(),
   })
   .strict();
 

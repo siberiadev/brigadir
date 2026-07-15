@@ -10,9 +10,31 @@ import { z } from 'zod';
  * outcome=needs_human REQUIRES human_task (Constitution Principle IV).
  */
 
-export const REPORT_OUTCOMES = ['success', 'failure', 'needs_human'] as const;
+export const REPORT_OUTCOMES = ['success', 'failure', 'needs_human', 'routed'] as const;
 export const CHECK_STATUSES = ['pass', 'fail', 'skip', 'warn'] as const;
 export const HUMAN_TASK_KINDS = ['question', 'blocker', 'review'] as const;
+
+/**
+ * Routing payload (feature 010, FR-001) — required when `outcome==='routed'`.
+ * `target_agent` is a NAME resolved to an agent id in the pipeline (validated
+ * there, not in the schema — orchestrator-vs-worker is workspace state, FR-002).
+ * `task` passes the secret scrubber before persistence/Jira like every other
+ * report field (FR-003).
+ */
+export const ReportRoutingSchema = z
+  .object({
+    target_agent: z
+      .string()
+      .max(200)
+      .describe('Name of the enabled worker agent to hand the ticket back to.'),
+    task: z
+      .string()
+      .max(4000)
+      .describe(
+        'Self-contained rework task in GitHub-flavored Markdown, framed as a fix of existing work.',
+      ),
+  })
+  .strict();
 
 export const ReportCheckSchema = z
   .object({
@@ -57,6 +79,7 @@ export const ReportSchema = z
     summary: z.string().max(2000),
     checks: z.array(ReportCheckSchema).max(50),
     human_task: ReportHumanTaskSchema.optional(),
+    routing: ReportRoutingSchema.optional(),
     artifacts: ReportArtifactsSchema.optional(),
   })
   .strict()
@@ -68,9 +91,17 @@ export const ReportSchema = z
         message: 'human_task is required when outcome is "needs_human"',
       });
     }
+    if (report.outcome === 'routed' && report.routing === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['routing'],
+        message: 'routing is required when outcome is "routed"',
+      });
+    }
   });
 
 export type ReportCheck = z.infer<typeof ReportCheckSchema>;
 export type ReportHumanTask = z.infer<typeof ReportHumanTaskSchema>;
+export type ReportRouting = z.infer<typeof ReportRoutingSchema>;
 export type AgentReport = z.infer<typeof ReportSchema>;
 export type HumanTaskKind = (typeof HUMAN_TASK_KINDS)[number];

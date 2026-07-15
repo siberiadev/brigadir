@@ -48,6 +48,8 @@ describe('migration 0001_jira_board (T037/T038)', () => {
       [
         'agents',
         'executors',
+        // feature 010 (migration 0004): platform-global key-value settings.
+        'global_settings',
         'human_tasks',
         'run_checks',
         'run_events',

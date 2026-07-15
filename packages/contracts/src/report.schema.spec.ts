@@ -63,4 +63,51 @@ describe('ReportSchema v1', () => {
     const r = { ...baseSuccess, schema_version: 2 };
     expect(ReportSchema.safeParse(r).success).toBe(false);
   });
+
+  describe('routed outcome (feature 010, FR-001)', () => {
+    it('accepts routed when routing is present', () => {
+      const r = {
+        ...baseSuccess,
+        outcome: 'routed' as const,
+        routing: { target_agent: 'Developer', task: 'Fix the failing lint step.' },
+      };
+      expect(ReportSchema.safeParse(r).success).toBe(true);
+    });
+
+    it('rejects routed without routing (mirrors needs_human rule)', () => {
+      const r = { ...baseSuccess, outcome: 'routed' as const };
+      const res = ReportSchema.safeParse(r);
+      expect(res.success).toBe(false);
+      if (!res.success) {
+        expect(res.error.issues.some((i) => i.path.join('.') === 'routing')).toBe(true);
+      }
+    });
+
+    it('rejects routing.target_agent > 200 chars', () => {
+      const r = {
+        ...baseSuccess,
+        outcome: 'routed' as const,
+        routing: { target_agent: 'a'.repeat(201), task: 'x' },
+      };
+      expect(ReportSchema.safeParse(r).success).toBe(false);
+    });
+
+    it('rejects routing.task > 4000 chars', () => {
+      const r = {
+        ...baseSuccess,
+        outcome: 'routed' as const,
+        routing: { target_agent: 'Developer', task: 'a'.repeat(4001) },
+      };
+      expect(ReportSchema.safeParse(r).success).toBe(false);
+    });
+
+    it('rejects unknown keys inside routing (.strict())', () => {
+      const r = {
+        ...baseSuccess,
+        outcome: 'routed' as const,
+        routing: { target_agent: 'Developer', task: 'x', priority: 'high' },
+      };
+      expect(ReportSchema.safeParse(r).success).toBe(false);
+    });
+  });
 });

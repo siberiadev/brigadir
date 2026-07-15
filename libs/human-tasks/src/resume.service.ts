@@ -12,7 +12,16 @@ export type ResolveResult =
   | { outcome: 'resumed'; newRunId: string }
   | { outcome: 'closed' }
   | { outcome: 'not_found' }
-  | { outcome: 'not_open' };
+  | { outcome: 'not_open' }
+  // feature 010 (FR-015, AC US3-3): target_agent_id present but invalid
+  // (missing / disabled / other workspace) — nothing changes.
+  | { outcome: 'invalid_target' };
+
+/** The resolved, validated resume target agent (feature 010). */
+interface ResumeTarget {
+  id: string;
+  executorType: string;
+}
 
 /**
  * ResumeService (FR-016/017/018/019). Resolving a blocking human task:
@@ -53,7 +62,14 @@ export class ResumeService {
         await this.closeTask(taskId, 'resolved', input);
         return { outcome: 'closed' };
       }
-      const newRunId = await this.resumeRun(task.runId, input.answer);
+      // feature 010 (FR-015): an optional target agent. Validate BEFORE touching
+      // any row so an invalid id changes nothing (AC US3-3).
+      let target: ResumeTarget | undefined;
+      if (input.target_agent_id) {
+        target = await this.resolveTargetAgent(task.workspaceId, input.target_agent_id);
+        if (!target) return { outcome: 'invalid_target' };
+      }
+      const newRunId = await this.resumeRun(task.runId, input.answer, taskId, target);
       if (!newRunId) return { outcome: 'not_open' };
       await this.closeTask(taskId, 'resolved', input);
       return { outcome: 'resumed', newRunId };
@@ -86,7 +102,32 @@ export class ResumeService {
       .where(eq(schema.humanTasks.id, taskId));
   }
 
-  private async resumeRun(parkedRunId: string, answer: string | undefined): Promise<string | undefined> {
+  /** Target validity (FR-015): exists ∧ enabled ∧ same workspace. */
+  private async resolveTargetAgent(
+    workspaceId: string,
+    agentId: string,
+  ): Promise<ResumeTarget | undefined> {
+    const [row] = await this.db
+      .select({ id: schema.agents.id, executorType: schema.executors.type })
+      .from(schema.agents)
+      .innerJoin(schema.executors, eq(schema.agents.executorId, schema.executors.id))
+      .where(
+        and(
+          eq(schema.agents.id, agentId),
+          eq(schema.agents.workspaceId, workspaceId),
+          eq(schema.agents.enabled, true),
+        ),
+      )
+      .limit(1);
+    return row;
+  }
+
+  private async resumeRun(
+    parkedRunId: string,
+    answer: string | undefined,
+    humanTaskId: string,
+    target: ResumeTarget | undefined,
+  ): Promise<string | undefined> {
     const [parked] = await this.db
       .select({
         workspaceId: schema.runs.workspaceId,
@@ -99,6 +140,13 @@ export class ResumeService {
       .where(eq(schema.runs.id, parkedRunId))
       .limit(1);
     if (!parked) return undefined;
+
+    // A different chosen agent runs on its own executor profile with the attempt
+    // count restarted at 1 (FR-015); resuming the original agent keeps attempt+1.
+    const differentAgent = target !== undefined && target.id !== parked.agentId;
+    const newAgentId = target?.id ?? parked.agentId;
+    const newExecutorType = target?.executorType ?? parked.executorType;
+    const newAttempt = differentAgent ? 1 : parked.attempt + 1;
 
     let newRunId: string | undefined;
     await this.db.transaction(async (tx) => {
@@ -114,11 +162,17 @@ export class ResumeService {
         .values({
           workspaceId: parked.workspaceId,
           ticketId: parked.ticketId,
-          agentId: parked.agentId,
-          executorType: parked.executorType,
+          agentId: newAgentId,
+          executorType: newExecutorType,
           status: 'queued',
-          attempt: parked.attempt + 1,
-          triggerEvent: { source: 'human-resume', resolution: answer ?? null },
+          attempt: newAttempt,
+          // human_task_id lets the handoff section render the question + answer
+          // (FR-016); the answer also rides in `resolution` (legacy consumers).
+          triggerEvent: {
+            source: 'human-resume',
+            resolution: answer ?? null,
+            human_task_id: humanTaskId,
+          },
         })
         .returning({ id: schema.runs.id });
       newRunId = inserted.id;
@@ -135,10 +189,10 @@ export class ResumeService {
     // guarantees at most one enqueue per successful resume (Constitution II
     // level 3, DB-authoritative) — a concurrent duplicate resolve() call
     // sees 0 superseded rows and bails before ever reaching this line.
-    const queue = this.moduleRef.get<Queue>(getQueueToken(runQueueName(parked.executorType)), { strict: false });
+    const queue = this.moduleRef.get<Queue>(getQueueToken(runQueueName(newExecutorType)), { strict: false });
     await queue.add('run', { runId: newRunId }, { jobId: newRunId });
 
-    await this.transitionToRunning(parked.workspaceId, parked.agentId, parked.ticketId, newRunId);
+    await this.transitionToRunning(parked.workspaceId, newAgentId, parked.ticketId, newRunId);
 
     return newRunId;
   }

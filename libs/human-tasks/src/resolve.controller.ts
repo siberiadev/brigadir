@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   ConflictException,
   Controller,
@@ -36,6 +37,11 @@ export class ResolveController {
         throw new NotFoundException({ ok: false, error: 'human task not found' });
       case 'not_open':
         throw new ConflictException({ ok: false, error: 'task not open, or its run is no longer awaiting_human' });
+      case 'invalid_target':
+        throw new BadRequestException({
+          ok: false,
+          error: 'target_agent_id is not a valid, enabled agent in this workspace',
+        });
       case 'resumed':
         return { ok: true, action: 'resume', newRunId: result.newRunId };
       case 'closed':

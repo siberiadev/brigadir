@@ -24,6 +24,10 @@ export const HumanTaskTicketRefSchema = z
 
 export const HumanTaskAgentRefSchema = z.object({ id: z.string(), name: z.string() }).strict();
 
+export const HumanTaskWorkspaceRefSchema = z
+  .object({ id: z.string(), name: z.string() })
+  .strict();
+
 export const HumanQueueItemSchema = z
   .object({
     id: z.string(),
@@ -33,6 +37,9 @@ export const HumanQueueItemSchema = z
     blocking: z.boolean(),
     ticket: HumanTaskTicketRefSchema,
     agent: HumanTaskAgentRefSchema.nullable(),
+    // feature 010 (FR-017): the task's workspace, so the resume picker can load
+    // that workspace's enabled non-orchestrator agents.
+    workspace: HumanTaskWorkspaceRefSchema,
     run_id: z.string().nullable(),
     created_at: z.string(),
     // closed-only fields (present when status=closed):

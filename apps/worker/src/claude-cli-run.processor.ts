@@ -7,8 +7,8 @@ import { BRIGADIR_JWT_SECRET } from '@brigadir/app-config';
 import { runQueueName, backoffStrategy } from '@brigadir/queues';
 import { RunsService, mapExitStatusToRunStatus } from '@brigadir/runs';
 import { ExecutorRegistry, type ExecutorResult, type RunContext } from '@brigadir/executors';
-import { PipelineService } from '@brigadir/pipeline';
-import { signRunToken } from '@brigadir/contracts';
+import { PipelineService, buildHandoffSection } from '@brigadir/pipeline';
+import { signRunToken, type TriggerEvent } from '@brigadir/contracts';
 import { JiraClientFactory } from '@brigadir/jira';
 import { applyExecutorConcurrency, startConcurrencyReapply } from './executor-concurrency';
 import { checkExecutorGate } from './executor-gate';
@@ -167,10 +167,15 @@ export class ClaudeCliRunProcessor
         .catch(() => {});
     }, loaded.cancelPollMs);
 
+    // feature 010 (FR-012/014): prepend the ephemeral handoff section for every
+    // handoff source — triage, rework, and human-resume (the last replaces the
+    // legacy instructionWithResumeAnswer append). Returns '' otherwise.
+    const handoff = await buildHandoffSection(loaded.triggerEvent as TriggerEvent | null, this.db);
+
     let result: ExecutorResult;
     try {
       const executor = this.registry.resolve(loaded.executorType);
-      result = await executor.run(this.buildContext(loaded, detail), controller.signal);
+      result = await executor.run(this.buildContext(loaded, detail, handoff), controller.signal);
     } catch (err) {
       result = {
         exitStatus: 'crashed',
@@ -355,7 +360,7 @@ export class ClaudeCliRunProcessor
     };
   }
 
-  private buildContext(loaded: LoadedRun, detail: TicketDetail): RunContext {
+  private buildContext(loaded: LoadedRun, detail: TicketDetail, handoff: string): RunContext {
     const httpBaseUrl = process.env.BRIGADIR_CALLBACK_BASE_URL ?? DEFAULT_CALLBACK_BASE_URL;
     // Real per-run JWT only minted for callback-wired runs (contracts/run-jwt.md);
     // non-callback runs never call the callback API, so the placeholder is inert.
@@ -379,7 +384,7 @@ export class ClaudeCliRunProcessor
         description: detail.description,
         url: detail.url,
       },
-      instruction: this.instructionWithResumeAnswer(loaded),
+      instruction: this.assembleInstruction(loaded, handoff),
       workspaceDir: null,
       callback: { httpBaseUrl, runToken },
       limits: {
@@ -391,16 +396,24 @@ export class ClaudeCliRunProcessor
     };
   }
 
+  /**
+   * A continuation reuses the existing branch/worktree instead of cutting a
+   * fresh one. Both a human-resume and a rework are continuations of prior work
+   * on the same ticket (feature 010, FR-014/T052).
+   */
   private isResumedAttempt(loaded: LoadedRun): boolean {
-    return (loaded.triggerEvent as { source?: string } | null)?.source === 'human-resume';
+    const source = (loaded.triggerEvent as { source?: string } | null)?.source;
+    return source === 'human-resume' || source === 'rework';
   }
 
-  /** FR-018: a resumed attempt's instruction context MUST include the human's answer. */
-  private instructionWithResumeAnswer(loaded: LoadedRun): string {
-    const trigger = loaded.triggerEvent as { source?: string; resolution?: string | null } | null;
-    if (trigger?.source !== 'human-resume' || !trigger.resolution) {
-      return loaded.instruction;
-    }
-    return `${loaded.instruction}\n\n## Answer to your earlier question\nA human answered your escalation:\n${trigger.resolution}`;
+  /**
+   * Assemble the run instruction: the stored agent instruction, prefixed with
+   * the ephemeral handoff section (triage / rework / human-resume — FR-012/014).
+   * The human's answer arrives via the handoff's "human answer" block, replacing
+   * the legacy resume-answer append. The stored `instruction` row is never
+   * modified (SC-002).
+   */
+  private assembleInstruction(loaded: LoadedRun, handoff: string): string {
+    return handoff ? `${handoff}\n\n${loaded.instruction}` : loaded.instruction;
   }
 }

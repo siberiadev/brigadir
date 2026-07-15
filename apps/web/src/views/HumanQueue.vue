@@ -8,6 +8,7 @@ import { relativeAge } from '../utils/date';
 import { ApiError } from '../api/client';
 import ListPagination from '../components/ListPagination.vue';
 import MarkdownText from '../components/MarkdownText.vue';
+import ResumeAgentPicker from '../components/ResumeAgentPicker.vue';
 
 // The global (cross-workspace) needs-human queue (US1). Open tasks are
 // oldest-first (longest-waiting on top); history shows the closed tasks with
@@ -24,7 +25,7 @@ const total = computed(() => activeQuery.value.data.value?.total ?? 0);
 bindTotal(total);
 
 // Per-task resolution form state, keyed by task id.
-type Draft = { action: ResolveHumanTaskInput['action']; answer: string };
+type Draft = { action: ResolveHumanTaskInput['action']; answer: string; targetAgentId?: string };
 const drafts = reactive<Record<string, Draft>>({});
 function draftFor(id: string): Draft {
   if (!drafts[id]) drafts[id] = { action: 'resume', answer: '' };
@@ -40,6 +41,15 @@ async function submit(item: HumanQueueItem) {
   try {
     const body: ResolveHumanTaskInput = { action: draft.action };
     if (draft.answer.trim()) body.answer = draft.answer.trim();
+    // FR-015: a resume can target a different worker agent. Only send it when it
+    // actually differs from the run's original agent.
+    if (
+      draft.action === 'resume' &&
+      draft.targetAgentId &&
+      draft.targetAgentId !== item.agent?.id
+    ) {
+      body.target_agent_id = draft.targetAgentId;
+    }
     await resolve.mutateAsync({ id: item.id, body });
     delete drafts[item.id];
     ElMessage.success(
@@ -110,6 +120,15 @@ const kindTagType: Record<string, string> = {
             placeholder="Answer / note (optional)"
             :data-test="`answer-${item.id}`"
           />
+          <!-- FR-017: on a blocking task, choose which enabled worker agent resumes. -->
+          <ResumeAgentPicker
+            v-if="item.blocking && draftFor(item.id).action === 'resume'"
+            v-model="draftFor(item.id).targetAgentId"
+            :workspace-id="item.workspace.id"
+            :original-agent-id="item.agent?.id ?? null"
+            :task-id="item.id"
+            class="agent-picker-row"
+          />
           <div class="task-actions">
             <el-radio-group v-model="draftFor(item.id).action" :data-test="`action-${item.id}`">
               <el-radio value="resume">Resume</el-radio>
@@ -175,6 +194,9 @@ const kindTagType: Record<string, string> = {
 .details {
   margin: $space-sm 0;
   color: var(--el-text-color-regular);
+}
+.agent-picker-row {
+  margin-top: $space-sm;
 }
 .task-actions {
   display: flex;

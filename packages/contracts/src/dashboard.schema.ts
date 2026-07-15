@@ -158,6 +158,8 @@ export const AgentWriteRequestSchema = z
   .object({
     workspace_id: z.string().min(1),
     name: z.string().min(1),
+    // feature 010 (FR-020): optional roster line shown to the orchestrator.
+    description: z.string().max(2000).nullable().optional(),
     instruction: z.string().min(1),
     executor_id: z.string().min(1),
     // NO model field: the executor PROFILE's model is the single source of
@@ -173,6 +175,10 @@ export const AgentWriteRequestSchema = z
     max_budget_usd: z.number().positive().nullable().optional(),
     max_attempts: z.number().int().min(1).default(2),
     behavior: AgentBehaviorRequestSchema.default({}),
+    // feature 010 (FR-019): enable/disable an agent via update — disabling the
+    // orchestrator is the supported off-switch for automated triage. Absent ⇒
+    // unchanged on update; create uses the DB default (true).
+    enabled: z.boolean().optional(),
   })
   .strict();
 export type AgentWriteRequest = z.infer<typeof AgentWriteRequestSchema>;
@@ -183,6 +189,11 @@ export const AgentResponseSchema = z
     workspace_id: z.string(),
     executor_id: z.string(),
     name: z.string(),
+    // feature 010 (FR-020): roster description (nullable).
+    description: z.string().nullable(),
+    // feature 010 (FR-018/019): the per-workspace orchestrator marker — the UI
+    // hides delete and excludes it from the resume picker.
+    is_orchestrator: z.boolean(),
     instruction: z.string(),
     trigger_status: z.string().nullable(),
     trigger_jql: z.string().nullable(),

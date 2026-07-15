@@ -1,5 +1,5 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -118,29 +118,41 @@ export class ClaudeCliExecutor implements AgentExecutor {
   ) {}
 
   async run(ctx: RunContext, signal: AbortSignal): Promise<ExecutorResult> {
-    const { runtimeConfig, repo, branchPrefix, workspaceId, apiKey } = await this.loadRunConfig(
-      ctx.runId,
-    );
+    const { runtimeConfig, repo, branchPrefix, workspaceId, apiKey, noRepo } =
+      await this.loadRunConfig(ctx.runId);
 
     let worktree: { worktreeDir: string; branch: string; cacheDir: string };
-    try {
-      worktree = await prepare(
-        repo,
-        ctx.runId,
-        ctx.ticket.key,
-        branchPrefix,
-        runtimeConfig.worktreeRoot,
-        runtimeConfig.repoCacheRoot,
-        { reuseBranch: ctx.isResumedAttempt === true },
-      );
-    } catch (err) {
-      return { exitStatus: 'crashed', diagnostics: err instanceof Error ? err.message : String(err) };
-    }
+    if (noRepo) {
+      // feature 010 (FR-018, Constitution V): a no-repository run (the
+      // orchestrator's triage) runs from a scratch temp dir — no clone, no
+      // worktree, no git credentials in reach. It reads only the system's own
+      // run history (via the handoff section already assembled into the prompt).
+      try {
+        worktree = { worktreeDir: await mkdtemp(join(tmpdir(), 'brigadir-orch-')), branch: '', cacheDir: '' };
+      } catch (err) {
+        return { exitStatus: 'crashed', diagnostics: err instanceof Error ? err.message : String(err) };
+      }
+      // No `worktree_path` persisted — there is no repository worktree to inspect.
+    } else {
+      try {
+        worktree = await prepare(
+          repo!,
+          ctx.runId,
+          ctx.ticket.key,
+          branchPrefix,
+          runtimeConfig.worktreeRoot,
+          runtimeConfig.repoCacheRoot,
+          { reuseBranch: ctx.isResumedAttempt === true },
+        );
+      } catch (err) {
+        return { exitStatus: 'crashed', diagnostics: err instanceof Error ? err.message : String(err) };
+      }
 
-    await this.db
-      .update(schema.runs)
-      .set({ worktreePath: worktree.worktreeDir })
-      .where(eq(schema.runs.id, ctx.runId));
+      await this.db
+        .update(schema.runs)
+        .set({ worktreePath: worktree.worktreeDir })
+        .where(eq(schema.runs.id, ctx.runId));
+    }
 
     let mcpConfig: WrittenMcpConfig | undefined;
     try {
@@ -170,7 +182,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
       );
     } catch (err) {
       await mcpConfig?.cleanup();
-      await cleanup(worktree.cacheDir, worktree.worktreeDir, { keep: runtimeConfig.keepFailedWorktrees });
+      await this.cleanupWorkspace(worktree, noRepo, runtimeConfig.keepFailedWorktrees, ctx.runId);
       return { exitStatus: 'crashed', diagnostics: err instanceof Error ? err.message : String(err) };
     }
 
@@ -182,15 +194,37 @@ export class ClaudeCliExecutor implements AgentExecutor {
       this.logger.error(`mcp-config cleanup failed for run ${ctx.runId}: ${String(err)}`);
     }
 
-    try {
-      await cleanup(worktree.cacheDir, worktree.worktreeDir, {
-        keep: runtimeConfig.keepFailedWorktrees && runFailed(result),
-      });
-    } catch (err) {
-      this.logger.error(`worktree cleanup failed for run ${ctx.runId}: ${String(err)}`);
-    }
+    await this.cleanupWorkspace(
+      worktree,
+      noRepo,
+      runtimeConfig.keepFailedWorktrees && runFailed(result),
+      ctx.runId,
+    );
 
     return result;
+  }
+
+  /**
+   * Tear down the run's workspace: a git worktree (normal runs) or the scratch
+   * temp dir (no-repo orchestrator runs — feature 010). Best-effort; a cleanup
+   * fault is logged, never fatal.
+   */
+  private async cleanupWorkspace(
+    worktree: { worktreeDir: string; cacheDir: string },
+    noRepo: boolean,
+    keep: boolean,
+    runId: string,
+  ): Promise<void> {
+    try {
+      if (noRepo) {
+        // No git worktree to prune — just remove the scratch dir.
+        if (!keep) await rm(worktree.worktreeDir, { recursive: true, force: true });
+      } else {
+        await cleanup(worktree.cacheDir, worktree.worktreeDir, { keep });
+      }
+    } catch (err) {
+      this.logger.error(`workspace cleanup failed for run ${runId}: ${String(err)}`);
+    }
   }
 
   /** Resolves to the built `packages/mcp-server/dist/main.js`; overridable for deployments/tests. */
@@ -399,10 +433,11 @@ export class ClaudeCliExecutor implements AgentExecutor {
 
   private async loadRunConfig(runId: string): Promise<{
     runtimeConfig: ReturnType<typeof resolveClaudeCliConfig>;
-    repo: WorktreeRepo;
+    repo: WorktreeRepo | null;
     branchPrefix: string;
     workspaceId: string;
     apiKey: string | undefined;
+    noRepo: boolean;
   }> {
     const [row] = await this.db
       .select({
@@ -427,7 +462,10 @@ export class ClaudeCliExecutor implements AgentExecutor {
       allowed_tools?: string[];
       branch_prefix?: string;
       repository?: string;
+      workspace_mode?: string;
     };
+    // feature 010 (FR-018): the orchestrator runs with NO repository workspace.
+    const noRepo = behavior.workspace_mode === 'none';
     // Named runner profiles (2026-07-14): the PROFILE's model is the single
     // source of truth — resolveClaudeCliConfig reads it from the executor
     // config only, so a legacy `behavior.model` on the agent is ignored here
@@ -435,8 +473,11 @@ export class ClaudeCliExecutor implements AgentExecutor {
     const runtimeConfig = resolveClaudeCliConfig(rawConfig, behavior.allowed_tools ?? []);
 
     // Platform-scoped executors (2026-07-13): the repository is the AGENT's
-    // choice (behavior.repository), else the run workspace's default repo.
-    const repo = await this.resolveRepository(row.workspaceId, resolveRepositoryName(behavior));
+    // choice (behavior.repository), else the run workspace's default repo. A
+    // no-repository run resolves none (skips clone/worktree entirely).
+    const repo = noRepo
+      ? null
+      : await this.resolveRepository(row.workspaceId, resolveRepositoryName(behavior));
 
     // Profile API key (write-only at the API; only the runtime opens it). A
     // blob that fails to open is a hard error — running billed-by-subscription
@@ -459,6 +500,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
       branchPrefix: behavior.branch_prefix ?? 'run',
       workspaceId: row.workspaceId,
       apiKey,
+      noRepo,
     };
   }
 

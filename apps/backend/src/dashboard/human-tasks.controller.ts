@@ -55,6 +55,8 @@ export class HumanTasksController {
         resolvedAt: schema.humanTasks.resolvedAt,
         ticketKey: schema.tickets.jiraKey,
         siteUrl: schema.workspaces.jiraSiteUrl,
+        workspaceId: schema.workspaces.id,
+        workspaceName: schema.workspaces.name,
         agentId: schema.agents.id,
         agentName: schema.agents.name,
       })
@@ -88,6 +90,7 @@ export class HumanTasksController {
           blocking: r.blocking,
           ticket: { key: r.ticketKey, jira_url: `${r.siteUrl.replace(/\/+$/, '')}/browse/${r.ticketKey}` },
           agent: r.agentId && r.agentName ? { id: r.agentId, name: r.agentName } : null,
+          workspace: { id: r.workspaceId, name: r.workspaceName },
           run_id: r.runId ?? null,
           created_at: r.createdAt.toISOString(),
         };

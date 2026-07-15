@@ -54,8 +54,12 @@ describe('config source-of-truth flip (T130)', () => {
     await seedWithYaml(VALID_YAML); // second boot
 
     expect(await db.db.select().from(schema.workspaces)).toHaveLength(1);
-    expect(await db.db.select().from(schema.executors)).toHaveLength(1);
-    expect(await db.db.select().from(schema.agents)).toHaveLength(1);
+    // feature 010: the yaml executor + the seeded orchestrator's own cheap
+    // no-repo executor profile ("brigadir-orchestrator"); the yaml agent + the
+    // seeded "brigadir" orchestrator. Both seeded insert-if-absent → the second
+    // boot adds nothing (idempotent: still 2, not 4).
+    expect(await db.db.select().from(schema.executors)).toHaveLength(2);
+    expect(await db.db.select().from(schema.agents)).toHaveLength(2);
   });
 
   it('(b) DB rows differing from yaml survive the boot unchanged (DB wins)', async () => {
@@ -106,8 +110,9 @@ describe('config source-of-truth flip (T130)', () => {
     expect(agentAfter.instruction).toBe('EDITED VIA UI — must not be overwritten'); // DB wins
     expect(agentAfter.statusSuccess).toBe('Shipped');
 
-    // still exactly one row set (no duplicate insert)
-    expect(await db.db.select().from(schema.agents)).toHaveLength(1);
+    // still exactly the pre-existing 'implementer' (DB wins, no duplicate) plus
+    // the seeded 'brigadir' orchestrator (feature 010).
+    expect(await db.db.select().from(schema.agents)).toHaveLength(2);
   });
 
   it('(c) yaml absent → the backend boots on DB-only config', async () => {

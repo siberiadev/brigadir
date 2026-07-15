@@ -1,5 +1,6 @@
 import {
   Body,
+  ConflictException,
   Controller,
   Delete,
   Get,
@@ -97,14 +98,55 @@ export class AgentsController {
     @Body() body: unknown,
   ): Promise<AgentResponse & { warnings?: ErrorIssue[] }> {
     const req = this.parse(body);
-    const { warnings } = await this.lintOrThrow(req.workspace_id, req, id);
+
+    const [existing] = await this.db
+      .select({
+        isOrchestrator: schema.agents.isOrchestrator,
+        name: schema.agents.name,
+        statusRunning: schema.agents.statusRunning,
+        statusSuccess: schema.agents.statusSuccess,
+        statusFailure: schema.agents.statusFailure,
+      })
+      .from(schema.agents)
+      .where(eq(schema.agents.id, id))
+      .limit(1);
+    if (!existing) {
+      throw validationError('Agent not found.', [
+        { path: ['id'], code: 'not_found', message: 'Agent not found.', level: 'error' },
+      ]);
+    }
 
     const values = this.toInsertValues(req);
+
+    // feature 010 (FR-019): the orchestrator's identity (name), trigger fields
+    // (never poll-triggered), and inert status placeholders are preserved; only
+    // its instruction/description/limits/behavior/enabled are editable. Its
+    // status-cycle isn't board-mapped, so the trigger-status lint is skipped.
+    if (existing.isOrchestrator) {
+      const [row] = await this.db
+        .update(schema.agents)
+        .set({
+          executorId: values.executorId,
+          description: values.description,
+          instruction: values.instruction,
+          behavior: values.behavior,
+          timeoutMinutes: values.timeoutMinutes,
+          maxBudgetUsd: values.maxBudgetUsd,
+          maxAttempts: values.maxAttempts,
+          ...(req.enabled !== undefined ? { enabled: req.enabled } : {}),
+        })
+        .where(eq(schema.agents.id, id))
+        .returning();
+      return toAgentResponse(row);
+    }
+
+    const { warnings } = await this.lintOrThrow(req.workspace_id, req, id);
     const [row] = await this.db
       .update(schema.agents)
       .set({
         executorId: values.executorId,
         name: values.name,
+        description: values.description,
         instruction: values.instruction,
         triggerStatus: values.triggerStatus,
         triggerJql: values.triggerJql,
@@ -115,6 +157,7 @@ export class AgentsController {
         timeoutMinutes: values.timeoutMinutes,
         maxBudgetUsd: values.maxBudgetUsd,
         maxAttempts: values.maxAttempts,
+        ...(req.enabled !== undefined ? { enabled: req.enabled } : {}),
       })
       .where(eq(schema.agents.id, id))
       .returning();
@@ -123,6 +166,20 @@ export class AgentsController {
 
   @Delete(':id')
   async remove(@Param('id') id: string): Promise<{ soft_deleted: boolean }> {
+    // feature 010 (FR-019): the orchestrator is non-deletable — disable it
+    // instead (the supported off-switch). Reject with 409.
+    const [agent] = await this.db
+      .select({ isOrchestrator: schema.agents.isOrchestrator })
+      .from(schema.agents)
+      .where(eq(schema.agents.id, id))
+      .limit(1);
+    if (agent?.isOrchestrator) {
+      throw new ConflictException({
+        ok: false,
+        error: 'The orchestrator agent cannot be deleted; disable it instead.',
+      });
+    }
+
     const runs = await this.db
       .select({ id: schema.runs.id })
       .from(schema.runs)
@@ -240,6 +297,7 @@ export class AgentsController {
       workspaceId: req.workspace_id,
       executorId: req.executor_id,
       name: req.name,
+      description: req.description ?? null,
       instruction: req.instruction,
       triggerStatus: req.trigger_status,
       triggerJql: req.trigger_jql ?? null,
@@ -276,6 +334,8 @@ function toAgentResponse(a: AgentRow): AgentResponse {
     workspace_id: a.workspaceId,
     executor_id: a.executorId,
     name: a.name,
+    description: a.description ?? null,
+    is_orchestrator: a.isOrchestrator,
     instruction: a.instruction,
     trigger_status: a.triggerStatus,
     trigger_jql: a.triggerJql,

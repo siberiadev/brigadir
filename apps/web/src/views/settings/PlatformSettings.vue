@@ -10,8 +10,9 @@ import { useRoute, RouterLink, RouterView } from 'vue-router';
 type SettingsNavItem = { key: string; label: string; to: string };
 
 const navItems: SettingsNavItem[] = [
+  { key: 'general', label: 'General', to: '/settings/general' },
   { key: 'executors', label: 'Executors', to: '/settings/executors' },
-  // Future: { key: 'general', label: 'General', to: '/settings/general' }, Users, Usage…
+  // Future: Users, Usage…
 ];
 
 const route = useRoute();

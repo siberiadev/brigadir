@@ -16,6 +16,9 @@ const PANEL_BY_OUTCOME = {
   success: { panelType: 'info', heading: 'Run succeeded' },
   failure: { panelType: 'error', heading: 'Run failed' },
   needs_human: { panelType: 'warning', heading: 'Run needs a human' },
+  // feature 010 (FR-024): an orchestrator triage run that routed the ticket
+  // back to a worker with a rework task.
+  routed: { panelType: 'info', heading: 'Routed for rework' },
 } as const;
 
 export function buildRunComment(report: AgentReport): ADFDoc {
@@ -29,6 +32,12 @@ export function buildRunComment(report: AgentReport): ADFDoc {
     },
     paragraph(report.summary),
   ];
+
+  // Name the routing target + task on a `routed` report (FR-024). Free text
+  // (`task`) is already scrubbed upstream like every other report field.
+  if (report.outcome === 'routed' && report.routing) {
+    content.push(paragraph(`→ ${report.routing.target_agent}: ${report.routing.task}`));
+  }
 
   if (report.checks.length > 0) {
     content.push({

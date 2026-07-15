@@ -7,3 +7,4 @@ export * from './run-checks';
 export * from './run-events';
 export * from './human-tasks';
 export * from './webhook-events';
+export * from './global-settings';

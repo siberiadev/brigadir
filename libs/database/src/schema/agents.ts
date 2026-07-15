@@ -26,7 +26,13 @@ export const agents = pgTable(
       .notNull()
       .references(() => executors.id),
     name: text('name').notNull(),
+    // Roster line shown to the orchestrator in the handoff (FR-020). Nullable.
+    description: text('description'),
     instruction: text('instruction').notNull(),
+    // Marks the per-workspace orchestrator ("brigadir"): never poll-triggered,
+    // non-deletable, excluded from routing targets and the resume picker
+    // (FR-018/019). Explicit column (not a behavior flag) so it's queryable.
+    isOrchestrator: boolean('is_orchestrator').notNull().default(false),
     triggerStatus: text('trigger_status'),
     triggerJql: text('trigger_jql'),
     statusRunning: text('status_running'),

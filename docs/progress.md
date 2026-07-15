@@ -653,3 +653,90 @@ callback-completion gets a regression test (complete → sleep 1s ≫
 cancelPollMs → stream result) that fails without the grace and proves
 cost/usage land with it. `FakeClaudeCallbackStep` widened to the
 sleep/stream union in the harness.
+
+---
+
+## Iteration 14 — Orchestrator-based blocked-ticket routing ("brigadir")
+
+Spec: `specs/010-orchestrator-routing/`. Closes the loop on a terminally-failed
+worker run instead of letting the ticket die in Blocked: the pipeline auto-starts
+one in-process **triage run** for a per-workspace orchestrator agent ("brigadir"),
+which returns a new **`routed`** report outcome that either sends the ticket back
+to a worker with a written rework task or escalates to a human. A deterministic,
+pipeline-enforced rework-cycle budget (default 2, per ticket, derived from run
+history) caps the loop with human fallbacks; the Human Queue resume flow gains an
+agent picker; a platform **General settings** section holds a centrally editable
+default orchestrator instruction.
+
+Schema (migration `0004_orchestrator_routing.sql`, reviewed in `REVIEW-0004`):
+`agents.description` (nullable roster line) + `agents.is_orchestrator`
+(boolean, marker); new platform-global `global_settings(key, value, updated_at)`
+k/v table. `workspaces.settings.rework_max` (jsonb, default 2) — no DDL.
+
+Contracts: `ReportSchema` gains `routed` + a `routing {target_agent, task}`
+payload with the `routed⇒routing` superRefine (mirrors `needs_human⇒human_task`).
+`TriggerEventSchema` fixes the pre-existing `human_resume`→`human-resume` bug
+(the resume flow always WROTE `human-resume`; the enum rejected it, crashing
+validation), adds `triage`/`rework` sources + typed handoff fields, and a
+`routed` mock scenario. New `global-settings.schema.ts`.
+
+Pipeline (`onRunFinished` is the single completion seam, extended):
+- worker completion → the existing failure transition/comment, then the **triage
+  decision** (before the marker): budget exhausted ⇒ `cycle_limit` (non-blocking
+  human task, no triage); no enabled orchestrator ⇒ `no_orchestrator` (the
+  supported off-switch — ticket stays Blocked, **no** human task, per the spec
+  Edge Case + data-model §3.2, narrowing FR-005's looser wording); else `triaged`
+  (exactly one triage run via `RunTriggerService`). Decision recorded in the
+  `jira_action` marker so drift-repair replays no-op (SC-001).
+- orchestrator completion (guarded by `is_orchestrator`, takes NO generic
+  transition — FR-007): `routed`+valid target+budget ⇒ rework run + direct
+  transition to the target's running status + routing comment; invalid target /
+  raced budget ⇒ override to a non-blocking human task with the reason;
+  `needs_human` ⇒ existing mechanism, no transition; orchestrator `failed`/
+  `timed_out` ⇒ human task, **no** re-triage ("the triager is never triaged").
+- a `routed` report from a non-orchestrator agent is treated as a failure with
+  the invalid outcome noted in the comment (FR-002).
+
+Idempotency/dedup: triage/rework/human-resume are **continuation sources** — they
+SKIP the BullMQ `deduplication` layer (`${ticketId}:${agentId}` would be swallowed
+by the RETAINED completed job under `removeOnComplete`, leaving the run stuck at
+`queued` — the same hazard `ResumeService` documents) and rely on
+`runs_one_active` (level 3). `finalizeWithReport` maps `routed`→`succeeded` (the
+orchestrator's triage turn is a terminal success).
+
+Handoff (`libs/pipeline/handoff.ts`, `buildHandoffSection(trigger, db)`): an
+EPHEMERAL, best-effort, size-bounded markdown block prepended to the assembled
+`RunContext.instruction` by both processors — never persisted, the stored agent
+`instruction` is byte-for-byte unchanged (SC-002). triage kind (failing summary +
+checks + artifacts + worker roster + cycle count + protocol), rework kind (task +
+failing context + fix-of-existing-work framing), human-resume kind (question +
+answer — replaces the legacy `instructionWithResumeAnswer` append). `rework` also
+reuses the existing branch (continuation).
+
+Resume picker: `ResolveHumanTaskSchema` gains optional `target_agent_id`;
+`ResumeService` validates (exists ∧ enabled ∧ same workspace, else 400 with
+nothing changed), creates the new run for the chosen agent with the attempt
+restarted at 1, and transitions the ticket to its running status. Human Queue
+list items carry a `workspace` ref so the UI selector loads that workspace's
+enabled non-orchestrator agents.
+
+Seeding: `seedOrchestratorAgent(db, workspaceId)` (insert-if-absent on
+`UNIQUE(workspace_id, 'brigadir')`) + `ensureOrchestratorExecutor` (a shared
+cheap **no-repository** `claude_cli` profile, haiku, `workspace_mode:'none'`) is
+called on wizard create, yaml seed, and a startup `OrchestratorBackfillService`.
+The claude_cli executor honors `behavior.workspace_mode:'none'`: no clone/worktree
+prepare, runs from a scratch temp dir, no `worktree_path`, no git creds in reach
+(Constitution V). Orchestrator delete → 409 (API guard); instruction/enabled
+edits succeed. `GET/PUT /api/general-settings` round-trips the default
+instruction (copied at workspace-creation time only — SC-006).
+
+Tests: contract (report/trigger schemas), unit (handoff kinds + degradation,
+non-orchestrator-routed rejection, routing scrub), integration under the mock
+executor — full fail→triage→route→rework→success loop + replay no-op (T010),
+US2 guards (budget/override/orchestrator-failure/needs_human), resume picker
+(T029), orchestrator lifecycle + backfill + delete-guard + default-change (T038),
+general-settings round-trip (T039). Web: General settings tab, resume agent
+picker, AgentForm description + orchestrator delete hidden. Docs: architecture §3
+(schema deltas + `global_settings`) and §6 (`routed` outcome + `routing` payload).
+
+Full suite green: 234 unit, 226 integration, 136 web.

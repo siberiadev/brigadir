@@ -118,6 +118,31 @@ describe('CallbackService (T100)', () => {
     expect(JSON.stringify(scrubbedReport)).not.toContain(secret);
   });
 
+  it('complete: scrubs routing.task before persistence (feature 010, FR-003)', async () => {
+    const finalizeWithReport = vi.fn().mockResolvedValue(true);
+    const service = new CallbackService(
+      fakeDb({ agentBehavior: {} }) as never,
+      fakeModuleRef() as never,
+      { finalizeWithReport } as unknown as RunsService,
+      { onRunFinished: vi.fn() } as unknown as PipelineService,
+      {} as unknown as HumanTaskService,
+    );
+
+    const secret = 'sk-ant-' + 'b'.repeat(30);
+    await service.complete('run-1', {
+      schema_version: 1,
+      outcome: 'routed',
+      summary: 'routing back to Developer',
+      checks: [],
+      routing: { target_agent: 'Developer', task: `fix it using ${secret}` },
+    });
+
+    const [, scrubbedReport] = finalizeWithReport.mock.calls[0];
+    expect(JSON.stringify(scrubbedReport)).not.toContain(secret);
+    // The bounded agent name is untouched.
+    expect(scrubbedReport.routing.target_agent).toBe('Developer');
+  });
+
   it('complete: success + pull_request delivery + pr_url queues a non-blocking review task', async () => {
     const createFromRequest = vi.fn().mockResolvedValue({ created: true, blocking: false, mayFinishWithoutComplete: false });
     const service = new CallbackService(

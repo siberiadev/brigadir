@@ -6,8 +6,9 @@ import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import { runQueueName, backoffStrategy } from '@brigadir/queues';
 import { RunsService, mapExitStatusToRunStatus } from '@brigadir/runs';
 import { ExecutorRegistry, type ExecutorResult, type RunContext } from '@brigadir/executors';
-import { PipelineService } from '@brigadir/pipeline';
+import { PipelineService, buildHandoffSection } from '@brigadir/pipeline';
 import { JiraClientFactory } from '@brigadir/jira';
+import type { TriggerEvent } from '@brigadir/contracts';
 import { applyExecutorConcurrency, startConcurrencyReapply } from './executor-concurrency';
 import { checkExecutorGate } from './executor-gate';
 import { fetchTicketDetail, type TicketDetail } from './ticket-detail';
@@ -93,10 +94,15 @@ export class RunProcessor extends WorkerHost implements OnApplicationBootstrap, 
     // Ticket description + browse URL, fetched lazily from Jira (non-fatal).
     const detail = await fetchTicketDetail(this.jiraFactory, this.logger, loaded);
 
+    // feature 010 (FR-012): a triage/rework/human-resume trigger prepends an
+    // ephemeral handoff section to the assembled instruction — the agent's
+    // stored `instruction` row is never touched (SC-002). Returns '' otherwise.
+    const handoff = await buildHandoffSection(loaded.triggerEvent as TriggerEvent | null, this.db);
+
     let result: ExecutorResult;
     try {
       const executor = this.registry.resolve(loaded.executorType);
-      result = await executor.run(this.buildContext(loaded, detail), new AbortController().signal);
+      result = await executor.run(this.buildContext(loaded, detail, handoff), new AbortController().signal);
     } catch (err) {
       result = {
         exitStatus: 'crashed',
@@ -186,7 +192,7 @@ export class RunProcessor extends WorkerHost implements OnApplicationBootstrap, 
     return row;
   }
 
-  private buildContext(loaded: LoadedRun, detail: TicketDetail): RunContext {
+  private buildContext(loaded: LoadedRun, detail: TicketDetail, handoff: string): RunContext {
     return {
       runId: loaded.runId,
       ticket: {
@@ -195,7 +201,7 @@ export class RunProcessor extends WorkerHost implements OnApplicationBootstrap, 
         description: detail.description,
         url: detail.url,
       },
-      instruction: loaded.instruction,
+      instruction: handoff ? `${handoff}\n\n${loaded.instruction}` : loaded.instruction,
       workspaceDir: null,
       callback: { httpBaseUrl: 'http://localhost:3000/api/callbacks', runToken: 'mock-run-token' },
       limits: { timeoutMs: loaded.timeoutMinutes * 60_000 },

@@ -66,7 +66,12 @@ export const routes: RouteRecordRaw[] = [
     path: '/settings',
     component: () => import('../views/settings/PlatformSettings.vue'),
     children: [
-      { path: '', name: 'platform-settings', redirect: '/settings/executors' },
+      { path: '', name: 'platform-settings', redirect: '/settings/general' },
+      {
+        path: 'general',
+        name: 'platform-settings-general',
+        component: () => import('../views/settings/SettingsGeneral.vue'),
+      },
       {
         path: 'executors',
         name: 'platform-settings-executors',

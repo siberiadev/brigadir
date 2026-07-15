@@ -118,6 +118,9 @@ export const WorkspaceSettingsSchema = z
     // treated as enabled; the reconcile pass selects
     // `settings->>'enabled' IS DISTINCT FROM 'false'`. No DDL — jsonb value only.
     enabled: z.boolean().optional(),
+    // Per-workspace rework-cycle budget (feature 010, FR-006). ABSENT ⇒ default 2
+    // via the getReworkMax accessor. No DDL — jsonb value only.
+    rework_max: z.number().int().positive().optional(),
     // iteration-1 seed leftovers (deprecated single-repo fields) tolerated:
     repo: z.string().optional(),
     default_branch: z.string().optional(),

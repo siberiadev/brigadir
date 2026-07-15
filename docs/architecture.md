@@ -170,18 +170,32 @@ CREATE TABLE agents (
   workspace_id    uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   executor_id     uuid NOT NULL REFERENCES executors(id),
   name            text NOT NULL,               -- "Implementer", "QA Agent"
+  description     text,                        -- feature 010: roster line показывается оркестратору в handoff (nullable)
   instruction     text NOT NULL,               -- user prompt (без обёртки)
+  is_orchestrator boolean NOT NULL DEFAULT false, -- feature 010: пер-workspace оркестратор "brigadir" (никогда не poll-триггерится, неудаляем, исключён из routing-таргетов и resume-пикера)
   trigger_status  text,                        -- Jira status name, ИЛИ:
   trigger_jql     text,                        -- дополнительный JQL-фильтр (AND)
   status_running  text,                        -- optional: куда перевести на время работы
-  status_success  text NOT NULL,
+  status_success  text NOT NULL,               -- у оркестратора — инертный placeholder (см. FR-007): completed-run оркестратора не делает generic transition
   status_failure  text NOT NULL,               -- обычно "Blocked"
-  behavior        jsonb NOT NULL DEFAULT '{}', -- behavior options (см. §7)
+  behavior        jsonb NOT NULL DEFAULT '{}', -- behavior options (см. §7); у оркестратора { workspace_mode: 'none' } → no-repo run
   timeout_minutes int NOT NULL DEFAULT 45,
   max_budget_usd  numeric(8,2),
   max_attempts    int NOT NULL DEFAULT 2,
   enabled         boolean NOT NULL DEFAULT true,
-  UNIQUE (workspace_id, name)
+  UNIQUE (workspace_id, name)                  -- гарантирует один "brigadir" на workspace (seed insert-if-absent)
+);
+
+-- ============ global_settings (feature 010) ============
+-- Платформенный key-value store (без workspace FK) под секцию "General".
+-- Первый ключ: default_orchestrator_instruction (JSON-строка), копируется в
+-- инструкцию сидируемого оркестратора при СОЗДАНИИ workspace (изменение влияет
+-- только на созданные позже — SC-006). Delete-guard оркестратора — в API
+-- (agents.controller → 409), не в БД, чтобы правки instruction/enabled работали.
+CREATE TABLE global_settings (
+  key             text PRIMARY KEY,
+  value           jsonb NOT NULL,
+  updated_at      timestamptz NOT NULL DEFAULT now()
 );
 
 -- ============ tickets & runs ============
@@ -207,7 +221,7 @@ CREATE TABLE runs (
     -- queued | running | awaiting_human | succeeded | failed | cancelled | timed_out | superseded
     -- superseded: закрыт resume'ом human-task (на его месте создан новый attempt, см. spec 1.4)
   attempt         int NOT NULL DEFAULT 1,
-  trigger_event   jsonb,                       -- что запустило (webhook/poll/manual/human-resume)
+  trigger_event   jsonb,                       -- что запустило: manual|webhook|poll|human-resume|triage|rework (feature 010); handoff-поля failing_run_id/deciding_run_id/human_task_id/target_agent/task ездят здесь же
   external_ref    text,                        -- claude session_id / routines session_url
   worktree_path   text,
   started_at      timestamptz,
@@ -406,7 +420,7 @@ POST /api/callbacks/runs/:runId/complete    body = structured report
   "additionalProperties": false,
   "properties": {
     "schema_version": { "const": 1 },
-    "outcome": { "enum": ["success", "failure", "needs_human"] },
+    "outcome": { "enum": ["success", "failure", "needs_human", "routed"] },
     "summary": { "type": "string", "maxLength": 2000,
       "description": "2-4 предложения: что сделано / что не получилось" },
     "checks": {
@@ -431,6 +445,16 @@ POST /api/callbacks/runs/:runId/complete    body = structured report
         "details": { "type": "string", "maxLength": 4000 }
       }
     },
+    "routing": {
+      "type": "object",
+      "required": ["target_agent", "task"],
+      "additionalProperties": false,
+      "description": "feature 010: обязателен при outcome=routed (зеркалит needs_human⇒human_task). Только оркестратор может routing'ить — routed от worker'а пайплайн трактует как failure (FR-002). task проходит скраббер (FR-003).",
+      "properties": {
+        "target_agent": { "type": "string", "maxLength": 200 },
+        "task":         { "type": "string", "maxLength": 4000 }
+      }
+    },
     "artifacts": {
       "type": "object",
       "properties": {
@@ -447,6 +471,7 @@ POST /api/callbacks/runs/:runId/complete    body = structured report
 Правила:
 
 - `outcome=needs_human` ⇒ `human_task` обязателен (валидируется условно на бекенде). Отдельного флага `human_needed` из ранних набросков контракта нет — его семантику полностью несёт `outcome`, два поля с одним смыслом не держим.
+- `outcome=routed` ⇒ `routing` обязателен (feature 010, тем же `superRefine`, что и needs_human). `routed` эмитит только оркестратор; `routed` от не-оркестратора пайплайн трактует как failure (FR-002). `routing.task` скраббится наравне с прочими free-text полями (FR-003). Валидность таргета (exists ∧ enabled ∧ не оркестратор ∧ тот же workspace) и бюджет rework-циклов проверяются в пайплайне, не в схеме.
 - Из `checks` строятся: чеклист ✅/❌ в Vue-дашборде и ADF-коммент в Jira (`taskList` + `panel`).
 - Отчёт проходит **скраббер секретов** (regex+entropy) до записи в БД и постинга в Jira.
 - Схема версионируется (`schema_version`); миграции отчётов — вперёд-совместимые.

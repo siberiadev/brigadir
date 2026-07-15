@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { RunsModule } from '@brigadir/runs';
+import { HumanTasksModule } from '@brigadir/human-tasks';
 import { PipelineService } from './pipeline.service';
 
 /**
@@ -11,7 +12,7 @@ import { PipelineService } from './pipeline.service';
  * (onStatusChanged / onRunFinished from reconcile).
  */
 @Module({
-  imports: [RunsModule],
+  imports: [RunsModule, HumanTasksModule],
   providers: [PipelineService],
   exports: [PipelineService],
 })

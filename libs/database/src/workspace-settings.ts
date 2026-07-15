@@ -47,6 +47,18 @@ export async function getScopeJql(db: Db, workspaceId: string): Promise<string |
   return (await getWorkspaceSettings(db, workspaceId)).scope_jql;
 }
 
+/** Default rework-cycle budget when `workspaces.settings.rework_max` is unset (feature 010, FR-006). */
+export const DEFAULT_REWORK_MAX = 2;
+
+/**
+ * The workspace's rework-cycle budget (feature 010, FR-006/D3): how many
+ * `source='rework'` runs a ticket may accumulate before the loop is capped and
+ * escalated to a human. Absent settings key ⇒ {@link DEFAULT_REWORK_MAX} (2).
+ */
+export async function getReworkMax(db: Db, workspaceId: string): Promise<number> {
+  return (await getWorkspaceSettings(db, workspaceId)).rework_max ?? DEFAULT_REWORK_MAX;
+}
+
 /**
  * The workspace's ordered repository list (feature 005; first = default). An
  * absent/empty `repositories` blob yields `[]`.

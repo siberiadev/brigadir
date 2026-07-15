@@ -53,6 +53,14 @@ export class MockExecutor implements AgentExecutor {
         // what the per-profile max_parallel_runs gate tests occupy slots with.
         await new Promise((r) => setTimeout(r, triggerEvent.mock_delay_ms ?? 500));
         return { exitStatus: 'completed', report: successReport() };
+      case 'routed':
+        // FR-024/D12: the mock orchestrator emits a `routed` report. The target
+        // worker's name rides in `trigger_event.target_agent` so integration
+        // tests can drive fail→triage→route→rework→success deterministically.
+        return {
+          exitStatus: 'completed',
+          report: routedReport(triggerEvent.target_agent ?? 'Developer', triggerEvent.task),
+        };
       default:
         return { exitStatus: 'completed', report: successReport() };
     }
@@ -103,6 +111,19 @@ function failureReport(): AgentReport {
       { name: 'tests_pass', status: 'fail', reason: 'mock: 1 test failing' },
       { name: 'lint_pass', status: 'pass' },
     ],
+  };
+}
+
+function routedReport(targetAgent: string, task?: string): AgentReport {
+  return {
+    schema_version: 1,
+    outcome: 'routed',
+    summary: `Mock orchestrator routed the ticket back to "${targetAgent}".`,
+    checks: [{ name: 'triage', status: 'pass' }],
+    routing: {
+      target_agent: targetAgent,
+      task: task ?? 'Fix the failing checks from the previous attempt and re-run the suite.',
+    },
   };
 }
 

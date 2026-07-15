@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { Test } from '@nestjs/testing';
-import { schema } from '@brigadir/database';
+import { schema, ORCHESTRATOR_AGENT_NAME, ORCHESTRATOR_EXECUTOR_NAME } from '@brigadir/database';
 import { ConfigSeeder, AppConfigModule } from '@brigadir/app-config';
 import { startDatabase, DbHarness } from './harness';
 import { join } from 'node:path';
@@ -42,12 +42,16 @@ describe('config → DB seeder (T017)', () => {
     expect(workspaces[0].jiraProjectKey).toBe('BRIG');
     expect(workspaces[0].jiraBoardId).toBe(42); // T040: board_id → column
     expect(workspaces[0].jiraBoardType).toBeNull(); // populated later by introspection (T049)
-    expect(executors).toHaveLength(1);
-    expect(executors[0].name).toBe('mock-exec');
-    expect(executors[0].type).toBe('mock');
-    expect(agents).toHaveLength(1);
-    expect(agents[0].name).toBe('implementer');
-    expect(agents[0].executorId).toBe(executors[0].id);
+    // The yaml executor/agent, plus the feature-010 orchestrator + its own cheap
+    // no-repo executor profile.
+    expect(executors).toHaveLength(2);
+    const mockExec = executors.find((e) => e.name === 'mock-exec');
+    expect(mockExec?.type).toBe('mock');
+    expect(executors.some((e) => e.name === ORCHESTRATOR_EXECUTOR_NAME)).toBe(true);
+    expect(agents).toHaveLength(2);
+    const impl = agents.find((a) => a.name === 'implementer');
+    expect(impl?.executorId).toBe(mockExec?.id);
+    expect(agents.some((a) => a.name === ORCHESTRATOR_AGENT_NAME && a.isOrchestrator)).toBe(true);
   });
 
   it('is idempotent — a second boot leaves exactly one row set', async () => {
@@ -57,12 +61,14 @@ describe('config → DB seeder (T017)', () => {
     const executors = await h.db.select().from(schema.executors);
     const agents = await h.db.select().from(schema.agents);
 
+    // Idempotent: the yaml rows + the orchestrator rows, and a second boot adds
+    // nothing (2, not 4).
     expect(workspaces).toHaveLength(1);
-    expect(executors).toHaveLength(1);
-    expect(agents).toHaveLength(1);
+    expect(executors).toHaveLength(2);
+    expect(agents).toHaveLength(2);
 
     // still correctly linked
-    const [agent] = agents;
+    const agent = agents.find((a) => a.name === 'implementer')!;
     const linked = await h.db
       .select()
       .from(schema.executors)

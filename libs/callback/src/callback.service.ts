@@ -40,6 +40,13 @@ function scrubReport(report: AgentReport): AgentReport {
           details: report.human_task.details !== undefined ? scrub(report.human_task.details) : report.human_task.details,
         }
       : report.human_task,
+    // feature 010 (FR-003, Constitution V): the routing task is free text and
+    // reaches persistence + the Jira routing comment, so it is scrubbed like
+    // every other report field. `target_agent` is a bounded agent name, not
+    // free prose — left as-is (it is validated against the roster downstream).
+    routing: report.routing
+      ? { ...report.routing, task: scrub(report.routing.task) }
+      : report.routing,
   };
 }
 

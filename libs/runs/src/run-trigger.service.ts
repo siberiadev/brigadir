@@ -20,6 +20,17 @@ export type TriggerResult =
 const ACTIVE_STATUSES = ['queued', 'running', 'awaiting_human'];
 
 /**
+ * Continuation sources (feature 010) — a triage or rework run is a fresh
+ * follow-up on a ticket the agent may already have a RETAINED completed job for
+ * (`removeOnComplete` keeps history). BullMQ `deduplication` keyed on
+ * `${ticketId}:${agentId}` would silently swallow the re-enqueue against that
+ * retained job (the same hazard `ResumeService` documents), leaving the new run
+ * row stuck in `queued`. For these the `runs_one_active` partial unique index
+ * (idempotency level 3) is the authority, so the BullMQ dedup layer is dropped.
+ */
+const CONTINUATION_SOURCES = new Set(['triage', 'rework', 'human-resume']);
+
+/**
  * RunTriggerService (contracts C6) — the single enqueue seam.
  *
  * 1. INSERT a `runs` row (status `queued`, attempt 1). The `runs_one_active`
@@ -98,6 +109,7 @@ export class RunTriggerService {
       throw err;
     }
 
+    const isContinuation = CONTINUATION_SOURCES.has(triggerEvent?.source ?? 'manual');
     const queue = this.getRunQueue(executorType);
     await queue.add(
       'run',
@@ -107,7 +119,10 @@ export class RunTriggerService {
         // resolve the exact BullMQ Job for job.updateProgress() from the
         // backend process without a new DB column.
         jobId: runId,
-        deduplication: { id: `${ticketId}:${agentId}` },
+        // Triage/rework/resume continuations skip the BullMQ dedup layer to
+        // avoid the retained-job swallow (see CONTINUATION_SOURCES); the DB
+        // `runs_one_active` guard already made this enqueue exactly-once.
+        ...(isContinuation ? {} : { deduplication: { id: `${ticketId}:${agentId}` } }),
         attempts: agent.maxAttempts,
         backoff: { type: 'custom' },
       },

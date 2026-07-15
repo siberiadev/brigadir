@@ -99,7 +99,8 @@ async function onDelete(agent: AgentResponse) {
       <el-table-column label="">
         <template #default="{ row }">
           <el-button link type="primary" @click="openEdit(row)">Edit</el-button>
-          <el-button link type="danger" @click="onDelete(row)">Delete</el-button>
+          <!-- feature 010 (FR-019): the orchestrator is non-deletable — disable it instead. -->
+          <el-button v-if="!row.is_orchestrator" link type="danger" @click="onDelete(row)">Delete</el-button>
         </template>
       </el-table-column>
     </el-table>
