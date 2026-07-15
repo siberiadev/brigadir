@@ -25,8 +25,10 @@ function onCreated(id: string) {
 }
 
 // --- open a workspace by clicking its row body (not an action control) ---
+// Lands on Runs — the default tab (реш. 2026-07-15). The create flow above
+// deliberately still lands on Agents: a fresh workspace has no runs yet.
 function openWorkspace(row: { id: string }) {
-  router.push({ name: 'agents', params: { id: row.id } });
+  router.push({ name: 'runs', params: { id: row.id } });
 }
 
 // --- edit workspace (settings is now the nested tab, reached from the row action) ---

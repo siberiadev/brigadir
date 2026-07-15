@@ -262,7 +262,7 @@ describe('WorkspaceSettings — routing (US3)', () => {
     expect(wrapper.find('[data-test="settings-jira-block"]').exists()).toBe(true);
   });
 
-  it('has no standalone `workspace-settings` route and falls back unknown tabs to agents', async () => {
+  it('has no standalone `workspace-settings` route and falls back unknown tabs to runs', async () => {
     const wrapper = mountWithProviders(AppRoot, {
       routes,
       initialPath: '/workspaces/ws-1/agents',
@@ -278,14 +278,15 @@ describe('WorkspaceSettings — routing (US3)', () => {
     ).toBe(false);
     // settings still out-ranks the catch-all…
     expect(router.resolve('/workspaces/ws-1/settings').name).toBe('settings');
-    // …and an unknown tab still redirects to agents (catchAll ordering intact).
+    // …and an unknown tab still redirects to runs — the default tab
+    // (реш. 2026-07-15; catchAll ordering intact).
     router.push('/workspaces/ws-1/nope');
     await settle(
       () =>
-        router.currentRoute.value.name === 'agents' &&
-        router.currentRoute.value.path === '/workspaces/ws-1/agents',
+        router.currentRoute.value.name === 'runs' &&
+        router.currentRoute.value.path === '/workspaces/ws-1/runs',
     );
-    expect(router.currentRoute.value.name).toBe('agents');
+    expect(router.currentRoute.value.name).toBe('runs');
   });
 });
 

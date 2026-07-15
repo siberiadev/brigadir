@@ -11,9 +11,11 @@ import WorkspaceTabs from '../components/WorkspaceTabs/WorkspaceTabs.vue';
  */
 defineProps<{ id: string }>();
 
+// Runs first and default-active (реш. 2026-07-15) — the day-to-day surface;
+// Agents/Settings are setup surfaces.
 const tabs = [
-  { name: 'agents', label: 'Agents' },
   { name: 'runs', label: 'Runs' },
+  { name: 'agents', label: 'Agents' },
   { name: 'settings', label: 'Settings' },
 ];
 </script>

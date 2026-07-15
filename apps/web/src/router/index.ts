@@ -6,11 +6,12 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 export const routes: RouteRecordRaw[] = [
   { path: '/', name: 'workspaces', component: () => import('../views/WorkspaceList.vue') },
   {
-    // Workspace page: a shell with three router-driven tabs (Agents | Runs |
+    // Workspace page: a shell with three router-driven tabs (Runs | Agents |
     // Settings). The shipped deep-links `/workspaces/:id/agents`,
     // `/workspaces/:id/runs`, and `/workspaces/:id/settings` stay VERBATIM as
     // nested children (FR-009/FR-010), so every existing link resolves unchanged
-    // (settings now lands on the tab). Empty path redirects to Agents (FR-006).
+    // (settings now lands on the tab). Empty path redirects to Runs — the
+    // default-active tab (реш. 2026-07-15; supersedes FR-006's Agents default).
     path: '/workspaces/:id',
     component: () => import('../views/WorkspacePage.vue'),
     props: true,
@@ -18,7 +19,7 @@ export const routes: RouteRecordRaw[] = [
       {
         path: '',
         name: 'workspace',
-        redirect: (to) => ({ name: 'agents', params: { id: to.params.id } }),
+        redirect: (to) => ({ name: 'runs', params: { id: to.params.id } }),
       },
       {
         path: 'agents',
@@ -43,10 +44,11 @@ export const routes: RouteRecordRaw[] = [
         props: true,
       },
       {
-        // Unknown tab → fall back to Agents (FR-012). Declared LAST so the named
+        // Unknown tab → fall back to Runs, the default tab (реш. 2026-07-15;
+        // supersedes FR-012's Agents fallback). Declared LAST so the named
         // `settings`/`agents`/`runs` children out-rank this wildcard.
         path: ':catchAll(.*)*',
-        redirect: (to) => ({ name: 'agents', params: { id: to.params.id } }),
+        redirect: (to) => ({ name: 'runs', params: { id: to.params.id } }),
       },
     ],
   },

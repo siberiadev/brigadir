@@ -106,14 +106,23 @@ describe('WorkspaceTabs — deep-links & history (US2)', () => {
 });
 
 describe('WorkspaceTabs — unknown-tab fallback & settings precedence (US2)', () => {
-  it('falls back to the Agents tab for an unrecognized tab address (FR-012)', async () => {
+  it('falls back to the Runs tab for an unrecognized tab address (FR-012, реш. 2026-07-15: Runs is the default)', async () => {
     const { router } = await mountApp('/workspaces/ws-1/agents');
 
     router.push('/workspaces/ws-1/bogus');
-    await settle(() => router.currentRoute.value.name === 'agents' && router.currentRoute.value.path === '/workspaces/ws-1/agents');
+    await settle(() => router.currentRoute.value.name === 'runs' && router.currentRoute.value.path === '/workspaces/ws-1/runs');
 
-    expect(router.currentRoute.value.name).toBe('agents');
-    expect(router.currentRoute.value.path).toBe('/workspaces/ws-1/agents');
+    expect(router.currentRoute.value.name).toBe('runs');
+    expect(router.currentRoute.value.path).toBe('/workspaces/ws-1/runs');
+  });
+
+  it('bare /workspaces/:id redirects to the Runs tab (default-active, реш. 2026-07-15)', async () => {
+    const { router } = await mountApp('/workspaces/ws-1/agents');
+
+    router.push('/workspaces/ws-1');
+    await settle(() => router.currentRoute.value.name === 'runs');
+
+    expect(router.currentRoute.value.path).toBe('/workspaces/ws-1/runs');
   });
 
   it('resolves /settings to the nested settings tab ahead of the catch-all (008/R1)', async () => {
@@ -127,17 +136,17 @@ describe('WorkspaceTabs — unknown-tab fallback & settings precedence (US2)', (
 });
 
 describe('WorkspaceList — row-click navigation (US1)', () => {
-  it('opens the workspace on the Agents tab when a row body is clicked (FR-003)', async () => {
+  it('opens the workspace on the Runs tab when a row body is clicked (FR-003, реш. 2026-07-15: Runs is the default)', async () => {
     const wrapper = mountWithProviders(WorkspaceList, { routes, initialPath: '/' });
     const router = wrapper.vm.$router;
     await router.isReady();
     await flush();
 
     await wrapper.findComponent({ name: 'ElTable' }).vm.$emit('row-click', { id: 'ws-1' });
-    await settle(() => router.currentRoute.value.name === 'agents');
+    await settle(() => router.currentRoute.value.name === 'runs');
 
-    expect(router.currentRoute.value.path).toBe('/workspaces/ws-1/agents');
-    expect(router.currentRoute.value.name).toBe('agents');
+    expect(router.currentRoute.value.path).toBe('/workspaces/ws-1/runs');
+    expect(router.currentRoute.value.name).toBe('runs');
   });
 });
 
