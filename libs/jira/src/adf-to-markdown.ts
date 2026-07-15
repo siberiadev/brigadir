@@ -161,22 +161,23 @@ export function adfToMarkdown(doc: ADFDoc): string {
   return blocks(doc.content).trim();
 }
 
-export const DESCRIPTION_MAX_CHARS = 10_000;
 const TRUNCATION_MARKER = '\n\n…[description truncated]';
 
 /**
  * Jira `description` field → wrapper-ready markdown. Tolerates every shape the
  * field can arrive in: absent/null → '', plain string (Jira Server / API v2)
- * → passthrough, ADF doc → adfToMarkdown. Always bounded by `maxChars` (the
- * wrapper has no budget guard of its own — same reasoning as the
- * feature-context SECTION_MAX_BYTES bound).
+ * → passthrough, ADF doc → adfToMarkdown. Unbounded by default: descriptions
+ * often embed canonical data (CSV tables, spec text) that must reach the agent
+ * whole, and Jira itself bounds the field (~32k chars of text in Cloud) — well
+ * within any agent prompt budget. Pass `maxChars` only where a consumer needs
+ * a hard cap; the truncation marker then makes the cut visible to the reader.
  */
 export function jiraDescriptionToMarkdown(
   description: ADFDoc | string | null | undefined,
-  maxChars = DESCRIPTION_MAX_CHARS,
+  maxChars?: number,
 ): string {
   if (description == null) return '';
   const markdown = typeof description === 'string' ? description : adfToMarkdown(description);
-  if (markdown.length <= maxChars) return markdown;
+  if (maxChars === undefined || markdown.length <= maxChars) return markdown;
   return markdown.slice(0, maxChars - TRUNCATION_MARKER.length) + TRUNCATION_MARKER;
 }

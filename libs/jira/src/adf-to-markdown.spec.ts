@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { ADFDoc, ADFNode } from '@brigadir/contracts';
-import { adfToMarkdown, jiraDescriptionToMarkdown, DESCRIPTION_MAX_CHARS } from './adf-to-markdown';
+import { adfToMarkdown, jiraDescriptionToMarkdown } from './adf-to-markdown';
 
 const doc = (...content: ADFNode[]): ADFDoc => ({ version: 1, type: 'doc', content });
 const text = (value: string, marks?: ADFNode['marks']): ADFNode => ({
@@ -263,8 +263,13 @@ describe('jiraDescriptionToMarkdown', () => {
     expect(jiraDescriptionToMarkdown(doc(paragraph(text('hi'))))).toBe('hi');
   });
 
-  it('over-limit output is truncated with the marker, within maxChars', () => {
-    const out = jiraDescriptionToMarkdown('x'.repeat(DESCRIPTION_MAX_CHARS + 1), 100);
+  it('without maxChars the output is never truncated, whatever its size', () => {
+    const huge = 'x'.repeat(50_000);
+    expect(jiraDescriptionToMarkdown(huge)).toBe(huge);
+  });
+
+  it('over-limit output is truncated with the marker, within an explicit maxChars', () => {
+    const out = jiraDescriptionToMarkdown('x'.repeat(200), 100);
     expect(out.length).toBe(100);
     expect(out.endsWith('…[description truncated]')).toBe(true);
   });
