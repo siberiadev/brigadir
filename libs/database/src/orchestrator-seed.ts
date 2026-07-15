@@ -19,9 +19,11 @@ export const ORCHESTRATOR_EXECUTOR_NAME = 'brigadir-orchestrator';
 /**
  * Inert placeholder for the orchestrator's success/failure statuses. They are
  * NOT NULL in §3 but never used — a completed orchestrator run takes NO generic
- * transition (FR-007), so this value is never sent to Jira.
+ * transition (FR-007), so this value is never sent to Jira. A visibly-inert
+ * dash (not a real board status like "Blocked") so it cannot be mistaken for a
+ * configured mapping anywhere the row is displayed.
  */
-const ORCHESTRATOR_INERT_STATUS = 'Blocked';
+const ORCHESTRATOR_INERT_STATUS = '—';
 
 /**
  * Built-in default orchestrator instruction (FR-022) — copied into a workspace's

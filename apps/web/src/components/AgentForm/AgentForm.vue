@@ -268,71 +268,86 @@ defineExpose({ submit, saving });
       </el-select>
     </el-form-item>
 
-    <el-form-item label="Trigger status" :error="errorFor('trigger_status')">
-      <el-select
-        v-model="form.trigger_status"
-        filterable
-        allow-create
-        :disabled="statusesUnavailable"
-        data-test="trigger-status-select"
-      >
-        <el-option v-for="s in boardStatuses" :key="s.id" :label="s.name" :value="s.name" />
-      </el-select>
-      <div v-if="errorFor('trigger_status')" class="field-error" data-test="trigger-status-error">
-        {{ errorFor('trigger_status') }}
-      </div>
-    </el-form-item>
+    <!-- feature 010: the orchestrator is never poll-triggered and a completed
+         orchestrator run takes NO generic success/failure transition — the
+         ticket's next status is decided by the ROUTING TARGET's mapping. Its
+         status fields are inert placeholders, so hide the whole block. -->
+    <el-alert
+      v-if="isOrchestrator"
+      type="info"
+      :closable="false"
+      show-icon
+      data-test="orchestrator-statuses-hint"
+      title="No status mapping: the orchestrator is triggered by failed runs (not by a board status), and the ticket's next status is decided by the agent it routes to."
+    />
 
-    <el-form-item label="Trigger JQL (advanced)">
-      <el-input v-model="form.trigger_jql" data-test="trigger-jql-input" />
-    </el-form-item>
+    <template v-if="!isOrchestrator">
+      <el-form-item label="Trigger status" :error="errorFor('trigger_status')">
+        <el-select
+          v-model="form.trigger_status"
+          filterable
+          allow-create
+          :disabled="statusesUnavailable"
+          data-test="trigger-status-select"
+        >
+          <el-option v-for="s in boardStatuses" :key="s.id" :label="s.name" :value="s.name" />
+        </el-select>
+        <div v-if="errorFor('trigger_status')" class="field-error" data-test="trigger-status-error">
+          {{ errorFor('trigger_status') }}
+        </div>
+      </el-form-item>
 
-    <el-form-item label="Running status (recommended)" :error="errorFor('status_running')">
-      <el-select
-        v-model="form.status_running"
-        filterable
-        allow-create
-        clearable
-        :disabled="statusesUnavailable"
-        data-test="status-running-select"
-      >
-        <el-option v-for="s in boardStatuses" :key="s.id" :label="s.name" :value="s.name" />
-      </el-select>
-    </el-form-item>
+      <el-form-item label="Trigger JQL (advanced)">
+        <el-input v-model="form.trigger_jql" data-test="trigger-jql-input" />
+      </el-form-item>
 
-    <el-form-item label="Success status" :error="errorFor('status_success')">
-      <el-select
-        v-model="form.status_success"
-        filterable
-        allow-create
-        :disabled="statusesUnavailable"
-        data-test="status-success-select"
-      >
-        <el-option v-for="s in boardStatuses" :key="s.id" :label="s.name" :value="s.name" />
-      </el-select>
-      <div v-if="errorFor('status_success')" class="field-error" data-test="status-success-error">
-        {{ errorFor('status_success') }}
-      </div>
-      <div
-        v-if="warningFor('status_success')"
-        class="field-warning"
-        data-test="status-success-warning"
-      >
-        {{ warningFor('status_success') }}
-      </div>
-    </el-form-item>
+      <el-form-item label="Running status (recommended)" :error="errorFor('status_running')">
+        <el-select
+          v-model="form.status_running"
+          filterable
+          allow-create
+          clearable
+          :disabled="statusesUnavailable"
+          data-test="status-running-select"
+        >
+          <el-option v-for="s in boardStatuses" :key="s.id" :label="s.name" :value="s.name" />
+        </el-select>
+      </el-form-item>
 
-    <el-form-item label="Failure status" :error="errorFor('status_failure')">
-      <el-select
-        v-model="form.status_failure"
-        filterable
-        allow-create
-        :disabled="statusesUnavailable"
-        data-test="status-failure-select"
-      >
-        <el-option v-for="s in boardStatuses" :key="s.id" :label="s.name" :value="s.name" />
-      </el-select>
-    </el-form-item>
+      <el-form-item label="Success status" :error="errorFor('status_success')">
+        <el-select
+          v-model="form.status_success"
+          filterable
+          allow-create
+          :disabled="statusesUnavailable"
+          data-test="status-success-select"
+        >
+          <el-option v-for="s in boardStatuses" :key="s.id" :label="s.name" :value="s.name" />
+        </el-select>
+        <div v-if="errorFor('status_success')" class="field-error" data-test="status-success-error">
+          {{ errorFor('status_success') }}
+        </div>
+        <div
+          v-if="warningFor('status_success')"
+          class="field-warning"
+          data-test="status-success-warning"
+        >
+          {{ warningFor('status_success') }}
+        </div>
+      </el-form-item>
+
+      <el-form-item label="Failure status" :error="errorFor('status_failure')">
+        <el-select
+          v-model="form.status_failure"
+          filterable
+          allow-create
+          :disabled="statusesUnavailable"
+          data-test="status-failure-select"
+        >
+          <el-option v-for="s in boardStatuses" :key="s.id" :label="s.name" :value="s.name" />
+        </el-select>
+      </el-form-item>
+    </template>
 
     <div class="two-col">
       <el-form-item label="Timeout (min)">
@@ -346,7 +361,8 @@ defineExpose({ submit, saving });
       </el-form-item>
     </div>
 
-    <el-form-item label="Repository">
+    <!-- feature 010: orchestrator triage runs have no repository workspace. -->
+    <el-form-item v-if="!isOrchestrator" label="Repository">
       <el-select v-model="form.repository" clearable data-test="repository-select">
         <el-option label="workspace default" value="" data-test="repository-default-option" />
         <el-option v-for="r in repositories" :key="r.name" :label="r.name" :value="r.name" />

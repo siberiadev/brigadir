@@ -233,3 +233,47 @@ describe('AgentForm — repository select (platform-scoped executors, 2026-07-13
     expect(selectByTest(wrapper, 'repository-select').props('modelValue')).toBe('api');
   });
 });
+
+describe('AgentForm — orchestrator variant (feature 010)', () => {
+  const orchestrator = {
+    ...sampleAgent,
+    id: 'ag-orch',
+    name: 'brigadir',
+    is_orchestrator: true,
+    trigger_status: null,
+    status_running: null,
+    status_success: '—',
+    status_failure: '—',
+    behavior: { workspace_mode: 'none' },
+  };
+
+  it('hides trigger/status mapping and repository — the routing target decides the next status', async () => {
+    const wrapper = mountWithProviders(AgentForm, {
+      props: { workspaceId: 'ws-1', agent: orchestrator, repositories: [] },
+    });
+    await flush();
+
+    for (const test of [
+      'trigger-status-select',
+      'trigger-jql-input',
+      'status-running-select',
+      'status-success-select',
+      'status-failure-select',
+      'repository-select',
+    ]) {
+      expect(wrapper.find(`[data-test="${test}"]`).exists(), test).toBe(false);
+    }
+    expect(wrapper.find('[data-test="orchestrator-statuses-hint"]').exists()).toBe(true);
+    // Instruction stays editable (FR-019).
+    expect(wrapper.find('[data-test="instruction-input"]').exists()).toBe(true);
+  });
+
+  it('a worker agent still shows the full status mapping (regression)', async () => {
+    const wrapper = mountWithProviders(AgentForm, {
+      props: { workspaceId: 'ws-1', agent: sampleAgent, repositories: [] },
+    });
+    await flush();
+    expect(wrapper.find('[data-test="orchestrator-statuses-hint"]').exists()).toBe(false);
+    expect(selectByTest(wrapper, 'status-success-select').exists()).toBe(true);
+  });
+});
