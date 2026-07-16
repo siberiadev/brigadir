@@ -18,7 +18,11 @@ const orchestratorOnly = paginated([
 const noSetupRuns = { items: [], page: 1, page_size: 10, total: 0 };
 
 function useAgents(list: unknown) {
-  server.use(http.get('/api/agents', () => HttpResponse.json(list)));
+  server.use(
+    http.get('/api/agents', () =>
+      HttpResponse.json(list as Parameters<typeof HttpResponse.json>[0]),
+    ),
+  );
 }
 
 function useSetupRuns(list: unknown) {
@@ -26,7 +30,7 @@ function useSetupRuns(list: unknown) {
     http.get('/api/workspaces/:id/runs', ({ request }) => {
       const url = new URL(request.url);
       if (url.searchParams.get('source') === 'workspace-setup') {
-        return HttpResponse.json(list);
+        return HttpResponse.json(list as Parameters<typeof HttpResponse.json>[0]);
       }
       return HttpResponse.json(sampleRunList);
     }),
