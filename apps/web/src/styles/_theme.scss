@@ -14,7 +14,6 @@
 // (#141414 is theme-chalk's dark background the dark css-vars derive against.)
 
 @use 'sass:color';
-@use 'variables' as *;
 
 // Brand palette — amber is the foreman's hard-hat yellow from the `>_ BRIGADIR`
 // wordmark; graphite-slate carries the neutral "info" role. `warning` moves to
@@ -56,91 +55,7 @@ html.dark {
   }
 }
 
-// --- Branded loader ----------------------------------------------------------
-// v-loading masks show the foreman's face instead of the stock circle: the
-// `>_` mark comes alive — the underscore is the MOUTH (it curls into a smirk,
-// sliding right away from the eye), then the `>` EYE blinks (both ends pull
-// to the center and back). One shared 2.8s timeline, staged so the phases
-// don't overlap: mouth 0–50%, blink 55–75%.
-// Pseudo-elements on .el-loading-spinner, so every existing `v-loading` usage
-// picks it up with no per-callsite changes. An optional `element-loading-text`
-// wraps onto its own line below the glyphs.
-.el-loading-spinner {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 0 4px;
-  font-family: $font-family-mono;
-
-  .circular {
-    display: none;
-  }
-
-  // The eye: the `>` glyph. Blinking squeezes it vertically — both chevron
-  // ends travel to the center line and spread back out.
-  &::before {
-    content: '>';
-    font-size: 26px;
-    font-weight: $font-weight-bold;
-    line-height: 1;
-    color: var(--el-color-primary);
-    animation: brigadir-eye-blink 2.8s ease-in-out infinite;
-  }
-
-  // The mouth: a CSS-drawn stand-in for `_` (a text glyph can't bend). At
-  // rest the bottom border is the flat underscore; border-radius bends it
-  // into an asymmetric arc — the sarcastic smirk — while the whole mouth
-  // slides right and tilts.
-  &::after {
-    content: '';
-    width: 14px;
-    height: 10px;
-    align-self: flex-end;
-    margin-bottom: 2px;
-    border-bottom: 3px solid var(--el-color-primary);
-    animation: brigadir-mouth-smirk 2.8s ease-in-out infinite;
-  }
-
-  .el-loading-text {
-    width: 100%;
-    text-align: center;
-    margin-top: $space-sm;
-  }
-}
-
-// Phase 1 (0–50%): flat `_` → smirk (curl + slide right + tilt), hold, back.
-@keyframes brigadir-mouth-smirk {
-  0%,
-  50%,
-  100% {
-    border-radius: 0;
-    transform: none;
-  }
-  15%,
-  35% {
-    border-radius: 0 0 55% 45% / 0 0 100% 85%;
-    transform: translateX(5px) rotate(-8deg);
-  }
-}
-
-// Phase 2 (55–75%): the eye snaps shut (ends meet at the center) and reopens.
-@keyframes brigadir-eye-blink {
-  0%,
-  55%,
-  75%,
-  100% {
-    transform: scaleY(1);
-  }
-  65% {
-    transform: scaleY(0.08);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  // The face freezes as the static `>_` mark; only the motion goes.
-  .el-loading-spinner::before,
-  .el-loading-spinner::after {
-    animation: none;
-  }
-}
+// NOTE: no .el-loading-spinner overrides here — v-loading uses Element Plus's
+// stock circular spinner, which picks up the amber brand color automatically
+// via --el-color-primary above. (The animated `>_` face loader was removed
+// 2026-07-16 pending the new logo; see git history if it comes back.)
