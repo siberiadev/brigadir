@@ -68,6 +68,22 @@ export function useUpdateSettings(workspaceId: string) {
 }
 
 /**
+ * feature 011: start the orchestrator's workspace-setup run ("Generate
+ * agents"). Invalidates the setup-runs query so the button flips to its
+ * in-progress state on the next poll tick.
+ */
+export function useGenerateAgents(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.generateAgents(workspaceId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['runs', workspaceId] });
+      qc.invalidateQueries({ queryKey: ['agents'] });
+    },
+  });
+}
+
+/**
  * Enable/pause a workspace from the list (US5). Workspace id travels in the
  * mutation payload so a single instance drives every row (composables can't be
  * called per-row in setup). Writes `settings.enabled` via the settings endpoint.

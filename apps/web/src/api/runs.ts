@@ -13,6 +13,8 @@ export interface RunListParams {
   agent?: string;
   status?: string;
   ticket?: string;
+  /** feature 011: trigger-source filter (e.g. 'workspace-setup'). */
+  source?: string;
   page?: number;
   page_size?: number;
 }
@@ -26,6 +28,7 @@ export function runsApi(client: ApiClient = apiClient) {
           agent: params.agent,
           status: params.status,
           ticket: params.ticket,
+          source: params.source,
           page: params.page,
           page_size: params.page_size,
         })}`,
