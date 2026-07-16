@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "brigadir-admin": {
+      "command": "node",
+      "args": ["packages/admin-mcp/dist/main.js"],
+      "env": {
+        "BRIGADIR_API_URL": "http://localhost:3000",
+        "BRIGADIR_DASHBOARD_TOKEN": "${BRIGADIR_DASHBOARD_TOKEN}",
+        "BRIGADIR_JIRA_EMAIL": "${BRIGADIR_JIRA_EMAIL}",
+        "BRIGADIR_JIRA_API_TOKEN": "${BRIGADIR_JIRA_API_TOKEN}"
+      }
+    }
+  }
+}

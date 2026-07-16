@@ -17,6 +17,17 @@
 - `pnpm test:integration` — интеграционные (vitest + testcontainers, нужен Docker; общие контейнеры на прогон — см. `test/integration/global-setup.ts`)
 - `docker compose up --build` — полный стек (postgres, redis, backend, worker)
 
+## Возможность: собрать команду под борду через `brigadir-admin` (admin-MCP)
+
+**Если пользователь просит «собрать команду/агентов под борду», «создать workspace», «настроить MCP для создания workspace и agents» — предложи подключить `brigadir-admin` и сверься с этим разделом.** Это stdio MCP-сервер (`packages/admin-mcp`, feature 012), который человек+Claude Code используют СНАРУЖИ прогона: recon борды → `create_workspace` (всегда PAUSED) → `generate_agents`/`create_team`/`create_agent`. НЕ путать с callback-MCP `brigadir-mcp` (тот — для агента ВНУТРИ прогона). 9 тулз, детали — `docs/architecture.md` §«Админская плоскость».
+
+Подключение (project-scoped, коммитится, подхватывается Claude Code при старте):
+1. Конфиг уже лежит в корне — **`.mcp.json`** (сервер `brigadir-admin`, `${VAR}`-ссылки на env).
+2. Собрать сервер (в gitignore, после клона нужен build): `pnpm --filter @brigadir/admin-mcp build`.
+3. Env для сервера (4 шт., только из env — Принцип V): `BRIGADIR_API_URL` (обычно `http://localhost:3000`), `BRIGADIR_DASHBOARD_TOKEN` (из `.env`), `BRIGADIR_JIRA_EMAIL`, `BRIGADIR_JIRA_API_TOKEN`. Экспортировать в шелл перед запуском `claude`: `set -a; source .env; set +a` (+ добавить два Jira-ключа в `.env`, шаблон — в `.env.example`).
+4. Бэкенд должен быть поднят на `BRIGADIR_API_URL` (сервер — тонкий HTTP-клиент админ-API, в БД не ходит), иначе тулзы отдадут connection error.
+5. Перезапустить Claude Code → `/mcp` покажет `brigadir-admin`. **MCP читается при старте сессии — в уже запущенную сессию сервер не подхватится, нужен рестарт.**
+
 ## UI-конвенции
 
 - **Иконки — lucide (`lucide-vue-next`). Hover-анимация — ТОЛЬКО у пунктов меню в sidebar (`AppSidebar.vue`); все остальные иконки статичные** (реш. 2026-07-15, сужение реш. 2026-07-14 — «анимировать все иконки» отменено). Для sidebar два яруса: (1) **универсальные эффекты целой иконки** — оборачивай в `<AnimatedIcon effect="spin|dip|pop|wiggle">` (`apps/web/src/components/AnimatedIcon.vue`); чтобы эффект срабатывал от наведения на родительскую кнопку/ссылку, повесь на неё класс `anim-trigger`. (2) **Пер-частные эффекты** (анимация отдельных path'ов глифа — плитки, стрелки) — ручной CSS рядом с местом использования; референсы — грид и logout в `AppSidebar.vue`. Для трансформов SVG-подэлементов обязательны `transform-box: fill-box` + `transform-origin: center`; `prefers-reduced-motion` уважать. Сверяй анатомию глифа с живым DOM — lucide меняет polyline/line на path между версиями. State-индикаторы (пульс running-статуса в `RunStatusTag.vue`) — не hover-анимация, правило их не касается.

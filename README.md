@@ -144,6 +144,21 @@ From empty volumes: Postgres and Redis become healthy → **backend** applies mi
 
 > Local dev mode, secrets, and gotchas live in [`docs/local-setup.md`](docs/local-setup.md).
 
+### 4. Assemble a team from Claude Code (`brigadir-admin` admin-MCP)
+
+`packages/admin-mcp` is a stdio MCP server you plug into **Claude Code** to build a team _outside_ any run: recon a board → `create_workspace` (always PAUSED) → `generate_agents` / `create_team` / `create_agent`. It is a thin HTTP client of the dashboard admin API, so the backend must be up. (Not to be confused with `mcp-server` / `brigadir-mcp`, the callback channel used _inside_ a run.)
+
+The repo ships a project-scoped [`.mcp.json`](.mcp.json) — Claude Code loads it automatically on start. One-time setup:
+
+```bash
+pnpm --filter @brigadir/admin-mcp build      # dist/ is gitignored — build after clone
+# add BRIGADIR_JIRA_EMAIL / BRIGADIR_JIRA_API_TOKEN to .env (see .env.example)
+set -a; source .env; set +a                  # export vars so ${VAR} in .mcp.json resolves
+claude                                        # restart Claude Code → /mcp shows brigadir-admin
+```
+
+Env consumed by the server (only from env — Constitution V): `BRIGADIR_API_URL` (default `http://localhost:3000`), `BRIGADIR_DASHBOARD_TOKEN`, `BRIGADIR_JIRA_EMAIL`, `BRIGADIR_JIRA_API_TOKEN`. MCP servers are read at session start — a restart is required after first setup.
+
 ---
 
 ## Repository layout
@@ -169,6 +184,7 @@ libs/
 packages/
   contracts  zod schemas (Report, AgentsConfig, TriggerEvent, callbacks, pagination)
   mcp-server stdio/streamable MCP: report_progress · request_human · complete_task
+  admin-mcp  stdio MCP for Claude Code: create workspaces + agents (dashboard bearer)
 drizzle/     committed migrations (reviewed against architecture.md §3)
 ```
 
