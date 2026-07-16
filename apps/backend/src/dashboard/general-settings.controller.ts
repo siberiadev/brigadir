@@ -5,10 +5,12 @@ import {
   type BrigadirDb,
   schema,
   getDefaultOrchestratorInstruction,
+  getWorkspaceSetupInstruction,
 } from '@brigadir/database';
 import {
   GeneralSettingsSchema,
   DEFAULT_ORCHESTRATOR_INSTRUCTION_KEY,
+  WORKSPACE_SETUP_INSTRUCTION_KEY,
   type GeneralSettings,
 } from '@brigadir/contracts';
 import { DashboardTokenGuard } from './dashboard-token.guard';
@@ -16,10 +18,16 @@ import { validationError, zodIssuePath } from './dashboard.errors';
 
 /**
  * Platform General-settings surface (feature 010, FR-021/022). Backed by the
- * `global_settings` key-value table. GET returns the built-in default when the
- * key is unset (so the UI field is never empty); PUT upserts the key. The value
- * is copied into a workspace's orchestrator at CREATION time — changing it
- * affects only workspaces created afterward (SC-006).
+ * `global_settings` key-value table. GET returns the built-in defaults when a
+ * key is unset (so the UI fields are never empty); PUT upserts both keys.
+ *
+ * Two brigadir instruction texts (2026-07-16):
+ * - `default_orchestrator_instruction` (routing/triage) — copied into a
+ *   workspace's orchestrator at CREATION time; changing it affects only
+ *   workspaces created afterward (SC-006).
+ * - `workspace_setup_instruction` (agent creation) — read LIVE by the
+ *   workspace-setup handoff; changing it affects the next generate-agents
+ *   run in every workspace.
  */
 @Controller('api/general-settings')
 @UseGuards(DashboardTokenGuard)
@@ -28,7 +36,10 @@ export class GeneralSettingsController {
 
   @Get()
   async get(): Promise<GeneralSettings> {
-    return { default_orchestrator_instruction: await getDefaultOrchestratorInstruction(this.db) };
+    return {
+      default_orchestrator_instruction: await getDefaultOrchestratorInstruction(this.db),
+      workspace_setup_instruction: await getWorkspaceSetupInstruction(this.db),
+    };
   }
 
   @Put()
@@ -46,20 +57,23 @@ export class GeneralSettingsController {
       );
     }
 
-    await this.db
-      .insert(schema.globalSettings)
-      .values({
+    const entries: Array<{ key: string; value: string }> = [
+      {
         key: DEFAULT_ORCHESTRATOR_INSTRUCTION_KEY,
         value: parsed.data.default_orchestrator_instruction,
-      })
-      .onConflictDoUpdate({
-        target: schema.globalSettings.key,
-        set: {
-          value: parsed.data.default_orchestrator_instruction,
-          updatedAt: sql`now()`,
-        },
-      });
+      },
+      { key: WORKSPACE_SETUP_INSTRUCTION_KEY, value: parsed.data.workspace_setup_instruction },
+    ];
+    for (const { key, value } of entries) {
+      await this.db
+        .insert(schema.globalSettings)
+        .values({ key, value })
+        .onConflictDoUpdate({
+          target: schema.globalSettings.key,
+          set: { value, updatedAt: sql`now()` },
+        });
+    }
 
-    return { default_orchestrator_instruction: parsed.data.default_orchestrator_instruction };
+    return parsed.data;
   }
 }

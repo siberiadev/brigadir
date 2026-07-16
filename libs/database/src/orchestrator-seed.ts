@@ -1,5 +1,11 @@
 import { and, eq } from 'drizzle-orm';
-import { ORCHESTRATOR_AGENT_KEY } from '@brigadir/contracts';
+import {
+  ORCHESTRATOR_AGENT_KEY,
+  DEFAULT_ORCHESTRATOR_INSTRUCTION,
+  DEFAULT_WORKSPACE_SETUP_INSTRUCTION,
+  DEFAULT_ORCHESTRATOR_INSTRUCTION_KEY,
+  WORKSPACE_SETUP_INSTRUCTION_KEY,
+} from '@brigadir/contracts';
 import type { BrigadirDb } from './drizzle.constants';
 import * as schema from './schema';
 
@@ -32,35 +38,49 @@ export const ORCHESTRATOR_EXECUTOR_NAME = 'brigadir-orchestrator';
 const ORCHESTRATOR_INERT_STATUS = '—';
 
 /**
- * Built-in default orchestrator instruction (FR-022) — copied into a workspace's
- * seeded orchestrator when `global_settings.default_orchestrator_instruction`
- * is unset. The routing protocol + roster arrive per-run via the handoff
- * section (FR-012), so this stays a short role prompt.
+ * Built-in default instruction texts (FR-022) live in `@brigadir/contracts`
+ * (orchestrator-defaults.ts) since 2026-07-16 so the web app can offer
+ * "Reset to default" without a server round-trip. Re-exported here to keep
+ * the historical `@brigadir/database` import path working.
  */
-export const DEFAULT_ORCHESTRATOR_INSTRUCTION = `You are "brigadir", the triage orchestrator for this workspace.
+export { DEFAULT_ORCHESTRATOR_INSTRUCTION, DEFAULT_WORKSPACE_SETUP_INSTRUCTION };
 
-A worker agent's run has failed on a ticket. Your job is to read the failing run's report and the roster of available worker agents (both provided in the handoff section of this prompt) and decide, deterministically and briefly, how to proceed:
-
-- If a worker agent can fix the problem, reply with the "routed" outcome, naming the target agent and writing a self-contained rework task (framed as a fix of existing work — the worker continues on the existing branch/PR).
-- If the failure needs a human (ambiguous requirements, a product decision, repeated failures), reply with the "needs_human" outcome.
-
-You may also be invoked because a human answered a blocked question on this ticket. In that case the handoff section carries the original question and the human's answer alongside the failing run's report — read the Q&A first and let the answer drive your decision: route a rework task that applies it, or reply with the "needs_human" outcome if the answer still leaves the path unclear.
-
-If the human's decision changes a requirement, scenario, example, or contract, the rework task MUST make the worker reconcile the feature's spec artifacts BEFORE touching any code: spell out the exact edits (record the Q&A under a "## Clarifications" section in spec.md; replace every invalidated example, scenario, or task description — never leave an example that contradicts a formula or requirement), then instruct the worker to run /speckit-analyze to verify cross-artifact consistency and /speckit-converge to fold any remaining work into tasks.md without discarding completed tasks. Prescribe a full /speckit-plan + /speckit-tasks regeneration only when the decision reshapes the design itself. A decision is not applied until the artifacts QA verifies against reflect it.
-
-Do not attempt to fix the code yourself — you have no repository; you prescribe the steps in the task, the worker executes them. Do not exceed the rework budget; the system enforces it (a human answer grants one extra cycle). Keep the rework task concrete and actionable.`;
-
-const ORCHESTRATOR_KEY = 'default_orchestrator_instruction';
-
-/** Read the current default orchestrator instruction, falling back to the built-in constant. */
-export async function getDefaultOrchestratorInstruction(db: BrigadirDb): Promise<string> {
+/** Read one global_settings text value, falling back to the built-in default. */
+async function getInstructionSetting(
+  db: BrigadirDb,
+  key: string,
+  fallback: string,
+): Promise<string> {
   const [row] = await db
     .select({ value: schema.globalSettings.value })
     .from(schema.globalSettings)
-    .where(eq(schema.globalSettings.key, ORCHESTRATOR_KEY))
+    .where(eq(schema.globalSettings.key, key))
     .limit(1);
   const value = row?.value;
-  return typeof value === 'string' && value.length > 0 ? value : DEFAULT_ORCHESTRATOR_INSTRUCTION;
+  return typeof value === 'string' && value.length > 0 ? value : fallback;
+}
+
+/** Read the current default orchestrator (routing) instruction, falling back to the built-in constant. */
+export async function getDefaultOrchestratorInstruction(db: BrigadirDb): Promise<string> {
+  return getInstructionSetting(
+    db,
+    DEFAULT_ORCHESTRATOR_INSTRUCTION_KEY,
+    DEFAULT_ORCHESTRATOR_INSTRUCTION,
+  );
+}
+
+/**
+ * Read the current agent-creation (workspace setup) instruction, falling back
+ * to the built-in constant. Unlike the routing instruction (copied into the
+ * agent at workspace creation), this one is read LIVE by the setup handoff on
+ * every generate-agents run — edits apply to the very next run.
+ */
+export async function getWorkspaceSetupInstruction(db: BrigadirDb): Promise<string> {
+  return getInstructionSetting(
+    db,
+    WORKSPACE_SETUP_INSTRUCTION_KEY,
+    DEFAULT_WORKSPACE_SETUP_INSTRUCTION,
+  );
 }
 
 /** The cheap, no-repository executor profile config (claude_cli). */

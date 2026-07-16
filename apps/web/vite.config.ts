@@ -24,6 +24,12 @@ export default defineConfig({
       '@brigadir/contracts/pagination': fileURLToPath(
         new URL('../../packages/contracts/src/pagination.constants.ts', import.meta.url),
       ),
+      // Same pattern for the built-in brigadir instruction defaults (dep-free
+      // string constants) — the Settings "Reset to default" buttons need them
+      // at runtime.
+      '@brigadir/contracts/orchestrator-defaults': fileURLToPath(
+        new URL('../../packages/contracts/src/orchestrator-defaults.ts', import.meta.url),
+      ),
     },
   },
   server: {
