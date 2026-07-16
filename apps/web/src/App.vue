@@ -47,10 +47,8 @@ watch(
 
 <template>
   <div v-if="!auth.token" class="token-gate">
-    <el-card class="token-card">
-      <template #header>
-        <span class="brand-wordmark"><span class="brand-prompt">&gt;_</span> BRIGADIR</span>
-      </template>
+    <div class="token-form">
+      <span class="brand-wordmark"><img src="/logo_inline.svg" alt="" class="brand-logo" /> BRIGADIR</span>
       <p>Enter the dashboard access token to continue.</p>
       <el-input
         v-model="tokenInput"
@@ -59,10 +57,8 @@ watch(
         data-test="token-input"
         @keyup.enter="saveToken"
       />
-      <el-button type="primary" data-test="token-submit" style="margin-top: 12px" @click="saveToken">
-        Continue
-      </el-button>
-    </el-card>
+      <el-button type="primary" data-test="token-submit" @click="saveToken"> Continue </el-button>
+    </div>
   </div>
 
   <div v-else class="app-shell">
@@ -79,20 +75,37 @@ watch(
 .token-gate {
   display: flex;
   justify-content: center;
-  padding-top: 12vh;
+  align-items: center;
+  min-height: 100vh;
 }
-.token-card {
+// No card wrapper — the form sits bare, centred on the page.
+.token-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   width: 360px;
+
+  p {
+    margin: 0;
+  }
+  // Extra breathing room above the primary action, beyond the 12px column gap.
+  .el-button {
+    margin-top: 12px;
+  }
 }
-// The `>_ BRIGADIR` wordmark: monospace, amber prompt (see README banner).
+// The `BRIGADIR` wordmark: monospace, with the amber inline logo mark ahead of it.
 .brand-wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-family: $font-family-mono;
   font-weight: $font-weight-bold;
   font-size: 18px;
   letter-spacing: 0.04em;
 }
-.brand-prompt {
-  color: var(--el-color-primary);
+.brand-logo {
+  height: 1.4em;
+  width: auto;
 }
 // The sidebar is `position: fixed` at 70px; offset the main region by exactly the
 // rail width so nothing renders under it (research R5 / SC-006).
