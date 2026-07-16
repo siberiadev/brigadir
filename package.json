@@ -7,14 +7,15 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "pnpm --filter @brigadir/contracts build && pnpm --filter @brigadir/mcp-server build && nest build backend && nest build worker && pnpm --filter @brigadir/web build",
+    "build": "pnpm --filter @brigadir/contracts build && pnpm --filter @brigadir/mcp-server build && pnpm --filter @brigadir/admin-mcp build && nest build backend && nest build worker && pnpm --filter @brigadir/web build",
     "build:backend": "nest build backend",
     "build:worker": "nest build worker",
     "build:smoke": "nest build smoke",
     "build:mcp-server": "pnpm --filter @brigadir/mcp-server build",
-    "typecheck": "tsc -p tsconfig.json --noEmit && pnpm --filter @brigadir/contracts typecheck && pnpm --filter @brigadir/mcp-server typecheck",
+    "build:admin-mcp": "pnpm --filter @brigadir/admin-mcp build",
+    "typecheck": "tsc -p tsconfig.json --noEmit && pnpm --filter @brigadir/contracts typecheck && pnpm --filter @brigadir/mcp-server typecheck && pnpm --filter @brigadir/admin-mcp typecheck",
     "lint": "eslint \"{apps,libs,packages}/**/*.ts\"",
-    "test": "pnpm --filter @brigadir/contracts test && pnpm --filter @brigadir/mcp-server test && vitest run --project unit",
+    "test": "pnpm --filter @brigadir/contracts test && pnpm --filter @brigadir/mcp-server test && pnpm --filter @brigadir/admin-mcp test && vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "start:backend": "node dist/apps/backend/main.api.js",
     "start:worker": "node dist/apps/worker/main.worker.js",

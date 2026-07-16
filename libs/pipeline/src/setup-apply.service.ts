@@ -24,6 +24,15 @@ export type TeamAcceptResult =
   /** FR-014: `team` from a non-setup run — recast and finalized as a failure. */
   | { kind: 'recast_failure' };
 
+/** Proposed roster shape (the `team.agents` array from a report, reused by the
+ *  admin plane's create_team endpoint — feature 012). */
+export type ProposedTeam = NonNullable<AgentReport['team']>['agents'];
+
+/** Result of the run-independent admin create_team path (feature 012). */
+export type TeamCreateResult =
+  | { kind: 'applied'; agentsCreated: number }
+  | { kind: 'invalid'; issues: TeamIssue[] };
+
 /**
  * SetupApplyService (feature 011, D9/D10) — the accept path of a workspace-setup
  * run's `team` report. Validation and application share ONE transaction so
@@ -76,7 +85,7 @@ export class SetupApplyService {
       return recast ? { kind: 'recast_failure' } : { kind: 'conflict' };
     }
 
-    const issues = await this.validate(run.workspaceId, team.agents);
+    const issues = await this.validateTeam(run.workspaceId, team.agents);
     if (issues.length > 0) {
       this.logger.log(`setup run ${runId}: proposal rejected with ${issues.length} issue(s)`);
       return { kind: 'invalid', issues };
@@ -85,12 +94,47 @@ export class SetupApplyService {
     return this.apply(runId, run.workspaceId, report, team.agents);
   }
 
+  /**
+   * feature 012 (admin plane): validate + apply a team WITHOUT a run and WITHOUT
+   * a review task. Reuses the exact same validator (`validateTeam`) and agent
+   * inserter (`insertTeamAgents`) as the run-bound path, so a proposal accepted
+   * here would be accepted there and vice-versa. All-or-nothing: an invalid
+   * agent ⇒ NOTHING created. The caller (POST /api/workspaces/:id/team) has
+   * already checked the workspace exists and has no worker agents.
+   */
+  async createTeamDirect(workspaceId: string, proposed: ProposedTeam): Promise<TeamCreateResult> {
+    const issues = await this.validateTeam(workspaceId, proposed);
+    if (issues.length > 0) return { kind: 'invalid', issues };
+
+    const profileByName = await this.resolveProfileIds(proposed);
+    try {
+      await this.db.transaction(async (tx) => {
+        await this.insertTeamAgents(tx, workspaceId, proposed, profileByName);
+      });
+    } catch (err) {
+      if ((err as { code?: string }).code === '23505') {
+        // Raced a concurrent manual/admin agent create on a name — the whole tx
+        // rolled back (no partial team), surfaced as a normal validation reject.
+        return {
+          kind: 'invalid',
+          issues: [
+            {
+              path: ['agents'],
+              code: 'duplicate_name',
+              message: 'an agent with one of the proposed names was created concurrently — adjust and re-submit',
+            },
+          ],
+        };
+      }
+      throw err;
+    }
+    this.logger.log(`admin create_team on workspace ${workspaceId}: ${proposed.length} agent(s) created (enabled)`);
+    return { kind: 'applied', agentsCreated: proposed.length };
+  }
+
   // --- validation (FR-015, all-or-nothing) ---
 
-  private async validate(
-    workspaceId: string,
-    proposed: NonNullable<AgentReport['team']>['agents'],
-  ): Promise<TeamIssue[]> {
+  async validateTeam(workspaceId: string, proposed: ProposedTeam): Promise<TeamIssue[]> {
     const issues: TeamIssue[] = [];
 
     // Board statuses — via the workspace's own Jira access. Unavailable board
@@ -219,16 +263,12 @@ export class SetupApplyService {
     runId: string,
     workspaceId: string,
     report: AgentReport,
-    proposed: NonNullable<AgentReport['team']>['agents'],
+    proposed: ProposedTeam,
   ): Promise<TeamAcceptResult> {
     // Re-resolve profile ids inside the same request (names validated above);
     // the insert below still races a concurrent manual create — the DB unique
     // (agents_workspace_name) is the backstop, degraded to a clean `invalid`.
-    const profiles = await this.db
-      .select({ id: schema.executors.id, name: schema.executors.name })
-      .from(schema.executors)
-      .where(inArray(schema.executors.name, [...new Set(proposed.map((p) => p.executor))]));
-    const profileByName = new Map(profiles.map((p) => [p.name, p.id]));
+    const profileByName = await this.resolveProfileIds(proposed);
 
     try {
       let applied = false;
@@ -242,22 +282,7 @@ export class SetupApplyService {
           .returning({ id: schema.runs.id });
         if (finalized.length === 0) return; // conflict — applied stays false
 
-        await tx.insert(schema.agents).values(
-          proposed.map((p) => ({
-            workspaceId,
-            executorId: profileByName.get(p.executor)!,
-            name: p.name,
-            description: p.description,
-            instruction: p.instruction,
-            triggerStatus: p.trigger_status,
-            triggerJql: null,
-            statusRunning: p.status_running ?? null,
-            statusSuccess: p.status_success,
-            statusFailure: p.status_failure,
-            behavior: {},
-            enabled: true,
-          })),
-        );
+        await this.insertTeamAgents(tx, workspaceId, proposed, profileByName);
 
         // The review gate (FR-016): one non-blocking, ticketless review task.
         await tx.insert(schema.humanTasks).values({
@@ -308,6 +333,50 @@ export class SetupApplyService {
       }
       throw err;
     }
+  }
+
+  /**
+   * Resolve executor PROFILE NAMES → ids (names already validated by
+   * `validateTeam`). Shared by the run-bound `apply` and the admin
+   * `createTeamDirect`; the insert still races a concurrent create — the DB
+   * unique (agents_workspace_name) is the backstop.
+   */
+  private async resolveProfileIds(proposed: ProposedTeam): Promise<Map<string, string>> {
+    const profiles = await this.db
+      .select({ id: schema.executors.id, name: schema.executors.name })
+      .from(schema.executors)
+      .where(inArray(schema.executors.name, [...new Set(proposed.map((p) => p.executor))]));
+    return new Map(profiles.map((p) => [p.name, p.id]));
+  }
+
+  /**
+   * Insert the validated roster as enabled worker agents. Extracted so the
+   * run-bound accept path (`apply`, inside its finalize+review-task tx) and the
+   * admin `createTeamDirect` (its own tx, no run) share ONE insert — behavior is
+   * identical, only the surrounding transaction differs.
+   */
+  private async insertTeamAgents(
+    tx: BrigadirDb,
+    workspaceId: string,
+    proposed: ProposedTeam,
+    profileByName: Map<string, string>,
+  ): Promise<void> {
+    await tx.insert(schema.agents).values(
+      proposed.map((p) => ({
+        workspaceId,
+        executorId: profileByName.get(p.executor)!,
+        name: p.name,
+        description: p.description,
+        instruction: p.instruction,
+        triggerStatus: p.trigger_status,
+        triggerJql: null,
+        statusRunning: p.status_running ?? null,
+        statusSuccess: p.status_success,
+        statusFailure: p.status_failure,
+        behavior: {},
+        enabled: true,
+      })),
+    );
   }
 
   /** FR-014: `team` from anything but an orchestrator setup run ⇒ failure. */

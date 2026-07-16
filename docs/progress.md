@@ -826,3 +826,56 @@ Verified: args snapshot updated after asserting the draft-07 output is
 semantically identical ($schema, enums incl. `team`, required, additionalProperties,
 bounds, descriptions). Full gates green: contracts 77, mcp-server 14, unit 244,
 web 160, integration 249.
+
+## Iteration 17 — Admin MCP server `brigadir-admin` (feature 012, 2026-07-16)
+
+Spec-kit feature `specs/012-admin-mcp` (spec → plan with Constitution Check → tasks →
+implementation). A NEW package `packages/admin-mcp` ships the stdio MCP server
+`brigadir-admin` — the manual, human-in-the-loop precursor to the workspace-orchestrator
+planning mode (plan-internal, "админский MCP «Claude-тимлид»"). A human plugs it into
+Claude Code and asks "assemble a team for this board"; Claude does recon and creates the
+workspace + agents through the tools.
+
+Sharp line vs the callback MCP (`packages/mcp-server`): that one is for an agent INSIDE a
+run (per-run JWT, callback tools); this one is the admin plane for a human+Claude OUTSIDE
+any run (dashboard bearer, create workspaces/agents). The server is a THIN HTTP client of
+the dashboard admin API — zero DB access. Secrets live ONLY in its env
+(`BRIGADIR_API_URL`, `BRIGADIR_DASHBOARD_TOKEN`, `BRIGADIR_JIRA_EMAIL`,
+`BRIGADIR_JIRA_API_TOKEN`, fail-fast `requireEnv`): the bearer goes into the header, the
+Jira creds are injected server-side into the `POST /api/workspaces` body — the model never
+sees or passes them (Principle V; a unit test proves a smuggled `jira_api_token` arg is
+ignored). stdout is MCP protocol only; a 4xx surfaces to the model as a tool error WITH the
+response body (path-qualified issues to repair from), no retry; 5xx/network → bounded retries.
+
+Nine tools (5 read: `list_workspaces`, `get_workspace`, `get_board_statuses`,
+`list_executors`, `list_agents`; 4 write: `create_workspace` — output `enabled` pinned to
+literal `false` since the backend creates workspaces PAUSED (feature 011), no start tool;
+`generate_agents`; `create_team`; `create_agent`/`update_agent`). Every tool declares an
+`inputSchema` AND an `outputSchema` (MCP structured output — `structuredContent` + a text
+duplicate); schemas are zod 4 in `packages/contracts/src/admin-tools.schema.ts` (single
+typed source), reusing `TeamAgentSchema`, converted with
+`z.toJSONSchema(schema, { target: 'draft-7' })`. Handlers project backend rows into the
+declared strict output shapes.
+
+The only new backend surface is `POST /api/workspaces/:id/team` (DashboardTokenGuard):
+atomic team spawn reusing the feature-011 validator + applier. Refactor of
+`SetupApplyService`: `validate` → public `validateTeam`, agent insert extracted to
+`insertTeamAgents`, and a new `createTeamDirect(workspaceId, agents)` that validates +
+inserts in one transaction WITHOUT a run and WITHOUT a review task — the run-bound
+`acceptTeamReport` path shares both helpers and is behavior-identical (feature-011 suite
+unchanged). All-or-nothing: an invalid agent ⇒ 422 with path-qualified issues and ZERO
+created; precondition 409 `worker_agents_exist` (v1 does not rebuild teams). No Jira writes
+anywhere (Principle III). `DashboardModule` imports `PipelineModule` for the service.
+
+Tests in the same change: contracts +7 (`admin-tools.schema.spec.ts` — toJSONSchema
+draft-07 for every input+output, TeamAgent reuse, roster bounds, `enabled:false` const,
+secret-field rejection), admin-mcp 14 (handler units with injectable `fetchImpl`: URL/method/
+headers per tool, secret-cannot-be-smuggled, 4xx→error no-retry, 5xx→bounded retries,
+create_workspace injects env creds, update_agent strips agent_id), plus the integration
+spec `test/integration/admin-mcp.integration.spec.ts` (create_workspace→enabled=false;
+create_team atomic invalid⇒422 zero-created + happy path; worker_agents_exist; generate_agents
+202/409). Gates green locally: typecheck, lint, contracts 84, mcp-server 14, admin-mcp 14,
+unit 244. The testcontainers integration suite could not run in this environment (the Docker
+registry CDN `production.cloudfront.docker.com` is blocked by egress policy — 403 — so
+postgres/redis/ryuk images cannot be pulled); the integration spec typechecks and follows the
+existing harness patterns and should be run where Docker is available.
