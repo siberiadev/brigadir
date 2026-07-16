@@ -134,6 +134,21 @@ async function submit(item: HumanQueueItem) {
       <template #footer="{ item }">
         <!-- open: resolution form -->
         <div v-if="filter === 'open'" class="resolve-form">
+          <!-- feature 013: suggested answers as one-click buttons. A click only
+               pre-fills the answer draft (value ?? label) — submit stays the
+               explicit button below; free text remains the last option. -->
+          <div v-if="item.options?.length" class="answer-options" data-test="answer-options">
+            <el-button
+              v-for="(option, index) in item.options"
+              :key="index"
+              class="answer-option"
+              :data-test="`option-${item.id}-${index}`"
+              @click="draftFor(item.id).answer = option.value ?? option.label"
+            >
+              <span class="option-label">{{ option.label }}</span>
+              <span v-if="option.description" class="option-description">{{ option.description }}</span>
+            </el-button>
+          </div>
           <el-input
             v-model="draftFor(item.id).answer"
             type="textarea"
@@ -205,6 +220,43 @@ async function submit(item: HumanQueueItem) {
   display: flex;
   flex-direction: column;
   gap: $space-sm;
+}
+.answer-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $space-sm;
+
+  // Sibling el-buttons get an automatic left margin; the flex gap owns spacing.
+  .el-button + .el-button {
+    margin-left: 0;
+  }
+}
+.answer-option {
+  height: auto;
+  padding: $space-xs $space-sm;
+  max-width: 100%;
+
+  // Label on top, secondary description underneath, inside one button.
+  :deep(> span) {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    min-width: 0;
+  }
+}
+.option-label {
+  font-weight: $font-weight-medium;
+  white-space: normal;
+  text-align: left;
+  word-break: break-word;
+}
+.option-description {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  white-space: normal;
+  text-align: left;
+  word-break: break-word;
 }
 .form-actions {
   display: flex;
