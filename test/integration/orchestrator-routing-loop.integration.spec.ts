@@ -87,6 +87,7 @@ describe('orchestrator routing loop: fail → triage → route → rework → su
         workspaceId,
         executorId,
         name: 'Developer',
+        key: 'developer',
         description: 'Implements features',
         instruction: 'Implement the ticket.',
         triggerStatus: 'Ready for Dev',
@@ -106,6 +107,7 @@ describe('orchestrator routing loop: fail → triage → route → rework → su
         workspaceId,
         executorId,
         name: 'Fixer',
+        key: 'fixer',
         description: 'Fixes failing work',
         instruction: FIXER_INSTRUCTION,
         triggerStatus: 'Never', // not poll-triggered in this test
@@ -124,6 +126,7 @@ describe('orchestrator routing loop: fail → triage → route → rework → su
         workspaceId,
         executorId,
         name: 'brigadir',
+        key: 'brigadir',
         instruction: 'You are the orchestrator.',
         isOrchestrator: true,
         triggerStatus: null,
@@ -131,7 +134,8 @@ describe('orchestrator routing loop: fail → triage → route → rework → su
         statusRunning: null,
         statusSuccess: 'Blocked', // inert placeholders (FR-007)
         statusFailure: 'Blocked',
-        behavior: { mock_scenario: 'routed', route_target: 'Fixer' },
+        // feature 014: routing resolves by KEY — the mock echoes the target's key.
+        behavior: { mock_scenario: 'routed', route_target: 'fixer' },
         maxAttempts: 1,
       })
       .returning({ id: schema.agents.id });
@@ -231,9 +235,9 @@ describe('orchestrator routing loop: fail → triage → route → rework → su
     const panels = comments.map(panelTypeOf);
     expect(panels).toContain('error'); // Developer failure comment
     expect(panels).toContain('info'); // routing comment + success comment
-    // The routing comment names the target + task.
+    // The routing comment names the target (by key, feature 014) + task.
     const routingComment = JSON.stringify(comments);
-    expect(routingComment).toContain('Fixer');
+    expect(routingComment).toContain('fixer');
 
     // --- SC-002: the rework run's assembled prompt carries task + failing context,
     //     while Fixer's stored instruction is byte-for-byte unchanged ---

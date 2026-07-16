@@ -71,6 +71,7 @@ describe('answer-triage resume (delta on 010)', () => {
         workspaceId,
         executorId,
         name: 'Developer',
+        key: 'developer',
         description: 'Implements features',
         instruction: 'You are Developer.',
         statusRunning: 'In Progress',
@@ -92,13 +93,14 @@ describe('answer-triage resume (delta on 010)', () => {
         workspaceId,
         executorId,
         name: 'brigadir',
+        key: 'brigadir',
         instruction: 'You are brigadir.',
         isOrchestrator: true,
         triggerStatus: null,
         statusRunning: null,
         statusSuccess: '—',
         statusFailure: '—',
-        behavior: { mock_scenario: 'routed', route_target: 'Developer' },
+        behavior: { mock_scenario: 'routed', route_target: 'developer' },
         enabled: true,
         maxAttempts: 1,
       })
@@ -241,7 +243,8 @@ describe('answer-triage resume (delta on 010)', () => {
     expect(ctx!.instruction).toContain('Question: Formula or example?');
     expect(ctx!.instruction).toContain('Answer: Option 1 — the formula is authoritative.');
     expect(ctx!.instruction).toContain('Failing run: Spec example contradicts the FR-004 formula.');
-    expect(ctx!.instruction).toContain('- Developer: Implements features');
+    // feature 014: roster renders "- <key> — <name> (<role>): <description>".
+    expect(ctx!.instruction).toContain('- developer — Developer: Implements features');
     expect(ctx!.instruction).toContain('Decision protocol:');
   }, 120_000);
 

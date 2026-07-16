@@ -69,6 +69,8 @@ export class HumanTasksController {
         workspaceName: schema.workspaces.name,
         agentId: schema.agents.id,
         agentName: schema.agents.name,
+        agentKey: schema.agents.key,
+        agentRole: schema.agents.role,
       })
       .from(schema.humanTasks)
       // Left join (feature 011): ticketless setup tasks (review/failure/question)
@@ -106,7 +108,10 @@ export class HumanTasksController {
             r.ticketKey === null
               ? null
               : { key: r.ticketKey, jira_url: `${r.siteUrl.replace(/\/+$/, '')}/browse/${r.ticketKey}` },
-          agent: r.agentId && r.agentName ? { id: r.agentId, name: r.agentName } : null,
+          agent:
+            r.agentId && r.agentName
+              ? { id: r.agentId, name: r.agentName, key: r.agentKey!, role: r.agentRole ?? null }
+              : null,
           workspace: { id: r.workspaceId, name: r.workspaceName },
           run_id: r.runId ?? null,
           created_at: r.createdAt.toISOString(),

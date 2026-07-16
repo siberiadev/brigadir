@@ -166,13 +166,14 @@ describe('agent CRUD + linter + test-run (T142/T143)', () => {
     expect((await second.json()).deduplicated).toBe(true);
   });
 
-  it('GET list — пагинированный конверт, дефолт 10, порядок по name (реш. 2026-07-15)', async () => {
+  it('GET list — пагинированный конверт, дефолт 10, порядок по key (feature 014)', async () => {
     // Линтер запрещает дублирующий триггер среди enabled-агентов — сеем напрямую в БД.
     await db.db.insert(schema.agents).values(
       Array.from({ length: 12 }, (_, i) => ({
         workspaceId,
         executorId,
         name: `agent-${String(i).padStart(2, '0')}`,
+        key: `agent-${String(i).padStart(2, '0')}`,
         instruction: 'x',
         triggerStatus: `Status ${i}`,
         statusSuccess: 'Code Review',
@@ -185,12 +186,65 @@ describe('agent CRUD + linter + test-run (T142/T143)', () => {
     ).json();
     expect(page1).toMatchObject({ page: 1, page_size: 10, total: 12 });
     expect(page1.items).toHaveLength(10);
-    expect(page1.items[0].name).toBe('agent-00'); // детерминированный ORDER BY name
+    expect(page1.items[0].key).toBe('agent-00'); // детерминированный ORDER BY key (feature 014)
 
     const page2 = await (
       await fetch(`${url}/api/agents?workspace=${workspaceId}&page=2`, { headers })
     ).json();
     expect(page2.items).toHaveLength(2);
-    expect(page2.items[0].name).toBe('agent-10');
+    expect(page2.items[0].key).toBe('agent-10');
+  });
+
+  // --- feature 014: agent identity (key derivation, immutability, uniqueness) ---
+
+  it('create derives the key from name + role, server-side (FR-005/006)', async () => {
+    const res = await post(agentBody({ name: 'Hera', role: 'Reviewer' }));
+    expect(res.status).toBe(201);
+    const agent = await res.json();
+    expect(agent.key).toBe('hera-reviewer');
+    expect(agent.role).toBe('Reviewer');
+    expect(agent.name).toBe('Hera');
+  });
+
+  it('rename of name/role does NOT change the key (FR-007 immutability)', async () => {
+    const created = await (await post(agentBody({ name: 'Hera', role: 'Reviewer' }))).json();
+    expect(created.key).toBe('hera-reviewer');
+
+    const upd = await fetch(`${url}/api/agents/${created.id}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(agentBody({ name: 'Athena', role: 'Auditor' })),
+    });
+    expect(upd.status).toBe(200);
+    const updated = await upd.json();
+    expect(updated.name).toBe('Athena');
+    expect(updated.role).toBe('Auditor');
+    expect(updated.key).toBe('hera-reviewer'); // unchanged
+  });
+
+  it('supplying `key` in an update payload → 422 (strict schema rejects it, FR-007)', async () => {
+    const created = await (await post(agentBody({ name: 'Hera', role: 'Reviewer' }))).json();
+    const res = await fetch(`${url}/api/agents/${created.id}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(agentBody({ name: 'Athena', role: 'Reviewer', key: 'athena-reviewer' })),
+    });
+    expect(res.status).toBe(422);
+    const [row] = await db.db.select().from(schema.agents).where(eq(schema.agents.id, created.id));
+    expect(row.key).toBe('hera-reviewer'); // never touched
+  });
+
+  it('two agents with the same name+role get distinct keys via -N suffix (FR-008)', async () => {
+    const a = await (await post(agentBody({ name: 'Hera', role: 'Reviewer', trigger_status: 'Ready for Dev' }))).json();
+    const b = await (await post(agentBody({ name: 'Hera', role: 'Reviewer', trigger_status: 'Code Review' }))).json();
+    expect(a.key).toBe('hera-reviewer');
+    expect(b.key).toBe('hera-reviewer-2');
+    expect(b.name).toBe('Hera'); // name may repeat now
+  });
+
+  it('a persona slugging to the reserved orchestrator key is suffixed away (FR-014)', async () => {
+    const res = await post(agentBody({ name: 'brigadir' }));
+    expect(res.status).toBe(201);
+    expect((await res.json()).key).toBe('brigadir-2'); // 'brigadir' reserved
   });
 });

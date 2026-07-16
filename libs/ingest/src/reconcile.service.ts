@@ -113,7 +113,8 @@ export class ReconcileService {
         ticketId: schema.tickets.id,
         ticketKey: schema.tickets.jiraKey,
         agentId: schema.agents.id,
-        agentName: schema.agents.name,
+        // feature 014: logs use the key (the readable technical handle), not the persona.
+        agentKey: schema.agents.key,
         behavior: schema.agents.behavior,
       })
       .from(schema.tickets)
@@ -155,7 +156,7 @@ export class ReconcileService {
       });
       if (!res.deduplicated) {
         this.logger.log(
-          `dependency re-eval: ${c.ticketKey} now clear for "${c.agentName}" → run ${res.runId}`,
+          `dependency re-eval: ${c.ticketKey} now clear for "${c.agentKey}" → run ${res.runId}`,
         );
       }
     }

@@ -31,7 +31,9 @@ export type RunCheckStatus = z.infer<typeof RunCheckStatusSchema>;
 
 // --- shared nested shapes ---
 
-export const RunAgentRefSchema = z.object({ id: z.string(), name: z.string() }).strict();
+export const RunAgentRefSchema = z
+  .object({ id: z.string(), name: z.string(), key: z.string(), role: z.string().nullable() })
+  .strict();
 
 export const RunTicketRefSchema = z
   .object({

@@ -60,6 +60,7 @@ describe('scope_jql global filter (T067)', () => {
         workspaceId: ws.id,
         executorId: exec.id,
         name: 'impl',
+        key: 'impl',
         instruction: 'do it',
         triggerStatus: TRIGGER,
         statusSuccess: 'Code Review',

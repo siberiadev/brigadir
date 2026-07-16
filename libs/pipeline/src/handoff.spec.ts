@@ -12,7 +12,7 @@ import { buildHandoffSection } from './handoff';
 
 interface StubData {
   failingRun?: { workspaceId: string; ticketId: string; report: AgentReport | null };
-  roster?: Array<{ name: string; description: string | null }>;
+  roster?: Array<{ key: string; name: string; role: string | null; description: string | null }>;
   cycleCount?: number;
   settings?: Record<string, unknown>;
   humanTask?: { title: string; details: string | null };
@@ -68,8 +68,8 @@ describe('buildHandoffSection', () => {
       const db = makeDb({
         failingRun: { workspaceId: 'ws-1', ticketId: 'tk-1', report: failingReport },
         roster: [
-          { name: 'Developer', description: 'Implements features' },
-          { name: 'Reviewer', description: 'Reviews PRs' },
+          { key: 'developer', name: 'Developer', role: null, description: 'Implements features' },
+          { key: 'reviewer', name: 'Reviewer', role: 'QA', description: 'Reviews PRs' },
         ],
         cycleCount: 1,
         settings: { rework_max: 3 },
@@ -87,8 +87,9 @@ describe('buildHandoffSection', () => {
       expect(out).not.toContain('typecheck'); // pass checks omitted
       expect(out).toContain('Artifacts: branch brigadir/PROJ-1, PR https://github.com/x/y/pull/3');
       expect(out).toContain('Available worker agents');
-      expect(out).toContain('- Developer: Implements features');
-      expect(out).toContain('- Reviewer: Reviews PRs');
+      // feature 014: "- <key> — <name>(  (role))?: <description>"
+      expect(out).toContain('- developer — Developer: Implements features');
+      expect(out).toContain('- reviewer — Reviewer (QA): Reviews PRs');
       expect(out).toContain('Rework cycles used: 1 of 3');
       expect(out).toContain('Decision protocol:');
       expect(out).toContain('routed');
@@ -98,7 +99,7 @@ describe('buildHandoffSection', () => {
     it('uses the default rework_max of 2 when unset', async () => {
       const db = makeDb({
         failingRun: { workspaceId: 'ws-1', ticketId: 'tk-1', report: failingReport },
-        roster: [{ name: 'Developer', description: null }],
+        roster: [{ key: 'developer', name: 'Developer', role: null, description: null }],
         cycleCount: 0,
       });
       const out = await buildHandoffSection(
@@ -106,7 +107,7 @@ describe('buildHandoffSection', () => {
         db,
       );
       expect(out).toContain('Rework cycles used: 0 of 2');
-      expect(out).toContain('- Developer'); // null description → bare name
+      expect(out).toContain('- developer — Developer'); // null description → key — name
     });
 
     it('degrades best-effort when the failing run row is missing (no throw)', async () => {
@@ -177,7 +178,7 @@ describe('buildHandoffSection', () => {
     it('renders the Q&A, the failure context, the roster, the cycle count, and the protocol', async () => {
       const db = makeDb({
         failingRun: { workspaceId: 'ws-1', ticketId: 'tk-1', report: failingReport },
-        roster: [{ name: 'Developer', description: 'Implements features' }],
+        roster: [{ key: 'developer', name: 'Developer', role: null, description: 'Implements features' }],
         cycleCount: 1,
         settings: { rework_max: 3 },
         humanTask: { title: 'Formula or example?', details: 'FR-004 contradicts scenario 4.' },
@@ -190,7 +191,7 @@ describe('buildHandoffSection', () => {
       expect(out).toContain('FR-004 contradicts scenario 4.');
       expect(out).toContain('Answer: Option 1 — the formula is authoritative.');
       expect(out).toContain('Failing run: Implemented the endpoint but two tests fail.');
-      expect(out).toContain('- Developer: Implements features');
+      expect(out).toContain('- developer — Developer: Implements features');
       expect(out).toContain('Rework cycles used: 1 of 3');
       expect(out).toContain('Decision protocol:');
       // Budget still available — no grant note.
@@ -200,7 +201,7 @@ describe('buildHandoffSection', () => {
     it('states the one-cycle grant when the budget is exhausted', async () => {
       const db = makeDb({
         failingRun: { workspaceId: 'ws-1', ticketId: 'tk-1', report: failingReport },
-        roster: [{ name: 'Developer', description: null }],
+        roster: [{ key: 'developer', name: 'Developer', role: null, description: null }],
         cycleCount: 2,
         settings: { rework_max: 2 },
         humanTask: { title: 'Q', details: null },

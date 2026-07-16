@@ -83,6 +83,7 @@ describe('config source-of-truth flip (T130)', () => {
       workspaceId: ws.id,
       executorId: exec.id,
       name: 'implementer',
+      key: 'implementer',
       instruction: 'EDITED VIA UI — must not be overwritten',
       statusSuccess: 'Shipped',
       statusFailure: 'Rejected',

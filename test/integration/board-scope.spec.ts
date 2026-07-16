@@ -57,6 +57,7 @@ async function boot(boardType: JiraBoardType): Promise<Booted> {
       workspaceId: ws.id,
       executorId: exec.id,
       name: 'impl',
+      key: 'impl',
       instruction: 'do it',
       triggerStatus: TRIGGER,
       statusSuccess: 'Code Review',

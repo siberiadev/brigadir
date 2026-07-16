@@ -934,3 +934,74 @@ integration 260 (75 files, full suite). Docker note: the registry CDN block from
 worked around by running dockerd with `--registry-mirror=https://mirror.gcr.io`
 (gcr mirror is reachable through the egress proxy), so the testcontainers suite ran
 in this environment this time.
+
+## Iteration 19 — Agent identity: persona name, role, routing key (feature 014, 2026-07-16)
+
+Separated an agent's identity from its presentation. The immutable UUID `id`
+stays the sole internal reference (joins, FKs, idempotency, resume — all already
+by id). `name` became a free, non-unique persona ("Achilles", "Hera"); a new
+`role` (text, nullable) carries the function ("Developer"/"QA"/"Reviewer";
+orchestrator = "teamlead"); and a new `key` (text NOT NULL, `UNIQUE(workspace_id,
+key)`) is the readable, immutable HANDLE used ONLY at the LLM/UI boundary
+(routing, URLs, logs), resolved to `id` at that boundary. Why key and not id:
+routing passes through the LLM (brigadir returns `target_agent` as free text) —
+it echoes a short slug reliably where it mangles a UUID.
+
+One canonical slug: `packages/contracts/src/agent-key.ts` (dep-free, like
+`pagination.constants`) exports `slugifyAgentKey(name, role)` (lowercase,
+non-`[a-z0-9]`→`-`, collapse, trim; empty → role slug → `agent`),
+`ensureUniqueAgentKey(base, taken)` (smallest free `-2`/`-3`, reserved keys always
+taken), and `ORCHESTRATOR_AGENT_KEY = 'brigadir'` / `RESERVED_AGENT_KEYS`. The
+system derives keys ONCE at creation on EVERY path (in-run team apply, backend
+create = dashboard + admin-MCP passthrough, config-seeder, orchestrator seed,
+backfill); the UPDATE path never touches key (the write schemas stay `.strict()`
+with no `key` field, so a supplied key is a 422 — the "reject" resolution, free).
+
+Decisions (spec 014, research D1–D8): orchestrator key `brigadir` reserved (role
+lives in the editable `role` field, so encoding it in the immutable key would
+freeze editable data; reservation makes it unobtainable by workers — D1); theme
+picked by the LLM with NO theme list in code (the setup handoff prompts "invent
+ONE coherent theme", examples illustrative — D8); backfill deterministic (worker
+key = slug of current name, role NULL; orchestrator role `teamlead`, key
+`brigadir`; collisions suffixed in id order — D3). Two `/speckit-analyze` findings
+folded in: intra-proposal team dedup is by DERIVED KEY not name (I1 — two personas
+slugging alike are bounced back; the old duplicate-vs-existing-name check is gone
+since names may now repeat), and `role` is OPTIONAL in `TeamAgentSchema` (required
+by prompt) to keep `ReportSchema` v1 forward-compatible without a disproportionate
+top-level `schema_version` bump (C1).
+
+Routing: `resolveRoutingTarget` matches `agents.key` (still enabled ∧
+non-orchestrator ∧ workspace); unknown/disabled/reserved key → human-task
+escalation (unchanged behavior). Roster in the handoff renders
+`- <key> — <name> (<role>): <description>` and instructs routing by key.
+Human-facing text shows "name (role)" (team review task) or the key (logs, the
+ADF routed line prints `target_agent` = key verbatim). Dashboard: `AgentResponse`
++ key/role, agents list `ORDER BY key` (name is no longer a deterministic sort
+key); run/human-queue embedded agent DTOs + key/role. Web: AgentForm gains an
+editable Role and a read-only Key (edit only); AgentsList shows name (role) + a
+monospace key column.
+
+Migration `0007_agent_identity.sql` + `REVIEW-0007` (§3 updated in the same
+change): drizzle-kit generated the DDL/snapshot/journal; the backfill DO-block
+(orchestrator UPDATE, then per-workspace worker slug + deterministic suffixing in
+id order, reserved `brigadir` seeded into `taken`) was hand-added between
+`ADD COLUMN key` (nullable) and `SET NOT NULL`. Its slug is a faithful SQL port of
+`slugifyAgentKey`; an integration test asserts byte-parity with the TS functions.
+
+Tests in the same iteration (Constitution VI): `agent-key.spec` (slug rule, empty
+fallback chain, suffixing, reserved); `agent-crud` +5 (key derived server-side,
+immutability on rename, `key` in update → 422, same-name → distinct keys,
+reserved-key persona → `brigadir-2`, list ORDER BY key); `agent-identity.integration`
+(the REAL migration backfill statements read from the .sql, run against
+pre-feature-shaped rows — orchestrator, slug collisions, reserved collision,
+non-Latin name — asserting SQL↔TS key parity + constraint swap); `workspace-setup`
+(team apply derives key+role; two personas slugging to one key → 422, zero agents);
+routing loop/guards updated to route by key; `handoff.spec`/`answer-triage` roster
+format; the `--json-schema` argv snapshot (expected, additive). Resume path
+verified id-based (untouched).
+
+Gates green locally: typecheck (all packages) + web vue-tsc, lint, unit 251 (39
+files) + contracts 107 (12) + admin-mcp 14 + web 165 (25), integration 268/269 —
+the one failure (`serve-static` SPA fallback) reproduces identically on the
+pristine tree (web `dist` not built in this worktree), i.e. pre-existing and
+unrelated to this feature.

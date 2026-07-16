@@ -70,6 +70,8 @@ export class RunsController {
         runId: schema.runs.id,
         agentId: schema.runs.agentId,
         agentName: schema.agents.name,
+        agentKey: schema.agents.key,
+        agentRole: schema.agents.role,
         ticketKey: schema.tickets.jiraKey,
         ticketSummary: schema.tickets.summary,
         status: schema.runs.status,
@@ -91,7 +93,7 @@ export class RunsController {
     return {
       items: rows.map((r) => ({
         run_id: r.runId,
-        agent: { id: r.agentId, name: r.agentName },
+        agent: { id: r.agentId, name: r.agentName, key: r.agentKey, role: r.agentRole ?? null },
         ticket:
           r.ticketKey === null
             ? null
@@ -144,6 +146,8 @@ export class RunsController {
         ticketId: schema.runs.ticketId,
         agentId: schema.runs.agentId,
         agentName: schema.agents.name,
+        agentKey: schema.agents.key,
+        agentRole: schema.agents.role,
         status: schema.runs.status,
         attempt: schema.runs.attempt,
         executorType: schema.runs.executorType,
@@ -209,7 +213,7 @@ export class RunsController {
         status: run.status as RunStatus,
         attempt: run.attempt,
         executor_type: run.executorType,
-        agent: { id: run.agentId, name: run.agentName },
+        agent: { id: run.agentId, name: run.agentName, key: run.agentKey, role: run.agentRole ?? null },
         duration_ms: durationMs(run.startedAt, run.finishedAt),
         cost_usd: run.costUsd ?? null,
         usage: run.usage ?? undefined,

@@ -2,7 +2,14 @@ import { Injectable, Inject, Logger } from '@nestjs/common';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import { JiraClientFactory } from '@brigadir/jira';
-import { lintAgent, type AgentReport, type LintIssue, type LintableAgent } from '@brigadir/contracts';
+import {
+  lintAgent,
+  slugifyAgentKey,
+  ensureUniqueAgentKey,
+  type AgentReport,
+  type LintIssue,
+  type LintableAgent,
+} from '@brigadir/contracts';
 
 const ACTIVE_STATUSES = ['queued', 'running', 'awaiting_human'];
 
@@ -173,7 +180,6 @@ export class SetupApplyService {
       status_failure: a.statusFailure,
       enabled: a.enabled,
     }));
-    const existingNames = new Set(existing.map((a) => a.name.toLowerCase()));
 
     // Executor profiles resolved by NAME — must exist and be enabled.
     const profileNames = [...new Set(proposed.map((p) => p.executor))];
@@ -183,24 +189,22 @@ export class SetupApplyService {
       .where(inArray(schema.executors.name, profileNames));
     const profileByName = new Map(profiles.map((p) => [p.name, p]));
 
-    const seenNames = new Set<string>();
+    // feature 014: identity is the derived key, not the name. Personas may repeat
+    // across the workspace (keys get suffixed at insert), so we no longer reject a
+    // proposal that reuses an existing name. We DO reject two proposed agents that
+    // slug to the SAME key — that would silently suffix into a broken themed roster
+    // (research D4/I1), so bounce it back to the model to pick distinct personas.
+    const seenKeys = new Set<string>();
     proposed.forEach((agent, index) => {
-      const lower = agent.name.toLowerCase();
-      if (existingNames.has(lower)) {
+      const key = slugifyAgentKey(agent.name, agent.role ?? null);
+      if (seenKeys.has(key)) {
         issues.push({
           path: ['team', 'agents', index, 'name'],
           code: 'duplicate_name',
-          message: `an agent named "${agent.name}" already exists in this workspace`,
+          message: `"${agent.name}"${agent.role ? ` (${agent.role})` : ''} collides with another proposed agent (both derive key "${key}") — give them distinct personas`,
         });
       }
-      if (seenNames.has(lower)) {
-        issues.push({
-          path: ['team', 'agents', index, 'name'],
-          code: 'duplicate_name',
-          message: `"${agent.name}" appears more than once in the proposal`,
-        });
-      }
-      seenNames.add(lower);
+      seenKeys.add(key);
 
       const profile = profileByName.get(agent.executor);
       if (!profile) {
@@ -267,7 +271,7 @@ export class SetupApplyService {
   ): Promise<TeamAcceptResult> {
     // Re-resolve profile ids inside the same request (names validated above);
     // the insert below still races a concurrent manual create — the DB unique
-    // (agents_workspace_name) is the backstop, degraded to a clean `invalid`.
+    // (agents_workspace_key, feature 014) is the backstop, degraded to a clean `invalid`.
     const profileByName = await this.resolveProfileIds(proposed);
 
     try {
@@ -293,7 +297,7 @@ export class SetupApplyService {
           title: 'Team assembled — review the workspace',
           details:
             `The orchestrator proposed ${proposed.length} agent(s): ` +
-            proposed.map((p) => `**${p.name}**`).join(', ') +
+            proposed.map((p) => `**${p.name}**${p.role ? ` (${p.role})` : ''}`).join(', ') +
             '.\n\nReview and edit them in the Agents tab, then start the workspace when ready.',
           blocking: false,
           status: 'open',
@@ -318,15 +322,15 @@ export class SetupApplyService {
       return { kind: 'applied', agentsCreated: proposed.length };
     } catch (err) {
       if ((err as { code?: string }).code === '23505') {
-        // Raced a concurrent manual agent create on a name — whole tx rolled
-        // back (no partial team), surfaced as a normal validation rejection.
+        // Raced a concurrent manual agent create on a key (feature 014) — whole tx
+        // rolled back (no partial team), surfaced as a normal validation rejection.
         return {
           kind: 'invalid',
           issues: [
             {
               path: ['team', 'agents'],
               code: 'duplicate_name',
-              message: 'an agent with one of the proposed names was created concurrently — adjust and re-submit',
+              message: 'an agent with one of the proposed keys was created concurrently — adjust and re-submit',
             },
           ],
         };
@@ -339,7 +343,7 @@ export class SetupApplyService {
    * Resolve executor PROFILE NAMES → ids (names already validated by
    * `validateTeam`). Shared by the run-bound `apply` and the admin
    * `createTeamDirect`; the insert still races a concurrent create — the DB
-   * unique (agents_workspace_name) is the backstop.
+   * unique (agents_workspace_key, feature 014) is the backstop.
    */
   private async resolveProfileIds(proposed: ProposedTeam): Promise<Map<string, string>> {
     const profiles = await this.db
@@ -361,21 +365,38 @@ export class SetupApplyService {
     proposed: ProposedTeam,
     profileByName: Map<string, string>,
   ): Promise<void> {
+    // feature 014: the SYSTEM derives each key (model supplies name + role only),
+    // made unique against existing workspace keys ∪ reserved, then against the
+    // keys assigned earlier in this same batch (two personas may slug alike).
+    const taken = new Set(
+      (
+        await tx
+          .select({ key: schema.agents.key })
+          .from(schema.agents)
+          .where(eq(schema.agents.workspaceId, workspaceId))
+      ).map((r) => r.key),
+    );
     await tx.insert(schema.agents).values(
-      proposed.map((p) => ({
-        workspaceId,
-        executorId: profileByName.get(p.executor)!,
-        name: p.name,
-        description: p.description,
-        instruction: p.instruction,
-        triggerStatus: p.trigger_status,
-        triggerJql: null,
-        statusRunning: p.status_running ?? null,
-        statusSuccess: p.status_success,
-        statusFailure: p.status_failure,
-        behavior: {},
-        enabled: true,
-      })),
+      proposed.map((p) => {
+        const key = ensureUniqueAgentKey(slugifyAgentKey(p.name, p.role ?? null), taken);
+        taken.add(key);
+        return {
+          workspaceId,
+          executorId: profileByName.get(p.executor)!,
+          name: p.name,
+          role: p.role ?? null,
+          key,
+          description: p.description,
+          instruction: p.instruction,
+          triggerStatus: p.trigger_status,
+          triggerJql: null,
+          statusRunning: p.status_running ?? null,
+          statusSuccess: p.status_success,
+          statusFailure: p.status_failure,
+          behavior: {},
+          enabled: true,
+        };
+      }),
     );
   }
 

@@ -191,6 +191,7 @@ export async function seedPipeline(
       workspaceId: workspace.id,
       executorId: executor.id,
       name: 'implementer',
+      key: 'implementer',
       instruction: 'Implement the ticket.',
       statusRunning: opts.statusRunning ?? null,
       statusSuccess: 'Code Review',

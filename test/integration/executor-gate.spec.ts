@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { join } from 'node:path';
 import { eq, inArray } from 'drizzle-orm';
 import { schema } from '@brigadir/database';
+import { slugifyAgentKey } from '@brigadir/contracts';
 import { RunTriggerService } from '@brigadir/runs';
 import { WorkerAppModule } from '../../apps/worker/src/app.module';
 import { RunProcessor } from '../../apps/worker/src/run.processor';
@@ -77,6 +78,7 @@ describe('per-profile max_parallel_runs gate', () => {
         workspaceId,
         executorId,
         name,
+        key: slugifyAgentKey(name),
         instruction: 'x',
         statusSuccess: 'Done',
         statusFailure: 'Blocked',

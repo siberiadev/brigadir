@@ -1,7 +1,7 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema, seedOrchestratorAgent } from '@brigadir/database';
-import type { AgentsConfig } from '@brigadir/contracts';
+import { slugifyAgentKey, type AgentsConfig } from '@brigadir/contracts';
 import { AGENTS_CONFIG } from './agents-config.provider';
 
 /**
@@ -122,13 +122,17 @@ export class ConfigSeeder {
         if (!executorId) {
           throw new Error(`agent "${agent.name}" references unknown executor "${agent.executor}"`);
         }
+        // feature 014: identity/dedup by the derived key (name may repeat). The
+        // config is human-authored, so a collision is an authoring error caught
+        // by AgentsConfigSchema (not silently suffixed like runtime creates).
+        const key = slugifyAgentKey(agent.name, agent.role ?? null);
         const found = await tx
           .select({ id: schema.agents.id })
           .from(schema.agents)
           .where(
             and(
               eq(schema.agents.workspaceId, workspaceId),
-              eq(schema.agents.name, agent.name),
+              eq(schema.agents.key, key),
             ),
           )
           .limit(1);
@@ -142,6 +146,8 @@ export class ConfigSeeder {
             workspaceId,
             executorId,
             name: agent.name,
+            role: agent.role ?? null,
+            key,
             instruction: agent.instruction,
             triggerStatus: agent.trigger_status ?? null,
             triggerJql: agent.trigger_jql ?? null,

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { slugifyAgentKey } from './agent-key';
 
 /**
  * agents.yaml configuration schema.
@@ -125,6 +126,8 @@ export const AgentBehaviorSchema = z
 export const AgentConfigSchema = z
   .object({
     name: z.string().min(1),
+    // feature 014: the agent's function; feeds the derived key (name may repeat).
+    role: z.string().min(1).optional(),
     executor: z.string().min(1),
     instruction: z.string().min(1),
     trigger_status: z.string().optional(),
@@ -148,7 +151,9 @@ export const AgentsConfigSchema = z
   .strict()
   .superRefine((config, ctx) => {
     const executorNames = new Set(Object.keys(config.executors));
-    const seenAgentNames = new Set<string>();
+    // feature 014: identity is the derived key, not the name — two agents that
+    // slug to the same key would collide on insert, so reject at config load.
+    const seenAgentKeys = new Set<string>();
     config.agents.forEach((agent, index) => {
       if (!executorNames.has(agent.executor)) {
         ctx.addIssue({
@@ -157,14 +162,15 @@ export const AgentsConfigSchema = z
           message: `references unknown executor "${agent.executor}"`,
         });
       }
-      if (seenAgentNames.has(agent.name)) {
+      const key = slugifyAgentKey(agent.name, agent.role ?? null);
+      if (seenAgentKeys.has(key)) {
         ctx.addIssue({
           code: 'custom',
           path: ['agents', index, 'name'],
-          message: `duplicate agent name "${agent.name}"`,
+          message: `duplicate agent key "${key}" (from name "${agent.name}"${agent.role ? ` + role "${agent.role}"` : ''})`,
         });
       }
-      seenAgentNames.add(agent.name);
+      seenAgentKeys.add(key);
     });
 
     // claude_cli cross-field checks (contracts/executor-config.md, D9):

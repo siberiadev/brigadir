@@ -137,6 +137,9 @@ function projectAgentSummary(a: Record<string, unknown>): Record<string, unknown
   return {
     id: a.id,
     name: a.name,
+    // feature 014: readable handle + function alongside the persona name.
+    key: a.key,
+    role: a.role ?? null,
     description: a.description ?? null,
     is_orchestrator: a.is_orchestrator,
     executor_id: a.executor_id,
@@ -290,7 +293,7 @@ export function createToolHandlers(config: AdminToolConfig): AdminToolHandlers {
       const res = await call('POST', '/api/agents', asRecord(args));
       if (res.status < 200 || res.status >= 300) return toolError(res.body);
       const b = asRecord(res.body);
-      return ok({ agent_id: b.id, name: b.name, is_orchestrator: b.is_orchestrator });
+      return ok({ agent_id: b.id, name: b.name, key: b.key, is_orchestrator: b.is_orchestrator });
     },
 
     async update_agent(args: unknown): Promise<ToolCallResult> {
@@ -302,7 +305,7 @@ export function createToolHandlers(config: AdminToolConfig): AdminToolHandlers {
       const res = await call('PUT', `/api/agents/${encodeURIComponent(id)}`, bodyRest);
       if (res.status < 200 || res.status >= 300) return toolError(res.body);
       const b = asRecord(res.body);
-      return ok({ agent_id: b.id, name: b.name, is_orchestrator: b.is_orchestrator });
+      return ok({ agent_id: b.id, name: b.name, key: b.key, is_orchestrator: b.is_orchestrator });
     },
   };
 }
