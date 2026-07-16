@@ -6,6 +6,7 @@ import { encodeJiraCredentials, JiraClientFactory, type JiraClient } from '@brig
 import { PipelineService } from '@brigadir/pipeline';
 import { ReconcileService, type WorkspaceContext } from '@brigadir/ingest';
 import type { JiraIssue, JiraIssueLink, StatusCategoryKey } from '@brigadir/contracts';
+import { slugifyAgentKey } from '@brigadir/contracts';
 import { WorkerAppModule } from '../../apps/worker/src/app.module';
 import { RunProcessor } from '../../apps/worker/src/run.processor';
 import { ReconcileScheduler } from '../../apps/worker/src/reconcile.scheduler';
@@ -119,6 +120,7 @@ describe('dependency gate (T057 trigger-side, T066 reconcile-side)', () => {
         workspaceId,
         executorId,
         name,
+        key: slugifyAgentKey(name),
         instruction: 'do it',
         triggerStatus,
         statusSuccess: 'Code Review',

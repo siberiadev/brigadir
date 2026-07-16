@@ -68,6 +68,7 @@ describe('orchestrator routing guards → human fallbacks (T022)', () => {
         workspaceId,
         executorId,
         name: 'Developer',
+        key: 'developer',
         instruction: 'impl',
         statusRunning: 'In Progress',
         statusSuccess: 'Done',
@@ -84,6 +85,7 @@ describe('orchestrator routing guards → human fallbacks (T022)', () => {
         workspaceId,
         executorId,
         name: 'Fixer',
+        key: 'fixer',
         instruction: 'fix',
         statusRunning: 'In Progress',
         statusSuccess: 'Done',
@@ -100,6 +102,7 @@ describe('orchestrator routing guards → human fallbacks (T022)', () => {
         workspaceId,
         executorId,
         name: 'brigadir',
+        key: 'brigadir',
         instruction: 'orchestrate',
         isOrchestrator: true,
         statusRunning: null,
@@ -260,7 +263,7 @@ describe('orchestrator routing guards → human fallbacks (T022)', () => {
       agentId: orchestratorId,
       ticketId: ticket.id,
       status: 'succeeded',
-      report: routedReport('Fixer'), // valid, but budget exhausted
+      report: routedReport('fixer'), // valid key, but budget exhausted
       source: 'triage',
     });
 

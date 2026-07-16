@@ -23,7 +23,9 @@ export const HumanTaskTicketRefSchema = z
   .object({ key: z.string(), jira_url: z.string() })
   .strict();
 
-export const HumanTaskAgentRefSchema = z.object({ id: z.string(), name: z.string() }).strict();
+export const HumanTaskAgentRefSchema = z
+  .object({ id: z.string(), name: z.string(), key: z.string(), role: z.string().nullable() })
+  .strict();
 
 export const HumanTaskWorkspaceRefSchema = z
   .object({ id: z.string(), name: z.string() })

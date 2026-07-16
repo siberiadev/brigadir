@@ -38,7 +38,7 @@ describe('runs table list (T025)', () => {
 
     const [a2] = await db.db
       .insert(schema.agents)
-      .values({ workspaceId, executorId: p.executorId, name: 'reviewer', instruction: 'x', statusSuccess: 'Done', statusFailure: 'Blocked' })
+      .values({ workspaceId, executorId: p.executorId, name: 'reviewer', key: 'reviewer', instruction: 'x', statusSuccess: 'Done', statusFailure: 'Blocked' })
       .returning({ id: schema.agents.id });
     agentB = a2.id;
     const [t2] = await db.db

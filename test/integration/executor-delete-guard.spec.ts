@@ -4,6 +4,7 @@ import type { INestApplication } from '@nestjs/common';
 import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
 import { schema } from '@brigadir/database';
+import { slugifyAgentKey } from '@brigadir/contracts';
 import { BackendAppModule } from '../../apps/backend/src/app.module';
 import { startDatabase, startRedis, TEST_DASHBOARD_TOKEN, DbHarness, RedisHarness } from './harness';
 
@@ -72,6 +73,7 @@ describe('executor delete guard (cross-workspace)', () => {
       workspaceId,
       executorId,
       name,
+      key: slugifyAgentKey(name),
       instruction: 'x',
       statusSuccess: 'Done',
       statusFailure: 'Blocked',

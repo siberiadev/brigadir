@@ -42,6 +42,7 @@ async function seedWorkspaceAndAgent(db: DbHarness): Promise<{ workspaceId: stri
       workspaceId: ws.id,
       executorId: exec.id,
       name: 'impl',
+      key: 'impl',
       instruction: 'do it',
       triggerStatus: TRIGGER,
       statusSuccess: 'Code Review',

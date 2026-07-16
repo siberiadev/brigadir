@@ -145,7 +145,18 @@ async function onDelete(agent: AgentResponse) {
       :data="agentsQuery.data.value?.items ?? []"
       data-test="agents-table"
     >
-      <el-table-column prop="name" label="Name" />
+      <el-table-column label="Name" min-width="140">
+        <template #default="{ row }">
+          <span>{{ row.name }}</span>
+          <!-- feature 014: persona name + function; "teamlead" for the orchestrator. -->
+          <span v-if="row.role" class="agent-role"> ({{ row.role }})</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="Key" min-width="130">
+        <template #default="{ row }">
+          <code class="agent-key" data-test="agent-key">{{ row.key }}</code>
+        </template>
+      </el-table-column>
       <el-table-column prop="trigger_status" label="Trigger" />
       <el-table-column prop="status_success" label="Success" />
       <el-table-column label="Enabled">
@@ -177,5 +188,15 @@ async function onDelete(agent: AgentResponse) {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.agent-role {
+  color: var(--el-text-color-secondary);
+}
+
+.agent-key {
+  font-family: var(--el-font-family-mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 </style>

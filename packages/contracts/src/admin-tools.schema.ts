@@ -69,8 +69,10 @@ export const ExecutorSummarySchema = z
 
 export const AgentSummarySchema = z
   .object({
-    id: z.string().describe('Agent UUID.'),
-    name: z.string().describe('Agent name (unique within the workspace).'),
+    id: z.string().describe('Agent UUID — the true identity; use it for update_agent.'),
+    name: z.string().describe('Persona display name (feature 014; may repeat within a workspace).'),
+    key: z.string().describe('Readable, workspace-unique handle (routing/URLs/logs). System-generated, immutable.'),
+    role: z.string().nullable().describe('The agent\'s function ("Developer"/"QA"/…; orchestrator "teamlead").'),
     description: z.string().nullable().describe('One roster line shown to the orchestrator.'),
     is_orchestrator: z
       .boolean()
@@ -91,7 +93,14 @@ const AdminAgentWriteFields = {
     .string()
     .min(1)
     .max(200)
-    .describe('Unique agent name within the workspace (never "brigadir", the orchestrator).'),
+    .describe('Persona display name (feature 014; may repeat). The system derives the key — never send one.'),
+  role: z
+    .string()
+    .min(1)
+    .max(100)
+    .nullable()
+    .optional()
+    .describe('The agent\'s function: "Developer", "QA", "Reviewer", "Planner", ….'),
   description: z
     .string()
     .max(2000)
@@ -154,7 +163,8 @@ export const AdminUpdateAgentInputSchema = z
 export const AgentWriteResultSchema = z
   .object({
     agent_id: z.string().describe('UUID of the created/updated agent.'),
-    name: z.string().describe('Agent name.'),
+    name: z.string().describe('Persona display name.'),
+    key: z.string().describe('System-generated readable handle (feature 014).'),
     is_orchestrator: z.boolean().describe('True only for the seeded orchestrator.'),
   })
   .strict();

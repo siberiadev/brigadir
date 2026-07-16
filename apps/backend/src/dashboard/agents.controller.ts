@@ -21,6 +21,8 @@ import {
   AgentWriteRequestSchema,
   TestRunRequestSchema,
   lintAgent,
+  slugifyAgentKey,
+  ensureUniqueAgentKey,
   type AgentListResponse,
   type AgentResponse,
   type BoardStatus,
@@ -72,8 +74,8 @@ export class AgentsController {
       .select()
       .from(schema.agents)
       .where(where)
-      // Детерминированный порядок обязателен для пагинации; createdAt у агентов нет.
-      .orderBy(schema.agents.name)
+      // feature 014: детерминированный порядок по key (name больше не уникален).
+      .orderBy(schema.agents.key)
       .limit(limit)
       .offset(offset);
 
@@ -85,11 +87,34 @@ export class AgentsController {
     const req = this.parse(body);
     const { warnings } = await this.lintOrThrow(req.workspace_id, req, undefined);
 
-    const [row] = await this.db
-      .insert(schema.agents)
-      .values(this.toInsertValues(req))
-      .returning();
-    return { ...toAgentResponse(row), ...(warnings.length ? { warnings } : {}) };
+    // feature 014: the system derives the immutable key ONCE, here. Base slug from
+    // name+role, made workspace-unique against existing keys ∪ reserved. The DB
+    // UNIQUE(workspace_id, key) is the final guard — retry with a refreshed taken
+    // set on a concurrent race.
+    const base = slugifyAgentKey(req.name, req.role ?? null);
+    let row: AgentRow | undefined;
+    for (let attempt = 0; attempt < 5 && !row; attempt++) {
+      const key = ensureUniqueAgentKey(base, await this.workspaceKeys(req.workspace_id));
+      try {
+        [row] = await this.db
+          .insert(schema.agents)
+          .values({ ...this.toInsertValues(req), key })
+          .returning();
+      } catch (err) {
+        if ((err as { code?: string }).code === '23505' && attempt < 4) continue;
+        throw err;
+      }
+    }
+    return { ...toAgentResponse(row!), ...(warnings.length ? { warnings } : {}) };
+  }
+
+  /** feature 014: the set of keys already used in a workspace (∪ reserved handled by ensureUniqueAgentKey). */
+  private async workspaceKeys(workspaceId: string): Promise<Set<string>> {
+    const rows = await this.db
+      .select({ key: schema.agents.key })
+      .from(schema.agents)
+      .where(eq(schema.agents.workspaceId, workspaceId));
+    return new Set(rows.map((r) => r.key));
   }
 
   @Put(':id')
@@ -146,6 +171,7 @@ export class AgentsController {
       .set({
         executorId: values.executorId,
         name: values.name,
+        role: values.role,
         description: values.description,
         instruction: values.instruction,
         triggerStatus: values.triggerStatus,
@@ -297,6 +323,9 @@ export class AgentsController {
       workspaceId: req.workspace_id,
       executorId: req.executor_id,
       name: req.name,
+      // feature 014: role is editable; key is NOT here — it is create-only (derived
+      // once) and the update path never sets it (immutability, FR-007).
+      role: req.role ?? null,
       description: req.description ?? null,
       instruction: req.instruction,
       triggerStatus: req.trigger_status,
@@ -334,6 +363,8 @@ function toAgentResponse(a: AgentRow): AgentResponse {
     workspace_id: a.workspaceId,
     executor_id: a.executorId,
     name: a.name,
+    key: a.key,
+    role: a.role ?? null,
     description: a.description ?? null,
     is_orchestrator: a.isOrchestrator,
     instruction: a.instruction,

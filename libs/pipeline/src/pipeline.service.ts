@@ -504,10 +504,15 @@ export class PipelineService {
     return row;
   }
 
-  /** Target validity (FR-008): exists ∧ enabled ∧ non-orchestrator ∧ same workspace. */
+  /**
+   * Resolve `routing.target_agent` (feature 014: the target's KEY) to an agent id.
+   * Target validity (FR-008): exists ∧ enabled ∧ non-orchestrator ∧ same workspace.
+   * Matching by key — the LLM echoes the readable handle reliably; the reserved
+   * orchestrator key ("brigadir") is excluded by the is_orchestrator filter.
+   */
   private async resolveRoutingTarget(
     workspaceId: string,
-    name: string,
+    key: string,
   ): Promise<{ id: string; statusRunning: string | null; behavior: unknown } | undefined> {
     const [row] = await this.db
       .select({
@@ -519,7 +524,7 @@ export class PipelineService {
       .where(
         and(
           eq(schema.agents.workspaceId, workspaceId),
-          eq(schema.agents.name, name),
+          eq(schema.agents.key, key),
           eq(schema.agents.enabled, true),
           eq(schema.agents.isOrchestrator, false),
         ),

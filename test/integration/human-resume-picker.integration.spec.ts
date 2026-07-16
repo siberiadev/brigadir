@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
 import { eq } from 'drizzle-orm';
 import { schema } from '@brigadir/database';
+import { slugifyAgentKey } from '@brigadir/contracts';
 import { encodeJiraCredentials } from '@brigadir/jira';
 import { ResumeService } from '@brigadir/human-tasks';
 import { MockExecutor, type RunContext } from '@brigadir/executors';
@@ -80,6 +81,7 @@ describe('human-resume agent picker (T029)', () => {
           workspaceId: wsId,
           executorId,
           name,
+          key: slugifyAgentKey(name),
           instruction: `You are ${name}.`,
           statusRunning: opts.statusRunning ?? 'In Progress',
           statusSuccess: 'Done',

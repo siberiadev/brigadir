@@ -55,6 +55,9 @@ const a = props.agent;
 const isOrchestrator = computed(() => props.agent?.is_orchestrator === true);
 const form = reactive({
   name: a?.name ?? '',
+  // feature 014: the agent's function (presentation). Editing it does NOT change
+  // the immutable key. The orchestrator's role ("teamlead") is fixed.
+  role: a?.role ?? '',
   description: a?.description ?? '',
   instruction: a?.instruction ?? '',
   executor_id: a?.executor_id ?? '',
@@ -143,6 +146,9 @@ function buildRequest(): AgentWriteRequest {
   return {
     workspace_id: props.workspaceId,
     name: form.name,
+    // feature 014: role is editable; key is server-derived on create and never
+    // sent (the write schema is strict — sending a key would 422).
+    role: form.role || null,
     description: form.description || null,
     instruction: form.instruction,
     executor_id: form.executor_id,
@@ -221,8 +227,24 @@ defineExpose({ submit, saving });
       title="Board statuses are unavailable — status fields are disabled until they load."
     />
 
-    <el-form-item label="Name">
+    <el-form-item label="Name (persona)">
       <el-input v-model="form.name" :disabled="isOrchestrator" data-test="name-input" />
+    </el-form-item>
+
+    <el-form-item label="Role (function, e.g. Developer / QA / Reviewer)">
+      <el-input
+        v-model="form.role"
+        :disabled="isOrchestrator"
+        placeholder="Developer"
+        data-test="role-input"
+      />
+    </el-form-item>
+
+    <!-- feature 014: the key is the immutable technical handle (routing/URLs/logs),
+         system-generated once at creation; shown read-only, editing name/role
+         never changes it. Absent on create (server derives it). -->
+    <el-form-item v-if="isEdit" label="Key (technical handle — read-only)">
+      <el-input :model-value="props.agent?.key" readonly disabled data-test="key-readonly" />
     </el-form-item>
 
     <el-form-item label="Description (roster line shown to the orchestrator)">

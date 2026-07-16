@@ -75,6 +75,7 @@ describe('watchdog + drift repair (T068)', () => {
         workspaceId,
         executorId: exec.id,
         name: 'impl',
+        key: 'impl',
         instruction: 'do it',
         triggerStatus: TRIGGER,
         statusRunning: null,

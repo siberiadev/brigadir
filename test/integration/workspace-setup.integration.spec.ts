@@ -155,6 +155,8 @@ describe('workspace setup by the orchestrator (feature 011)', () => {
   const TEAM = [
     {
       name: 'Developer',
+      // feature 014: model supplies name + role; the system derives the key.
+      role: 'Developer',
       description: 'Implements tickets end to end and opens a PR.',
       instruction: 'You are Developer. Implement the ticket and open a PR.',
       trigger_status: 'Ready for Dev',
@@ -165,6 +167,7 @@ describe('workspace setup by the orchestrator (feature 011)', () => {
     },
     {
       name: 'Reviewer',
+      role: 'QA',
       description: 'Reviews PRs against the ticket requirements.',
       instruction: 'You are Reviewer. Review the PR rigorously.',
       trigger_status: 'Code Review',
@@ -225,6 +228,10 @@ describe('workspace setup by the orchestrator (feature 011)', () => {
     expect(dev.statusSuccess).toBe('Code Review');
     expect(dev.statusFailure).toBe('Blocked');
     expect(dev.description).toContain('Implements tickets');
+    // feature 014: the system derived the key from name + role; role persisted.
+    expect(dev.role).toBe('Developer');
+    expect(dev.key).toBe('developer-developer'); // slug("Developer" + "Developer")
+    expect(agents.find((a) => a.name === 'Reviewer')!.key).toBe('reviewer-qa');
 
     // One ticketless, non-blocking review task.
     const tasks = await db.db
@@ -360,10 +367,14 @@ describe('workspace setup by the orchestrator (feature 011)', () => {
     expect(await setupRuns(ws.id)).toHaveLength(1);
   });
 
-  it('FR-015: a proposal naming the orchestrator (or an existing agent) is rejected cleanly — no 500, zero agents', async () => {
+  it('feature 014 (I1/D4): two proposed agents that slug to the SAME key are rejected cleanly — no 500, zero agents', async () => {
+    // Names may now repeat, but two agents deriving the SAME key would collide on
+    // insert, so the proposal is bounced back (distinct triggers keep this from
+    // tripping duplicate_trigger first).
     const ws = await createWorkspace();
     const roster = team();
-    roster[0] = { ...roster[0], name: ORCHESTRATOR_AGENT_NAME };
+    roster[0] = { ...roster[0], name: 'Hera', role: 'Reviewer' };
+    roster[1] = { ...roster[1], name: 'Hera', role: 'Reviewer' }; // both → key "hera-reviewer"
     await armOrchestrator(ws.id, { mock_scenario: 'team', team_proposal: roster });
 
     const res = await generate(ws.id);
@@ -444,6 +455,7 @@ describe('workspace setup by the orchestrator (feature 011)', () => {
         workspaceId: ws.id,
         executorId: mockProfileId,
         name: 'Rogue',
+        key: 'rogue',
         instruction: 'You are not the orchestrator.',
         triggerStatus: 'Ready for Dev',
         statusSuccess: 'Done',

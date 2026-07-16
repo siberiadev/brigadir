@@ -1,4 +1,5 @@
 export * from './answer-option.schema';
+export * from './agent-key';
 export * from './report.schema';
 export * from './callback-tools.schema';
 export * from './agents-config.schema';

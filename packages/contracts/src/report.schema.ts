@@ -17,17 +17,19 @@ export const HUMAN_TASK_KINDS = ['question', 'blocker', 'review'] as const;
 
 /**
  * Routing payload (feature 010, FR-001) — required when `outcome==='routed'`.
- * `target_agent` is a NAME resolved to an agent id in the pipeline (validated
+ * `target_agent` is the target worker's KEY (feature 014) — the readable handle
+ * shown in the roster — resolved to an agent id in the pipeline (validated
  * there, not in the schema — orchestrator-vs-worker is workspace state, FR-002).
- * `task` passes the secret scrubber before persistence/Jira like every other
- * report field (FR-003).
+ * An LLM echoes a short slug reliably where it would mangle a UUID, so the wire
+ * value is the key and the system resolves it to id at the boundary. `task`
+ * passes the secret scrubber before persistence/Jira like every other field.
  */
 export const ReportRoutingSchema = z
   .object({
     target_agent: z
       .string()
       .max(200)
-      .describe('Name of the enabled worker agent to hand the ticket back to.'),
+      .describe('KEY of the enabled worker agent to hand the ticket back to — copy it exactly as it appears in the roster.'),
     task: z
       .string()
       .max(4000)
@@ -47,7 +49,24 @@ export const ReportRoutingSchema = z
  */
 export const TeamAgentSchema = z
   .object({
-    name: z.string().min(1).max(200).describe('Unique agent name (never the orchestrator\'s).'),
+    name: z
+      .string()
+      .min(1)
+      .max(200)
+      .describe(
+        'Themed persona display name (feature 014), e.g. "Achilles", "Hera" — invent it from the workspace theme. ' +
+          'Latin script; distinct within the team. Not a routing handle — the system derives the key.',
+      ),
+    // feature 014: the agent's function ("Developer"/"QA"/"Reviewer"/…). Optional
+    // in the wire schema to keep ReportSchema v1 forward-compatible (a role-less
+    // report still validates → key derived from name alone, role NULL); the setup
+    // prompt REQUIRES it. NEVER a key — the system derives that.
+    role: z
+      .string()
+      .min(1)
+      .max(100)
+      .optional()
+      .describe('The agent\'s function: "Developer", "QA", "Reviewer", "Planner", …'),
     description: z
       .string()
       .min(1)

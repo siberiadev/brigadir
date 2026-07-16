@@ -25,7 +25,17 @@ export const agents = pgTable(
     executorId: uuid('executor_id')
       .notNull()
       .references(() => executors.id),
+    // feature 014: presentation persona ("Achilles", "Hera"), editable, NO
+    // LONGER unique — identity is `id`, the LLM/UI handle is `key`.
     name: text('name').notNull(),
+    // feature 014: the agent's function ("Developer", "QA", "Reviewer";
+    // orchestrator = "teamlead"). Editable, nullable (backfilled rows have none).
+    role: text('role'),
+    // feature 014: readable, workspace-unique HANDLE at the LLM/UI boundary
+    // (routing, URLs, logs). System-generated ONCE at creation via
+    // slugifyAgentKey(name, role); IMMUTABLE — never recomputed on edit, resolved
+    // to `id` at the boundary. Reserved key "brigadir" belongs to the orchestrator.
+    key: text('key').notNull(),
     // Roster line shown to the orchestrator in the handoff (FR-020). Nullable.
     description: text('description'),
     instruction: text('instruction').notNull(),
@@ -44,5 +54,6 @@ export const agents = pgTable(
     maxAttempts: integer('max_attempts').notNull().default(2),
     enabled: boolean('enabled').notNull().default(true),
   },
-  (t) => [unique('agents_workspace_name').on(t.workspaceId, t.name)],
+  // feature 014: identity is (workspace_id, key); `name` may now repeat.
+  (t) => [unique('agents_workspace_key').on(t.workspaceId, t.key)],
 );

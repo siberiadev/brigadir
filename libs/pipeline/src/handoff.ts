@@ -128,7 +128,12 @@ async function rosterAndBudgetLines(
 ): Promise<{ lines: string[]; budgetAvailable: boolean }> {
   const lines: string[] = [];
   const roster = await db
-    .select({ name: schema.agents.name, description: schema.agents.description })
+    .select({
+      key: schema.agents.key,
+      name: schema.agents.name,
+      role: schema.agents.role,
+      description: schema.agents.description,
+    })
     .from(schema.agents)
     .where(
       and(
@@ -138,9 +143,11 @@ async function rosterAndBudgetLines(
       ),
     );
   if (roster.length > 0) {
-    lines.push('Available worker agents (route to one of these by name):');
+    // feature 014: route by KEY — target_agent = the key, copied EXACTLY as listed.
+    lines.push('Available worker agents (to route, set routing.target_agent to the KEY — the first token on each line — copied exactly):');
     for (const a of roster) {
-      lines.push(`- ${a.name}${a.description ? `: ${trunc(a.description, DESCRIPTION_BUDGET)}` : ''}`);
+      const who = a.role ? `${a.name} (${a.role})` : a.name;
+      lines.push(`- ${a.key} — ${who}${a.description ? `: ${trunc(a.description, DESCRIPTION_BUDGET)}` : ''}`);
     }
     lines.push('');
   }
@@ -153,7 +160,7 @@ async function rosterAndBudgetLines(
 
 const DECISION_PROTOCOL_LINES = [
   'Decision protocol:',
-  '- Reply with outcome "routed" (target_agent + task) to send it back to a worker, OR',
+  '- Reply with outcome "routed" (target_agent = the worker KEY from the roster above, + task) to send it back to a worker, OR',
   '- outcome "needs_human" to escalate. Do not exceed the rework budget — the system enforces it.',
 ];
 
@@ -370,10 +377,14 @@ async function buildWorkspaceSetupSection(
     '- If the project is empty or the right team is genuinely ambiguous, ask via request_human instead of guessing; ' +
       'attach `options` with the likely answers (e.g. "Minimal team" / "Full team") so the human can answer in one click.',
     '',
+    'How to name the team (make it feel alive):',
+    '- Invent ONE coherent theme for this workspace and draw every persona from it — pick something and commit (e.g. Ancient Greek heroes, sci-fi movies, The Matrix, superheroes, Norse myth, …). These are only examples; choose your own, and vary it from workspace to workspace.',
+    '- Give each agent a themed persona `name` (Latin letters, e.g. "Achilles", "Hera") AND a functional `role` ("Developer", "QA", "Reviewer", "Planner", …). Personas must be distinct within the team; do NOT invent a key — the system derives it from name + role.',
+    '',
     'How to deliver the team:',
-    '- Finish with ONE complete_task report with outcome "team": for each agent give name, description (one roster line), instruction (a self-contained role prompt), trigger_status (the status that starts it), optional status_running, status_success, status_failure, and executor (one of the profile NAMES above).',
+    '- Finish with ONE complete_task report with outcome "team": for each agent give name (themed persona), role (its function), description (one roster line), instruction (a self-contained role prompt), trigger_status (the status that starts it), optional status_running, status_success, status_failure, and executor (one of the profile NAMES above).',
     '- Every status MUST be one of the workflow status names from get_project_overview, spelled exactly.',
-    '- Names must be unique and never "brigadir"; two agents must not share the same trigger status.',
+    '- Two agents must not share the same trigger status.',
     '- Agents are created ACTIVE, but the workspace stays paused until a human reviews your team and starts it.',
     '- If validation fails you will receive the errors in the tool result — fix the proposal and call complete_task again.',
   );

@@ -158,7 +158,12 @@ export const AgentBehaviorRequestSchema = z
 export const AgentWriteRequestSchema = z
   .object({
     workspace_id: z.string().min(1),
+    // feature 014: persona display name (editable, non-unique). NO `key` field —
+    // the system derives it on create and never accepts it on update (.strict()
+    // ⇒ a supplied key is a 422).
     name: z.string().min(1),
+    // feature 014: the agent's function; editable, optional.
+    role: z.string().max(100).nullable().optional(),
     // feature 010 (FR-020): optional roster line shown to the orchestrator.
     description: z.string().max(2000).nullable().optional(),
     instruction: z.string().min(1),
@@ -190,6 +195,9 @@ export const AgentResponseSchema = z
     workspace_id: z.string(),
     executor_id: z.string(),
     name: z.string(),
+    // feature 014: immutable readable handle (routing/URLs/logs) + editable function.
+    key: z.string(),
+    role: z.string().nullable(),
     // feature 010 (FR-020): roster description (nullable).
     description: z.string().nullable(),
     // feature 010 (FR-018/019): the per-workspace orchestrator marker — the UI

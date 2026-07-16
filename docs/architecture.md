@@ -169,7 +169,9 @@ CREATE TABLE agents (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id    uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   executor_id     uuid NOT NULL REFERENCES executors(id),
-  name            text NOT NULL,               -- "Implementer", "QA Agent"
+  name            text NOT NULL,               -- feature 014: персона ("Achilles", "Hera"), presentation-only, редактируема, БОЛЬШЕ НЕ уникальна
+  role            text,                        -- feature 014: функция ("Developer"/"QA"/"Reviewer"; оркестратор = "teamlead"), editable, nullable (backfill → NULL у воркеров)
+  key             text NOT NULL,               -- feature 014: читаемый workspace-уникальный HANDLE на границе LLM/UI (routing, URLs, logs). Генерится СИСТЕМОЙ один раз при создании = slugifyAgentKey(name, role); ИММУТАБЕЛЕН, резолвится в id на границе. Зарезервирован "brigadir" — оркестратор.
   description     text,                        -- feature 010: roster line показывается оркестратору в handoff (nullable)
   instruction     text NOT NULL,               -- user prompt (без обёртки)
   is_orchestrator boolean NOT NULL DEFAULT false, -- feature 010: пер-workspace оркестратор "brigadir" (никогда не poll-триггерится, неудаляем, исключён из routing-таргетов; в resume-пикере ПРИСУТСТВУЕТ и преселектнут по умолчанию — answer-triage delta: резолв на него создаёт answer-triage run)
@@ -183,7 +185,7 @@ CREATE TABLE agents (
   max_budget_usd  numeric(8,2),
   max_attempts    int NOT NULL DEFAULT 2,
   enabled         boolean NOT NULL DEFAULT true,
-  UNIQUE (workspace_id, name)                  -- гарантирует один "brigadir" на workspace (seed insert-if-absent)
+  UNIQUE (workspace_id, key)                    -- feature 014: identity-constraint переехал name → key (name может повторяться). Один "brigadir" на workspace гарантируется зарезервированным key + is_orchestrator (seed insert-if-absent onConflict (workspace_id, key))
 );
 
 -- ============ global_settings (feature 010) ============

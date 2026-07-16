@@ -5,6 +5,7 @@ import { schema } from '@brigadir/database';
 import { encodeJiraCredentials } from '@brigadir/jira';
 import { PipelineService } from '@brigadir/pipeline';
 import type { ADFDoc, JiraIssue, MockScenario } from '@brigadir/contracts';
+import { slugifyAgentKey } from '@brigadir/contracts';
 import { WorkerAppModule } from '../../apps/worker/src/app.module';
 import { RunProcessor } from '../../apps/worker/src/run.processor';
 import { ReconcileScheduler } from '../../apps/worker/src/reconcile.scheduler';
@@ -110,6 +111,7 @@ describe('pipeline loop: status change → run → Jira transition + comment (T0
         workspaceId,
         executorId,
         name: opts.name,
+        key: slugifyAgentKey(opts.name),
         instruction: 'do it',
         triggerStatus: opts.triggerStatus,
         statusRunning: opts.statusRunning ?? null,

@@ -1,4 +1,5 @@
 import { and, eq } from 'drizzle-orm';
+import { ORCHESTRATOR_AGENT_KEY } from '@brigadir/contracts';
 import type { BrigadirDb } from './drizzle.constants';
 import * as schema from './schema';
 
@@ -7,11 +8,16 @@ import * as schema from './schema';
  * orchestrator is an ordinary `agents` row marked `is_orchestrator=true`, never
  * poll-triggered, on a dedicated CHEAP, NO-REPOSITORY executor profile (its
  * triage runs read only the system's own run history — no repo, no git creds,
- * Constitution V). Seeding is insert-if-absent (UNIQUE(workspace_id, name)) so
- * it runs safely on every boot and never overwrites operator edits.
+ * Constitution V). Seeding is insert-if-absent (identity = is_orchestrator flag /
+ * UNIQUE(workspace_id, key), feature 014) so it runs safely on every boot and
+ * never overwrites operator edits.
  */
 
+/** Default persona name of the orchestrator (editable like any agent, feature 014). */
 export const ORCHESTRATOR_AGENT_NAME = 'brigadir';
+
+/** feature 014: the orchestrator's function; carries no system meaning (the flag does). */
+export const ORCHESTRATOR_AGENT_ROLE = 'teamlead';
 
 /** The dedicated cheap, no-repository executor profile the orchestrator runs on. */
 export const ORCHESTRATOR_EXECUTOR_NAME = 'brigadir-orchestrator';
@@ -123,7 +129,7 @@ export async function seedOrchestratorAgent(
     .where(
       and(
         eq(schema.agents.workspaceId, workspaceId),
-        eq(schema.agents.name, ORCHESTRATOR_AGENT_NAME),
+        eq(schema.agents.isOrchestrator, true),
       ),
     )
     .limit(1);
@@ -138,6 +144,9 @@ export async function seedOrchestratorAgent(
       workspaceId,
       executorId,
       name: ORCHESTRATOR_AGENT_NAME,
+      role: ORCHESTRATOR_AGENT_ROLE,
+      // feature 014: reserved key; no worker can obtain it (ensureUniqueAgentKey).
+      key: ORCHESTRATOR_AGENT_KEY,
       instruction,
       isOrchestrator: true,
       triggerStatus: null,
@@ -148,7 +157,7 @@ export async function seedOrchestratorAgent(
       behavior: { workspace_mode: 'none' },
       enabled: true,
     })
-    .onConflictDoNothing({ target: [schema.agents.workspaceId, schema.agents.name] })
+    .onConflictDoNothing({ target: [schema.agents.workspaceId, schema.agents.key] })
     .returning({ id: schema.agents.id });
 
   if (row) return { created: true, agentId: row.id };
@@ -160,7 +169,7 @@ export async function seedOrchestratorAgent(
     .where(
       and(
         eq(schema.agents.workspaceId, workspaceId),
-        eq(schema.agents.name, ORCHESTRATOR_AGENT_NAME),
+        eq(schema.agents.isOrchestrator, true),
       ),
     )
     .limit(1);
