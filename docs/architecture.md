@@ -381,6 +381,12 @@ export const CallbackTools = {
     title: z.string().max(120),      // короткая формулировка для очереди
     details: z.string().max(4000),
     blocking: z.boolean().default(true), // true => агент ждёт ответа (или завершает run как awaiting_human)
+    // feature 013: предложенные варианты ответа — кнопки в human queue; free text, скраббится как title/details
+    options: z.array(z.object({
+      label: z.string().min(1).max(80),          // текст кнопки
+      value: z.string().min(1).max(500).optional(),      // что уйдёт ответом (default: label)
+      description: z.string().min(1).max(200).optional() // вторичная подсказка
+    }).strict()).min(1).max(5).optional(),
   }),
   complete_task: ReportSchema,       // см. §6 — финальный отчёт как аргументы тулзы
   // feature 011: read-only Jira-тулзы — «глаза, не голос». Доступны КАЖДОМУ
@@ -420,7 +426,7 @@ GET  /api/callbacks/runs/:runId/jira/tickets/:key      403 out_of_scope вне �
 Семантика:
 
 - `progress` → `run_events` + `job.updateProgress()` + SSE в дашборд.
-- `human` (blocking=true) — канонический flow: создаётся human_task, run → `awaiting_human`, тикет → Blocked + ADF-коммент с вопросом; в ответе агенту — инструкция «finish now without complete_task, the system will resume you with the answer». Маркер завершения (см. Enforcement) пишется самим `request_human`, поэтому Stop-hook выпустит агента. Resume закрывает старый run как `superseded` и создаёт новый attempt с `resolution` в контексте; answer-triage delta: эффективный resume-таргет по умолчанию — оркестратор (пикер преселектит brigadir) ⇒ новый run — `answer-triage` (brigadir читает Q&A + отчёт упавшего run'а и роутит через `routed`; его rework освобождён от override'а исчерпанного бюджета — ответ человека даёт один доп. цикл). Выбор worker-агента в пикере — прямой resume как раньше. Non-blocking — только задача в очереди, run продолжается.
+- `human` (blocking=true) — канонический flow: создаётся human_task (с `options`, если агент их приложил — feature 013), run → `awaiting_human`, тикет → Blocked + ADF-коммент с вопросом (options — plain-списком «Suggested answers», кнопок в Jira нет — ответ в дашборде); в ответе агенту — инструкция «finish now without complete_task, the system will resume you with the answer». Маркер завершения (см. Enforcement) пишется самим `request_human`, поэтому Stop-hook выпустит агента. Resume закрывает старый run как `superseded` и создаёт новый attempt с `resolution` в контексте; answer-triage delta: эффективный resume-таргет по умолчанию — оркестратор (пикер преселектит brigadir) ⇒ новый run — `answer-triage` (brigadir читает Q&A + отчёт упавшего run'а и роутит через `routed`; его rework освобождён от override'а исчерпанного бюджета — ответ человека даёт один доп. цикл). Выбор worker-агента в пикере — прямой resume как раньше. Non-blocking — только задача в очереди, run продолжается.
 - `complete` → валидация по `ReportSchema` (zod) → транзакция: runs.report/outcome/checks + решение PipelineModule (transition в Jira; для `needs_human` — human_task, только если у run ещё нет open-задачи: дедуп per run) → ACK агенту. Повторный `complete` для завершённого run → 409 (идемпотентность).
 
 ### Enforcement
@@ -500,7 +506,21 @@ all-or-nothing: невалидный агент ⇒ 422 с path-qualified issues
       "properties": {
         "kind":    { "enum": ["question", "blocker", "review"] },
         "title":   { "type": "string", "maxLength": 120 },
-        "details": { "type": "string", "maxLength": 4000 }
+        "details": { "type": "string", "maxLength": 4000 },
+        "options": {
+          "type": "array", "minItems": 1, "maxItems": 5,
+          "description": "feature 013: предложенные варианты ответа (одна схема с request_human.options, packages/contracts/answer-option.schema.ts). Кнопки в human queue; в Jira-комменте — plain-список. label/value/description проходят скраббер; клик подставляет value (default: label) в обычный строковый answer — resolve/resume-контур не меняется.",
+          "items": {
+            "type": "object",
+            "required": ["label"],
+            "additionalProperties": false,
+            "properties": {
+              "label":       { "type": "string", "minLength": 1, "maxLength": 80 },
+              "value":       { "type": "string", "minLength": 1, "maxLength": 500 },
+              "description": { "type": "string", "minLength": 1, "maxLength": 200 }
+            }
+          }
+        }
       }
     },
     "routing": {
@@ -555,6 +575,7 @@ all-or-nothing: невалидный агент ⇒ 422 с path-qualified issues
 Правила:
 
 - `outcome=needs_human` ⇒ `human_task` обязателен (валидируется условно на бекенде). Отдельного флага `human_needed` из ранних набросков контракта нет — его семантику полностью несёт `outcome`, два поля с одним смыслом не держим.
+- `human_task.options` (feature 013) — опционален на ОБЕИХ ask-поверхностях (`request_human` и `needs_human`); хранится в `human_tasks.options` (jsonb, NULL у системных задач); ответ остаётся обычной строкой через существующий `answer` resolve-эндпоинта — resume/answer-triage не тронуты. Пустой массив невалиден: «нет вариантов» = поле опущено.
 - `outcome=routed` ⇒ `routing` обязателен (feature 010, тем же `superRefine`, что и needs_human). `routed` эмитит только оркестратор; `routed` от не-оркестратора пайплайн трактует как failure (FR-002). `routing.task` скраббится наравне с прочими free-text полями (FR-003). Валидность таргета (exists ∧ enabled ∧ не оркестратор ∧ тот же workspace) и бюджет rework-циклов проверяются в пайплайне, не в схеме.
 - `outcome=team` ⇒ `team` обязателен (feature 011). Принятие — атомарное: валидация proposal'а (имена ∪ существующие агенты, статусы против живой борды, executor-профили по имени, коллизии триггеров) и применение (агенты enabled + бестикетная review-задача + finalize succeeded) в одной транзакции; невалидный proposal — 422 с списком ошибок через complete_task, прогон остаётся running (агент чинит и повторяет).
 - Из `checks` строятся: чеклист ✅/❌ в Vue-дашборде и ADF-коммент в Jira (`taskList` + `panel`).

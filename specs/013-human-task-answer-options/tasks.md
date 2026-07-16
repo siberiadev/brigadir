@@ -73,11 +73,11 @@ the input with `value ?? label`; no auto-submit; null options ⇒ today's UI.
 
 ### Implementation for User Story 1
 
-- [ ] T015 [US1] Render option buttons in the open-task footer of `apps/web/src/views/HumanQueue.vue`: above the answer textarea, `v-if="item.options?.length"`; per option an `el-button` (plain) with label text, `description` as secondary line/tooltip; click sets `draftFor(item.id).answer = option.value ?? option.label` (last click wins, input stays editable); NO submit on click; closed view untouched (`HumanTaskDrawer.vue` stays presentational per research D7)
-- [ ] T016 [P] [US1] Small "N options" hint on `apps/web/src/components/HumanQueue/HumanTaskRow.vue` for open tasks with options (optional polish; plural via existing pluralize util if suitable)
-- [ ] T017 [US1] Update MSW fixtures in `apps/web/test/handlers.ts` so human-task items include `options` (null on existing fixtures to prove no-change; one fixture with 2–3 options incl. an omitted `value` and a `description`)
-- [ ] T018 [US1] Web tests in `apps/web/test/human-task-options.spec.ts`: buttons render for the options task (labels + description visible); click fills the answer input with `value` (and with `label` when value omitted); clicking a second option replaces the draft; typing custom text after a click still submits the typed text; no buttons for `options: null`; submit still requires the explicit button (no resolve call fired on option click)
-- [ ] T019 [US1] Verify `apps/web/test/human-queue.spec.ts` passes UNTOUCHED (SC-002 regression guard) — if it needs edits, the implementation is wrong, not the test
+- [x] T015 [US1] Render option buttons in the open-task footer of `apps/web/src/views/HumanQueue.vue`: above the answer textarea, `v-if="item.options?.length"`; per option an `el-button` (plain) with label text, `description` as secondary line/tooltip; click sets `draftFor(item.id).answer = option.value ?? option.label` (last click wins, input stays editable); NO submit on click; closed view untouched (`HumanTaskDrawer.vue` stays presentational per research D7)
+- [x] T016 [P] [US1] Small "N options" hint on `apps/web/src/components/HumanQueue/HumanTaskRow.vue` for open tasks with options (optional polish; plural via existing pluralize util if suitable)
+- [x] T017 [US1] Update MSW fixtures in `apps/web/test/handlers.ts` so human-task items include `options` (null on existing fixtures to prove no-change; one fixture with 2–3 options incl. an omitted `value` and a `description`)
+- [x] T018 [US1] Web tests in `apps/web/test/human-task-options.spec.ts`: buttons render for the options task (labels + description visible); click fills the answer input with `value` (and with `label` when value omitted); clicking a second option replaces the draft; typing custom text after a click still submits the typed text; no buttons for `options: null`; submit still requires the explicit button (no resolve call fired on option click)
+- [x] T019 [US1] Verify `apps/web/test/human-queue.spec.ts` passes UNTOUCHED (SC-002 regression guard) — if it needs edits, the implementation is wrong, not the test
 
 **Checkpoint**: two-click answering works against MSW; options-less tasks pixel-identical.
 
@@ -91,10 +91,10 @@ the input with `value ?? label`; no auto-submit; null options ⇒ today's UI.
 
 ### Implementation for User Story 3
 
-- [ ] T020 [US3] Extend `buildHumanTaskComment` in `libs/jira/src/adf-composer.ts`: input widened with `options?: AnswerOption[]`; when present append `paragraph('Suggested answers:')` + deterministic `bulletList` (label, ` — description` when present; `value` never rendered — research D6)
-- [ ] T021 [P] [US3] Extend `libs/jira/src/adf-composer.spec.ts`: snapshot WITH options (list rendered) and assert the no-options document is byte-identical to the pre-013 snapshot
-- [ ] T022 [US3] Add ONE sentence to the `request_human` bullet in `callbackToolsSection()` (`libs/executors/src/claude-cli/wrapper.ts`): options `[{label, value?, description?}]` (max 5, value defaults to label) may be attached, also on `complete_task`'s `human_task` — offer them whenever the answer is a choice, not an essay; `structuredOutputSection()` byte-untouched; update/extend the wrapper spec accordingly
-- [ ] T023 [P] [US3] Add one line to the workspace-setup study protocol in `libs/pipeline/src/handoff.ts` (`buildWorkspaceSetupSection`, next to the request_human advice): when asking a setup question, attach options for the likely answers ("Minimal team" / "Full team" / …); adjust `libs/pipeline/src/handoff.spec.ts` if it asserts the block text
+- [x] T020 [US3] Extend `buildHumanTaskComment` in `libs/jira/src/adf-composer.ts`: input widened with `options?: AnswerOption[]`; when present append `paragraph('Suggested answers:')` + deterministic `bulletList` (label, ` — description` when present; `value` never rendered — research D6)
+- [x] T021 [P] [US3] Extend `libs/jira/src/adf-composer.spec.ts`: snapshot WITH options (list rendered) and assert the no-options document is byte-identical to the pre-013 snapshot
+- [x] T022 [US3] Add ONE sentence to the `request_human` bullet in `callbackToolsSection()` (`libs/executors/src/claude-cli/wrapper.ts`): options `[{label, value?, description?}]` (max 5, value defaults to label) may be attached, also on `complete_task`'s `human_task` — offer them whenever the answer is a choice, not an essay; `structuredOutputSection()` byte-untouched; update/extend the wrapper spec accordingly
+- [x] T023 [P] [US3] Add one line to the workspace-setup study protocol in `libs/pipeline/src/handoff.ts` (`buildWorkspaceSetupSection`, next to the request_human advice): when asking a setup question, attach options for the likely answers ("Minimal team" / "Full team" / …); adjust `libs/pipeline/src/handoff.spec.ts` if it asserts the block text
 
 **Checkpoint**: Jira parity + agent discovery done; ADF deterministic.
 
@@ -102,9 +102,9 @@ the input with `value ?? label`; no auto-submit; null options ⇒ today's UI.
 
 ## Phase 6: Polish & Cross-Cutting
 
-- [ ] T024 [P] Documentation: `docs/architecture.md` §5 (`request_human` schema sketch + `human` semantics mention options) and §6 (`human_task.options` in the ReportSchema JSON sketch + rules line); §3 already amended in T004
-- [ ] T025 [P] Documentation: iteration row in `docs/plan-internal.md` + checkpoint entry in `docs/progress.md` (feature 013 — what shipped, decisions D1–D8 pointers, gates run)
-- [ ] T026 Run all gates: `pnpm typecheck && pnpm lint && pnpm test` and `pnpm test:integration`; fix fallout; confirm quickstart.md expected outcomes (SC-001…SC-005)
+- [x] T024 [P] Documentation: `docs/architecture.md` §5 (`request_human` schema sketch + `human` semantics mention options) and §6 (`human_task.options` in the ReportSchema JSON sketch + rules line); §3 already amended in T004
+- [x] T025 [P] Documentation: iteration row in `docs/plan-internal.md` + checkpoint entry in `docs/progress.md` (feature 013 — what shipped, decisions D1–D8 pointers, gates run)
+- [x] T026 Run all gates: `pnpm typecheck && pnpm lint && pnpm test` and `pnpm test:integration`; fix fallout; confirm quickstart.md expected outcomes (SC-001…SC-005)
 
 ---
 
