@@ -57,8 +57,11 @@ html.dark {
 }
 
 // --- Branded loader ----------------------------------------------------------
-// v-loading masks show the terminal prompt instead of the stock circle: a
-// static `>` and a blinking `_` — the same `>_` mark as the logo/favicon.
+// v-loading masks show the foreman's face instead of the stock circle: the
+// `>_` mark comes alive — the underscore is the MOUTH (it curls into a smirk,
+// sliding right away from the eye), then the `>` EYE blinks (both ends pull
+// to the center and back). One shared 2.8s timeline, staged so the phases
+// don't overlap: mouth 0–50%, blink 55–75%.
 // Pseudo-elements on .el-loading-spinner, so every existing `v-loading` usage
 // picks it up with no per-callsite changes. An optional `element-loading-text`
 // wraps onto its own line below the glyphs.
@@ -67,26 +70,36 @@ html.dark {
   align-items: center;
   justify-content: center;
   flex-wrap: wrap;
-  gap: 0 2px;
+  gap: 0 4px;
   font-family: $font-family-mono;
 
   .circular {
     display: none;
   }
 
-  &::before,
-  &::after {
+  // The eye: the `>` glyph. Blinking squeezes it vertically — both chevron
+  // ends travel to the center line and spread back out.
+  &::before {
+    content: '>';
     font-size: 26px;
     font-weight: $font-weight-bold;
     line-height: 1;
     color: var(--el-color-primary);
+    animation: brigadir-eye-blink 2.8s ease-in-out infinite;
   }
-  &::before {
-    content: '>';
-  }
+
+  // The mouth: a CSS-drawn stand-in for `_` (a text glyph can't bend). At
+  // rest the bottom border is the flat underscore; border-radius bends it
+  // into an asymmetric arc — the sarcastic smirk — while the whole mouth
+  // slides right and tilts.
   &::after {
-    content: '_';
-    animation: brigadir-cursor-blink 1.1s steps(2, jump-none) infinite;
+    content: '';
+    width: 14px;
+    height: 10px;
+    align-self: flex-end;
+    margin-bottom: 2px;
+    border-bottom: 3px solid var(--el-color-primary);
+    animation: brigadir-mouth-smirk 2.8s ease-in-out infinite;
   }
 
   .el-loading-text {
@@ -96,14 +109,37 @@ html.dark {
   }
 }
 
-@keyframes brigadir-cursor-blink {
-  50% {
-    opacity: 0;
+// Phase 1 (0–50%): flat `_` → smirk (curl + slide right + tilt), hold, back.
+@keyframes brigadir-mouth-smirk {
+  0%,
+  50%,
+  100% {
+    border-radius: 0;
+    transform: none;
+  }
+  15%,
+  35% {
+    border-radius: 0 0 55% 45% / 0 0 100% 85%;
+    transform: translateX(5px) rotate(-8deg);
+  }
+}
+
+// Phase 2 (55–75%): the eye snaps shut (ends meet at the center) and reopens.
+@keyframes brigadir-eye-blink {
+  0%,
+  55%,
+  75%,
+  100% {
+    transform: scaleY(1);
+  }
+  65% {
+    transform: scaleY(0.08);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  // The prompt stays as a static indicator; only the blinking goes.
+  // The face freezes as the static `>_` mark; only the motion goes.
+  .el-loading-spinner::before,
   .el-loading-spinner::after {
     animation: none;
   }
