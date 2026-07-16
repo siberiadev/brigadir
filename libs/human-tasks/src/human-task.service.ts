@@ -2,7 +2,7 @@ import { Injectable, Inject, Logger } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import { JiraClientFactory, buildHumanTaskComment } from '@brigadir/jira';
-import type { HumanTaskKind } from '@brigadir/contracts';
+import type { HumanTaskKind, AnswerOption } from '@brigadir/contracts';
 
 export interface CreateHumanTaskInput {
   kind: HumanTaskKind;
@@ -10,6 +10,12 @@ export interface CreateHumanTaskInput {
   title: string;
   details?: string;
   blocking: boolean;
+  /**
+   * Suggested answer options (feature 013), already scrubbed by the caller like
+   * title/details. System-composed tasks (triage-limit, orchestrator failure,
+   * PR review, team review) never pass them — the column stays NULL.
+   */
+  options?: AnswerOption[];
 }
 
 export interface CreateHumanTaskResult {
@@ -85,6 +91,7 @@ export class HumanTaskService {
       kind: input.kind,
       title: input.title,
       details: input.details ?? null,
+      options: input.options ?? null,
       blocking: input.blocking,
       status: 'open',
     });

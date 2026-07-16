@@ -1,0 +1,1 @@
+ALTER TABLE "human_tasks" ADD COLUMN "options" jsonb;

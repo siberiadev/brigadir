@@ -35,6 +35,38 @@ describe('CallbackTools schemas', () => {
     ).toBe(false);
   });
 
+  // --- feature 013: suggested answer options ---
+
+  it('request_human accepts up to 5 answer options and stays valid without them', () => {
+    const base = { kind: 'question', title: 'Which strategy?', details: 'See ticket.' };
+    expect(RequestHumanSchema.safeParse(base).success).toBe(true);
+    expect(
+      RequestHumanSchema.safeParse({
+        ...base,
+        options: [
+          { label: 'Migrate config format', description: 'Breaking change' },
+          { label: 'Keep backward compat', value: 'compat' },
+        ],
+      }).success,
+    ).toBe(true);
+  });
+
+  it('request_human rejects out-of-bounds options (6 items / oversized label / extra key)', () => {
+    const base = { kind: 'question', title: 't', details: 'd' };
+    expect(
+      RequestHumanSchema.safeParse({
+        ...base,
+        options: Array.from({ length: 6 }, (_, i) => ({ label: `o${i}` })),
+      }).success,
+    ).toBe(false);
+    expect(
+      RequestHumanSchema.safeParse({ ...base, options: [{ label: 'x'.repeat(81) }] }).success,
+    ).toBe(false);
+    expect(
+      RequestHumanSchema.safeParse({ ...base, options: [{ label: 'x', icon: 'y' }] }).success,
+    ).toBe(false);
+  });
+
   it('complete_task equals ReportSchema (accepts a valid report)', () => {
     expect(
       CompleteTaskSchema.safeParse({

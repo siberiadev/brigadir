@@ -239,6 +239,90 @@ describe('CallbackService (T100)', () => {
     const [, passedInput] = createFromRequest.mock.calls[0];
     expect(passedInput.details).not.toContain(secret);
   });
+
+  // --- feature 013: answer options through both intake surfaces ---
+
+  it('human: scrubs option label/value/description before delegating (Constitution V)', async () => {
+    const createFromRequest = vi.fn().mockResolvedValue({ created: true, blocking: true, mayFinishWithoutComplete: true });
+    const service = new CallbackService(
+      fakeDb() as never,
+      fakeModuleRef() as never,
+      {} as unknown as RunsService,
+      {} as unknown as PipelineService,
+      { acceptTeamReport: vi.fn() } as unknown as SetupApplyService,
+      { createFromRequest } as unknown as HumanTaskService,
+    );
+
+    const secret = 'ghp_' + 'c'.repeat(40);
+    const result = await service.human('run-1', {
+      kind: 'question',
+      title: 'Which flow?',
+      details: 'Pick one.',
+      blocking: true,
+      options: [
+        { label: `token ${secret}`, value: `value ${secret}`, description: `hint ${secret}` },
+        { label: 'Keep as is' },
+      ],
+    });
+
+    expect(result).toEqual({ ok: true, blocking: true, mayFinishWithoutComplete: true });
+    const [, passedInput] = createFromRequest.mock.calls[0];
+    expect(JSON.stringify(passedInput.options)).not.toContain(secret);
+    expect(passedInput.options).toHaveLength(2);
+    expect(passedInput.options[1]).toEqual({ label: 'Keep as is' });
+  });
+
+  it('human: a 6-option payload is a validation failure, nothing delegated', async () => {
+    const createFromRequest = vi.fn();
+    const service = new CallbackService(
+      fakeDb() as never,
+      fakeModuleRef() as never,
+      {} as unknown as RunsService,
+      {} as unknown as PipelineService,
+      { acceptTeamReport: vi.fn() } as unknown as SetupApplyService,
+      { createFromRequest } as unknown as HumanTaskService,
+    );
+
+    const result = await service.human('run-1', {
+      kind: 'question',
+      title: 't',
+      details: 'd',
+      blocking: true,
+      options: Array.from({ length: 6 }, (_, i) => ({ label: `o${i}` })),
+    });
+
+    expect(result).toMatchObject({ kind: 'validation' });
+    expect(createFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('complete: scrubs human_task.options before finalize (needs_human path)', async () => {
+    const finalizeWithReport = vi.fn().mockResolvedValue(true);
+    const service = new CallbackService(
+      fakeDb({ agentBehavior: {} }) as never,
+      fakeModuleRef() as never,
+      { finalizeWithReport } as unknown as RunsService,
+      { onRunFinished: vi.fn() } as unknown as PipelineService,
+      { acceptTeamReport: vi.fn() } as unknown as SetupApplyService,
+      {} as unknown as HumanTaskService,
+    );
+
+    const secret = 'sk-ant-' + 'd'.repeat(30);
+    await service.complete('run-1', {
+      schema_version: 1,
+      outcome: 'needs_human',
+      summary: 'stuck',
+      checks: [],
+      human_task: {
+        kind: 'question',
+        title: 'Which one?',
+        options: [{ label: `use ${secret}`, value: `${secret}-value` }],
+      },
+    });
+
+    const [, scrubbedReport] = finalizeWithReport.mock.calls[0];
+    expect(JSON.stringify(scrubbedReport.human_task.options)).not.toContain(secret);
+  });
+
   // --- feature 011: the `team` accept path ---
 
   it('complete: team outcome routes through SetupApplyService; invalid → 422-shaped validation, no finalize', async () => {

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { makePaginatedResponseSchema } from './pagination.schema';
+import { AnswerOptionSchema } from './answer-option.schema';
 
 /**
  * Human Queue API contracts (feature 006, contracts/human-queue-api.md) — the
@@ -34,6 +35,10 @@ export const HumanQueueItemSchema = z
     kind: HumanTaskKindSchema,
     title: z.string(),
     details: z.string().nullable(),
+    // feature 013: suggested answer options — null for system-composed tasks
+    // and every ask without options. Served open AND closed; the client
+    // renders buttons only on open tasks.
+    options: z.array(AnswerOptionSchema).nullable(),
     blocking: z.boolean(),
     // Null for ticketless tasks (feature 011: workspace-setup review/failure/
     // question tasks) — the UI renders a "Workspace setup" label, no Jira link.

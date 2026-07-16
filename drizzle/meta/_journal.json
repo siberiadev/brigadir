@@ -43,6 +43,13 @@
       "when": 1784174188458,
       "tag": "0005_workspace_setup",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1784187516143,
+      "tag": "0006_human_task_options",
+      "breakpoints": true
     }
   ]
 }

@@ -295,6 +295,7 @@ export const sampleHumanQueueOpen: HumanQueueListResponse = {
       kind: 'blocker',
       title: 'Which auth provider?',
       details: '## Decision needed\n\nPick one before wiring `request_human`:\n\n- **OAuth** — more setup\n- **Basic** — quicker',
+      options: null,
       blocking: true,
       ticket: { key: 'BRIG-1', jira_url: 'https://acme.atlassian.net/browse/BRIG-1' },
       agent: { id: 'ag-1', name: 'Implementer' },
@@ -307,6 +308,7 @@ export const sampleHumanQueueOpen: HumanQueueListResponse = {
       kind: 'question',
       title: 'Clarify the copy',
       details: null,
+      options: null,
       blocking: false,
       ticket: { key: 'BRIG-2', jira_url: 'https://acme.atlassian.net/browse/BRIG-2' },
       agent: null,
@@ -315,6 +317,30 @@ export const sampleHumanQueueOpen: HumanQueueListResponse = {
       created_at: '2026-07-12T09:30:00.000Z',
     },
   ],
+};
+
+/**
+ * Feature 013: an open blocking task carrying suggested answer options — one
+ * full option (value + description), one label-only (value defaults to label
+ * at click time), one with a value but no description. Used via `server.use`
+ * so the default fixtures above keep proving the no-options rendering.
+ */
+export const sampleHumanTaskWithOptions: HumanQueueListResponse['items'][number] = {
+  id: 'ht-opt',
+  kind: 'question',
+  title: 'Which migration strategy?',
+  details: 'The config format change can break older readers.',
+  options: [
+    { label: 'Migrate config format', value: 'migrate', description: 'Breaking, needs a major bump' },
+    { label: 'Keep backward compat' },
+    { label: 'Ask the team first', value: 'defer' },
+  ],
+  blocking: true,
+  ticket: { key: 'BRIG-3', jira_url: 'https://acme.atlassian.net/browse/BRIG-3' },
+  agent: { id: 'ag-1', name: 'Implementer' },
+  workspace: { id: 'ws-1', name: 'Acme' },
+  run_id: 'run-3',
+  created_at: '2026-07-12T10:00:00.000Z',
 };
 
 export const sampleHumanQueueClosed: HumanQueueListResponse = {
@@ -327,6 +353,7 @@ export const sampleHumanQueueClosed: HumanQueueListResponse = {
       kind: 'review',
       title: 'Review the migration',
       details: null,
+      options: null,
       blocking: false,
       ticket: { key: 'BRIG-9', jira_url: 'https://acme.atlassian.net/browse/BRIG-9' },
       agent: { id: 'ag-1', name: 'Implementer' },

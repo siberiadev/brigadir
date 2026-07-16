@@ -1,4 +1,4 @@
-import type { ADFDoc, ADFNode, AgentReport } from '@brigadir/contracts';
+import type { ADFDoc, ADFNode, AgentReport, AnswerOption } from '@brigadir/contracts';
 
 /**
  * ADF composer (contracts.md C3 / research D6). Pure: a run report → an ADF
@@ -70,13 +70,17 @@ const HUMAN_TASK_KIND_HEADING = {
 
 /**
  * ADF comment for a human-task escalation (feature 004, FR-012). Free text
- * (`title`/`details`) MUST already be scrubbed by the caller before this is
- * built — the composer itself does no scrubbing (libs/scrubber owns that).
+ * (`title`/`details`/`options`) MUST already be scrubbed by the caller before
+ * this is built — the composer itself does no scrubbing (libs/scrubber owns
+ * that). Options (feature 013) render as a plain bullet list — Jira has no
+ * buttons; answering happens in the dashboard. `value` is the machine-submitted
+ * string and is never rendered here.
  */
 export function buildHumanTaskComment(input: {
   kind: 'question' | 'blocker' | 'review';
   title: string;
   details?: string;
+  options?: AnswerOption[];
 }): ADFDoc {
   const content: ADFNode[] = [
     {
@@ -88,6 +92,16 @@ export function buildHumanTaskComment(input: {
   ];
   if (input.details) {
     content.push(paragraph(input.details));
+  }
+  if (input.options && input.options.length > 0) {
+    content.push(paragraph('Suggested answers:'));
+    content.push({
+      type: 'bulletList',
+      content: input.options.map((option) => ({
+        type: 'listItem',
+        content: [paragraph(option.description ? `${option.label} — ${option.description}` : option.label)],
+      })),
+    });
   }
   return { version: 1, type: 'doc', content };
 }

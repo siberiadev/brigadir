@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AnswerOptionsSchema } from './answer-option.schema';
 
 /**
  * Agent structured report — ReportSchema v1.
@@ -103,6 +104,9 @@ export const ReportHumanTaskSchema = z
           'Use headings, bullet/numbered lists, `inline code`, fenced ```code blocks```, **bold**, ' +
           'links, and blockquotes to make it scannable. Do NOT wrap the whole thing in a single code fence.',
       ),
+    // feature 013: suggested answers on the needs_human ask surface — same
+    // shape as request_human's options (one schema home, research D1).
+    options: AnswerOptionsSchema.optional(),
   })
   .strict();
 

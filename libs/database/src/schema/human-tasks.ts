@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { pgTable, uuid, text, boolean, timestamp, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, boolean, timestamp, index, jsonb } from 'drizzle-orm/pg-core';
 import { workspaces } from './workspaces';
 import { runs } from './runs';
 import { tickets } from './tickets';
@@ -22,6 +22,10 @@ export const humanTasks = pgTable(
     kind: text('kind').notNull(),
     title: text('title').notNull(),
     details: text('details'),
+    // Suggested answer options (feature 013): scrubbed AnswerOption[] (1–5) or
+    // NULL — for system-composed tasks and every ask without options. Written
+    // once at creation, never updated; validated by zod at intake, not in SQL.
+    options: jsonb('options'),
     blocking: boolean('blocking').notNull().default(true),
     status: text('status').notNull().default('open'),
     resolution: text('resolution'),

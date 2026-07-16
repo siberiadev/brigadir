@@ -879,3 +879,58 @@ unit 244. The testcontainers integration suite could not run in this environment
 registry CDN `production.cloudfront.docker.com` is blocked by egress policy — 403 — so
 postgres/redis/ryuk images cannot be pulled); the integration spec typechecks and follows the
 existing harness patterns and should be run where Docker is available.
+
+## Iteration 18 — Suggested answer options on human tasks (feature 013, 2026-07-16)
+
+Spec-kit feature `specs/013-human-task-answer-options` (spec → plan with Constitution
+Check → tasks → implementation). When an agent asks a human a question — via the
+`request_human` callback tool OR the `human_task` payload of a `needs_human` report —
+it can attach up to 5 predefined answer options. The Human Queue drawer renders them
+as one-click buttons; a click PRE-FILLS the answer input with the option's `value`
+(default: `label`), the free-text field stays below as the always-available custom
+answer, and the human still presses the existing explicit Submit (no auto-submit).
+The chosen option submits as an ordinary STRING through the existing `answer` field
+of `POST /api/human-tasks/:id/resolve` — `resume.service.ts`, the handoff Q&A
+rendering, and answer-triage changed ZERO lines by design.
+
+One schema home (research D1): `packages/contracts/src/answer-option.schema.ts` —
+`AnswerOptionSchema` (`{label ≤80, value? ≤500, description? ≤200}`, `.strict()`,
+`.describe()` coaching "offer options whenever the answer is a choice, not an essay")
++ `AnswerOptionsSchema` (1–5; empty array invalid — "no options" is the omitted
+field). Reused by `RequestHumanSchema`, `ReportHumanTaskSchema` (additive optional,
+`schema_version` stays 1), and `HumanQueueItemSchema` (nullable, served by the global
+list and the workspace Human queue tab from the one shared select). Storage: nullable
+`human_tasks.options` jsonb (migration `0006` + `REVIEW-0006`, §3 amended in the same
+change); system-composed tasks (PR review, triage-limit, orchestrator failure, team
+review) carry NULL. `label`/`value`/`description` pass the scrubber in
+`callback.service.ts` on BOTH intake paths (Constitution V) — which also covers the
+Jira side, since `buildHumanTaskComment` renders from the scrubbed input: options
+appear as a plain ADF bullet list ("Suggested answers:", label — description; `value`
+is machine-facing and never rendered; no buttons in Jira — answering stays in the
+dashboard; the no-options document is byte-identical, existing snapshot held).
+Agent discovery: one sentence in `callbackToolsSection` + a hint in the
+workspace-setup handoff — stored agent instructions untouched. The mock executor's
+`needs_human` scenario is parameterized via `trigger_event.mock_options` (typed
+optional, `.passthrough()` schema) so the loop is drivable without live agents.
+The claude-cli args snapshot moved because the `--json-schema` fallback derives from
+`ReportSchema` (expected additive change).
+
+Tests in the same commits (Constitution VI): contracts (bounds, max 5, strict, both
+intake surfaces, HumanQueueItem requires nullable options), callback units (canary
+secret scrubbed in option texts on both paths; 6-option payload → validation, nothing
+delegated), mock-executor unit, ADF snapshots with/without options, wrapper prose on
+both channels, web MSW suite `human-task-options.spec.ts` (buttons render with
+label+description and a row hint; click fills value/label; last click wins; custom
+text overrides; no resolve call on click; `options: null` renders exactly as before —
+`human-queue.spec.ts` green UNTOUCHED), and the integration suite
+`human-task-options.integration.spec.ts` (request_human with options → scrubbed row →
+global + scoped list carry them → Jira comment lists them → resolving with the
+option's value lands in `resolution` and the resumed run's handoff renders
+`Question:`/`Answer: migrate`; mock needs_human via `mock_options`; PR-review task
+options NULL; 6-option payload 422 with the run untouched).
+
+Gates green locally: typecheck, lint, unit 251 (39 files), web 165 (26 files),
+integration 260 (75 files, full suite). Docker note: the registry CDN block from iteration 17 was
+worked around by running dockerd with `--registry-mirror=https://mirror.gcr.io`
+(gcr mirror is reachable through the egress proxy), so the testcontainers suite ran
+in this environment this time.

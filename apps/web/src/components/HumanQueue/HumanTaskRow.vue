@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import { ChevronRight } from 'lucide-vue-next';
 import type { HumanQueueItem } from '@brigadir/contracts';
 import { relativeAge } from '../../utils/date';
+import { pluralize } from '../../utils/pluralize';
 import { badgeState, badgeTooltip, kindIcon } from './kindTag';
 
 /**
@@ -59,6 +60,10 @@ const state = computed(() => badgeState(props.item));
         <span v-else data-test="task-setup-label">Workspace setup</span>
         <span v-if="item.agent">· {{ item.agent.name }}</span>
         <span data-test="task-age">· {{ relativeAge(item.created_at) }} ago</span>
+        <!-- feature 013: hint that the drawer offers one-click answers (open tasks only). -->
+        <span v-if="!item.status && item.options?.length" :data-test="`options-hint-${item.id}`">
+          · {{ pluralize(item.options.length, 'option') }}
+        </span>
         <!-- Closed tasks: the badge color already signals resolved/dismissed,
              so the row shows just the resolution text + resolver, no status tag. -->
         <span v-if="item.status" class="line-resolution" :data-test="`resolution-${item.id}`">

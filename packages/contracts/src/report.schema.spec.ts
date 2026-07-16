@@ -43,6 +43,38 @@ describe('ReportSchema v1', () => {
     }
   });
 
+  // feature 013: suggested answer options on the needs_human ask surface.
+  it('accepts needs_human whose human_task carries answer options', () => {
+    const r = {
+      ...baseSuccess,
+      outcome: 'needs_human' as const,
+      human_task: {
+        kind: 'question' as const,
+        title: 'Which API base URL?',
+        options: [
+          { label: 'Staging', value: 'https://staging.example.com' },
+          { label: 'Production', description: 'Only if the ticket says so' },
+        ],
+      },
+    };
+    expect(ReportSchema.safeParse(r).success).toBe(true);
+  });
+
+  it('rejects out-of-bounds human_task.options (6 items / empty array / extra key)', () => {
+    const withOptions = (options: unknown) => ({
+      ...baseSuccess,
+      outcome: 'needs_human' as const,
+      human_task: { kind: 'question' as const, title: 't', options },
+    });
+    expect(
+      ReportSchema.safeParse(
+        withOptions(Array.from({ length: 6 }, (_, i) => ({ label: `o${i}` }))),
+      ).success,
+    ).toBe(false);
+    expect(ReportSchema.safeParse(withOptions([])).success).toBe(false);
+    expect(ReportSchema.safeParse(withOptions([{ label: 'x', icon: 'y' }])).success).toBe(false);
+  });
+
   it('rejects unknown top-level properties (additionalProperties:false)', () => {
     const r = { ...baseSuccess, human_needed: true };
     expect(ReportSchema.safeParse(r).success).toBe(false);
