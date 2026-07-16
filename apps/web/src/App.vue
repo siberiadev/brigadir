@@ -48,7 +48,9 @@ watch(
 <template>
   <div v-if="!auth.token" class="token-gate">
     <el-card class="token-card">
-      <template #header>BRIGADIR Dashboard</template>
+      <template #header>
+        <span class="brand-wordmark"><span class="brand-prompt">&gt;_</span> BRIGADIR</span>
+      </template>
       <p>Enter the dashboard access token to continue.</p>
       <el-input
         v-model="tokenInput"
@@ -81,6 +83,16 @@ watch(
 }
 .token-card {
   width: 360px;
+}
+// The `>_ BRIGADIR` wordmark: monospace, amber prompt (see README banner).
+.brand-wordmark {
+  font-family: $font-family-mono;
+  font-weight: $font-weight-bold;
+  font-size: 18px;
+  letter-spacing: 0.04em;
+}
+.brand-prompt {
+  color: var(--el-color-primary);
 }
 // The sidebar is `position: fixed` at 70px; offset the main region by exactly the
 // rail width so nothing renders under it (research R5 / SC-006).

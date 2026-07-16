@@ -49,7 +49,22 @@ const route = useRoute();
 
 <template>
   <aside class="app-sidebar" data-test="app-sidebar">
-    <div class="sidebar-brand" data-test="sidebar-brand">B</div>
+    <!-- Brand mark: dark `>_` on the amber badge (same art as /favicon.svg).
+         Not a nav item — stays static per the sidebar animation convention. -->
+    <div class="sidebar-brand" data-test="sidebar-brand" role="img" aria-label="BRIGADIR">
+      <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <rect width="64" height="64" rx="14" fill="var(--el-color-primary)" />
+        <path
+          d="M17 20 L31 32 L17 44"
+          fill="none"
+          stroke="#1e293b"
+          stroke-width="7"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+        <path d="M37 46 h12" fill="none" stroke="#1e293b" stroke-width="7" stroke-linecap="round" />
+      </svg>
+    </div>
     <nav class="sidebar-nav">
       <el-tooltip
         v-for="item in navItems"
@@ -126,9 +141,13 @@ const route = useRoute();
   background: var(--el-bg-color);
 }
 .sidebar-brand {
-  font-weight: $font-weight-bold;
-  font-size: 22px;
   margin-bottom: $space-lg;
+
+  svg {
+    display: block;
+    width: 38px;
+    height: 38px;
+  }
 }
 .sidebar-nav {
   display: flex;

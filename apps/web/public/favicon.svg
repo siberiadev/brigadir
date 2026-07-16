@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- BRIGADIR brand mark: dark terminal prompt >_ on the foreman-amber badge.
+       Keep in sync with the inline mark in AppSidebar.vue. -->
+  <rect width="64" height="64" rx="14" fill="#f59e0b"/>
+  <path d="M17 20 L31 32 L17 44" fill="none" stroke="#1e293b" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M37 46 h12" fill="none" stroke="#1e293b" stroke-width="7" stroke-linecap="round"/>
+</svg>
