@@ -1,103 +1,190 @@
-# BRIGADIR — Pipeline Skeleton (Iteration 1)
+<div align="center">
 
-Orchestration foundation for BRIGADIR: a pnpm/NestJS monorepo (backend + worker),
-the full Postgres 16 schema via Drizzle with committed SQL migrations, BullMQ 5
-queues, and a deterministic six-scenario **MockExecutor** driving the run
-lifecycle end-to-end. No Jira, no LLMs, no UI yet — this iteration proves the
-orchestration spine.
+```
+██████╗ ██████╗ ██╗ ██████╗  █████╗ ██████╗ ██╗██████╗
+██╔══██╗██╔══██╗██║██╔════╝ ██╔══██╗██╔══██╗██║██╔══██╗
+██████╔╝██████╔╝██║██║  ███╗███████║██║  ██║██║██████╔╝
+██╔══██╗██╔══██╗██║██║   ██║██╔══██║██║  ██║██║██╔══██╗
+██████╔╝██║  ██║██║╚██████╔╝██║  ██║██████╔╝██║██║  ██║
+╚═════╝ ╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═════╝ ╚═╝╚═╝  ╚═╝
+```
 
-## Prerequisites
+**Оркестратор бригады AI-кодинг-агентов поверх Jira.**
 
-- **Node.js 22 LTS** (see `.nvmrc`) and **pnpm ≥ 9**
-- **Docker** with a running daemon — needed both for `docker compose up` and for
-  the integration tests (Testcontainers boots real Postgres/Redis).
+*Доска — единственный дашборд. Статус — единственный протокол. Бригадир раздаёт наряды.*
 
-## 1. Install & static checks
+<br/>
+
+![Node](https://img.shields.io/badge/Node-22_LTS-3C873A?style=flat-square)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?style=flat-square)
+![NestJS](https://img.shields.io/badge/NestJS-11-E0234E?style=flat-square)
+![Vue](https://img.shields.io/badge/Vue-3-42B883?style=flat-square)
+![Postgres](https://img.shields.io/badge/Postgres-16-336791?style=flat-square)
+![Redis](https://img.shields.io/badge/Redis_+_BullMQ-5-DC382D?style=flat-square)
+![License](https://img.shields.io/badge/mode-internal_tool-6E56CF?style=flat-square)
+
+</div>
+
+---
+
+## Что это
+
+BRIGADIR превращает **доску Jira в пульт управления командой AI-агентов**. Ты не пишешь пайплайн явно — ты навешиваешь на каждый статус доски своего агента. Тикет вошёл в статус → бригадир поднимает нужного агента (`claude -p` в изолированном git-worktree) → агент делает работу и репортит структурированный отчёт → бригадир двигает тикет дальше по доске. Следующий статус триггерит следующего агента.
+
+**Пайплайн эмерджентен** — он рождается из статусов доски, а не из конфига. Любой человек может вмешаться в любой момент прямо в Jira, и это часть протокола, а не сбой.
+
+```
+        ┌──────────────────────────┐
+        │          JIRA            │   источник правды по статусу тикета
+        │   ● Ready for Dev        │
+        └────────────┬─────────────┘
+                     │  статус сменился (webhook + reconciliation-поллинг)
+        ┌────────────▼─────────────┐
+        │        BRIGADIR          │   бригадир: матчит агента, раздаёт наряды,
+        │  match · dedup · enqueue │   двигает статусы, пишет комменты
+        └────────────┬─────────────┘
+         ┌───────────┼───────────┐
+         ▼           ▼           ▼
+     ┌───────┐   ┌───────┐   ┌───────┐
+     │ agent │   │ agent │   │ agent │   бригада: claude -p в git-worktree,
+     │  QA   │   │  Dev  │   │Planner│   MCP-тулзы для отчётов
+     └───┬───┘   └───┬───┘   └───┬───┘
+         └───────────┴───────────┘
+                     │  report_progress · request_human · complete_task
+                     ▼
+              статус ← down the board  →  следующий агент цепочки
+```
+
+## Зачем
+
+Проект вырос из боли жить на **Jira Automation** как на движке для агентов. Три вещи, которые он лечит:
+
+| Боль | Было | Стало |
+|---|---|---|
+| **Ненадёжный движок** | Jira Automation молча теряет триггеры, дабл-запускает, не переживает даунтайм | Дедуп на трёх уровнях, high-water-mark поллер догоняет пропущенное, идемпотентные прогоны |
+| **Простыни логов** | В комменте тикета — сырой лог агента на сто строк | Читаемый чеклист ✅/❌ в Jira + карточка прогона с таймлайном, стоимостью и usage |
+| **«Агент застрял»** | Непонятно, где агент ждёт человека и ждёт ли | Единая **human-queue**: `request_human` → задача в очереди ≤ 5 сек → ответ из UI возобновляет прогон |
+
+Модель шире одного пайплайна: **workspace + агенты + scope_jql = временная команда digital-сотрудников** под узкий список задач. Собрал бригаду под фичу спринта, включил, распустил — история остаётся.
+
+## Принципы (не нарушаются)
+
+1. **В Jira пишет только система.** Агент никогда сам не двигает карточку и не комментирует — он репортит через тулзы (`report_progress` / `request_human` / `complete_task`), а транзишены, комменты и человеко-задачи делает бригадир. Правило зашито в обёртку инструкций.
+2. **Jira — источник правды по статусу.** Оркестратор никогда не «считает» тикет в статусе, которого не видел в Jira; локальный `last_seen_status` — кэш для diff'а, не правда.
+3. **Прогоны идемпотентны.** Дедуп webhook-события → BullMQ `deduplication` → partial unique index на активный прогон `(ticket, agent)`. Ни один уровень не снимается.
+4. **Завершение прогона = `complete_task`.** Любой другой выход процесса без него — `failed` с диагностикой. Stop-hook принуждает Claude-агента вызвать тулзу.
+5. **Агенты друг друга не запускают.** Цепочка — только через статусы Jira. Пайплайн остаётся совместимым с ручным вмешательством.
+
+## Как устроено
+
+```
+                        ┌─────────────────────────────────────────────┐
+                        │                 Jira Cloud                  │
+                        └───────┬─────────────────────▲───────────────┘
+             webhooks /         │                     │  transitions · ADF-комменты
+             JQL-поллинг        │                     │  (per-issue write queue, 20/2с)
+                        ┌───────▼─────────────────────┴───────────────┐
+   Vue Dashboard ◄─SSE──┤                NestJS Backend               │
+   (runs, чеклисты,     │  Jira · Ingest · Pipeline · Run · Callback  │
+    human-queue)──REST─►│  HumanTask · Executor                       │
+                        └───────┬───────────────────▲─────────────────┘
+                                │ enqueue           │ MCP / HTTP callback
+                        ┌───────▼───────┐           │  (report / request_human /
+                        │ Redis + BullMQ│           │   complete_task, run-JWT)
+                        │ queue / type  │           │
+                        └───────┬───────┘           │
+                        ┌───────▼───────────────────┴─────────────────┐
+                        │             Worker (NestJS WorkerHost)      │
+                        │   git worktree · env-санация · secret scrub │
+                        │        claude -p  +  brigadir MCP tools     │
+                        └─────────────────────────────────────────────┘
+```
+
+**Control plane (backend)** и **execution plane (worker)** — два процесса, общее только Postgres + Redis. Рестарт бэкенда не роняет живые прогоны.
+
+- **Postgres 16** — источник правды по истории: прогоны, чеклисты, события, human-tasks, usage/cost.
+- **Redis + BullMQ 5** — только очереди: per-executor concurrency, дедуп, reconciliation-scheduler.
+- **Jira** — источник правды по статусу тикета.
+
+### Стек
+
+`pnpm` monorepo · NestJS 11 (backend + worker) · Vue 3 + Vite + Pinia + TanStack Query + Element Plus (web) · Drizzle ORM + коммит-миграции · zod-контракты (framework-free) · Streamable-HTTP MCP-сервер для callback-тулз · vitest + Testcontainers (реальные Postgres/Redis, без моков брокера).
+
+---
+
+## Быстрый старт
+
+**Требования:** Node.js 22 LTS (см. `.nvmrc`), pnpm ≥ 9, Docker с запущенным демоном (нужен и для `docker compose`, и для интеграционных тестов через Testcontainers).
+
+### 1. Установка и статика
 
 ```bash
 pnpm install
-pnpm typecheck   # tsc --noEmit across the workspace, strict mode
+pnpm typecheck   # tsc --noEmit по всему воркспейсу, strict
 pnpm lint
 ```
 
-`packages/contracts` is framework-free (zod only): `pnpm why @nestjs/core --filter @brigadir/contracts` prints nothing.
-
-## 2. Integration tests (primary validation — no compose needed)
+### 2. Тесты
 
 ```bash
-pnpm test          # unit tests (contracts + libs)
-pnpm test:integration
+pnpm test              # юниты: contracts + mcp-server + libs
+pnpm test:integration  # Testcontainers: Postgres 16 + Redis 7, миграции с нуля
 ```
 
-Testcontainers boots Postgres 16 + Redis 7, applies the committed migrations from
-scratch, boots the worker, and exercises: the six run scenarios, duplicate +
-concurrent trigger dedup, rate-limit attempt accounting, the config-validation
-matrix, finalize idempotency, and reconcile-scheduler idempotency. Re-running
-yields identical results (determinism).
+Интеграционные поднимают реальные контейнеры, применяют коммит-миграции, гоняют сценарии прогонов, дедуп, rate-limit-аккаунтинг, машину статусов и reconcile — детерминированно (повторный прогон даёт тот же результат).
 
-## 3. Full stack (one command)
+### 3. Полный стек одной командой
 
 ```bash
-cp .env.example .env      # optional for local, informational
+cp .env.example .env      # опционально для локали
 docker compose up --build
 ```
 
-From empty volumes: Postgres and Redis become healthy → **backend** applies all
-migrations and seeds workspace/executors/agents from `agents.yaml`, then serves
-`GET http://localhost:3000/health` → `{ "status": "ok", "db": "up", "redis": "up" }`
-→ **worker** connects and registers the `run.mock` consumer + `reconcile`
-scheduler. `docker compose ps` shows four services healthy/running.
+Из пустых томов: Postgres и Redis становятся healthy → **backend** применяет миграции и сидит workspace/executors/agents из `agents.yaml`, отдаёт `GET http://localhost:3000/health` → `{ "status": "ok", "db": "up", "redis": "up" }` → **worker** подключается и регистрирует консьюмеры + reconcile-scheduler.
 
-### Restart isolation (SC-007)
+> Локальный dev-режим, секреты и грабли — в [`docs/local-setup.md`](docs/local-setup.md).
 
-```bash
-docker compose restart backend
-```
+---
 
-The backend (control plane) and worker (execution plane) are separate processes
-sharing only Postgres + Redis. Restarting the backend does **not** disconnect the
-worker or interrupt in-flight runs — the worker's logs show no reconnect churn.
-
-## 4. Manual smoke (optional)
-
-With the stack (or at least Postgres + Redis + a worker) running and the config
-seeded:
-
-```bash
-pnpm smoke:run --scenario success
-psql "$DATABASE_URL" -c "SELECT status, attempt, outcome FROM runs ORDER BY created_at DESC LIMIT 1;"
-```
-
-Triggers a run for a `SMOKE-1` ticket via `RunTriggerService` and polls it to a
-terminal status. Scenarios: `success | failure | needs_human | timeout | crash | rate_limited`.
-
-## 5. Config fail-fast smoke
-
-```bash
-AGENTS_CONFIG_PATH=./test/fixtures/broken-agents.yaml pnpm start:backend; echo "exit=$?"
-```
-
-Aborts before any DB work with a non-zero exit and a stderr message naming the
-file and the offending field path.
-
-## Layout
+## Структура репозитория
 
 ```
-apps/backend   HTTP control plane: migrations → seed → /health
-apps/worker    BullMQ consumers: RunProcessor (run.mock) + reconcile scheduler
-apps/smoke     one-shot trigger helper (smoke:run)
-libs/database  Drizzle schema (9 tables) + migrator
-libs/app-config fail-fast agents.yaml loader + yaml→DB seeder
-libs/queues    queue registry, backoff, connection
-libs/runs      RunTriggerService, RunsService (state machine), status mapping
-libs/executors AgentExecutor contract, registry, MockExecutor
-packages/contracts  zod schemas (framework-free): Report, AgentsConfig, TriggerEvent, callbacks
-drizzle/       committed SQL migrations (reviewed against architecture §3)
+apps/
+  backend    HTTP control plane: миграции → сид → /health → REST + SSE
+  worker     BullMQ-консьюмеры: RunProcessor + reconcile-scheduler
+  web        Vue 3 дашборд (workspaces · agents · runs · human-queue · settings)
+  smoke      one-shot trigger-хелпер
+libs/
+  jira       клиент v3, rate-limiter, per-issue write queue, transition discovery, ADF
+  ingest     webhook-эндпоинт + reconciliation-поллер (high-water mark)
+  pipeline   машина состояний тикета, матчинг агентов, дедуп
+  runs       lifecycle прогона, события, чеклисты, статус-маппинг
+  callback   HTTP callback API + MCP-канал, run-JWT
+  human-tasks очередь «нужен человек», resume прогона
+  executors  контракт AgentExecutor, реестр, claude_cli / mock
+  database   Drizzle-схема + мигратор
+  queues     реестр очередей, backoff, connection
+  app-config fail-fast загрузчик agents.yaml + yaml→DB сидер
+  scrubber   скраббер секретов из потока агента
+packages/
+  contracts  zod-схемы (Report, AgentsConfig, TriggerEvent, callbacks, pagination)
+  mcp-server stdio/streamable MCP: report_progress · request_human · complete_task
+drizzle/     коммит-миграции (ревью против architecture.md §3)
 ```
 
-## Iteration boundaries
+## Документы — источник правды
 
-Deliberate, documented deviations from the architecture docs (see
-`docs/progress.md`): **F1** a `mock` executor type, **F2** `needs_human` performs
-only the Postgres half (no Jira), **F3** the reconcile sweeper is a scheduled
-no-op. These are intentional seams for later iterations.
+| Файл | Что внутри |
+|---|---|
+| [`docs/plan-internal.md`](docs/plan-internal.md) | **Актуальный рабочий план** — итерации, принятые решения (при противоречиях приоритет здесь) |
+| [`docs/spec.md`](docs/spec.md) | Детальное ТЗ: эндпоинты, таблицы, поведение модулей |
+| [`docs/architecture.md`](docs/architecture.md) | Схема БД (§3), контракт AgentExecutor (§4), callback-протокол (§5), ReportSchema (§6) |
+| [`docs/progress.md`](docs/progress.md) | Журнал итераций |
+| [`docs/local-setup.md`](docs/local-setup.md) | Локальный запуск |
+| [`.specify/memory/constitution.md`](.specify/memory/constitution.md) | Обязательные принципы, проверяются гейтами spec-kit |
+
+---
+
+<div align="center">
+<sub>Внутренний инструмент команды · некоммерческий режим · Jira через API-token, исполнение — на своей инфре</sub>
+</div>
