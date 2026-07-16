@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { HumanQueueItem, HumanQueueStatus, ResolveHumanTaskInput } from '@brigadir/contracts';
 import { useHumanTasks, useResolveHumanTask } from '../composables/useHumanTasks';
 import { usePagination } from '../composables/usePagination';
-import { relativeAge } from '../utils/date';
+import { formatDateTime } from '../utils/date';
 import { ApiError } from '../api/client';
 import ListPagination from '../components/ListPagination.vue';
-import MarkdownText from '../components/MarkdownText.vue';
+import HumanTaskRow from '../components/HumanQueue/HumanTaskRow.vue';
+import HumanTaskDrawer from '../components/HumanQueue/HumanTaskDrawer.vue';
 import ResumeAgentPicker from '../components/ResumeAgentPicker.vue';
 
 // The global (cross-workspace) needs-human queue (US1). Open tasks are
@@ -24,7 +25,21 @@ const items = computed<HumanQueueItem[]>(() => activeQuery.value.data.value?.ite
 const total = computed(() => activeQuery.value.data.value?.total ?? 0);
 bindTotal(total);
 
-// Per-task resolution form state, keyed by task id.
+// Detail drawer: the selected task is looked up from the live list so the 4s
+// poll keeps the drawer content fresh (placeholderData avoids flicker).
+const selectedId = ref('');
+const selectedItem = computed(
+  () => items.value.find((i) => i.id === selectedId.value) ?? null,
+);
+const drawerOpen = computed({
+  get: () => !!selectedItem.value,
+  set: (open) => {
+    if (!open) selectedId.value = '';
+  },
+});
+
+// Per-task resolution form state, keyed by task id. Drafts survive closing the
+// drawer without submitting — reopening the task restores the typed answer.
 type Draft = { action: ResolveHumanTaskInput['action']; answer: string; targetAgentId?: string };
 const drafts = reactive<Record<string, Draft>>({});
 function draftFor(id: string): Draft {
@@ -34,6 +49,22 @@ function draftFor(id: string): Draft {
 
 const resolve = useResolveHumanTask();
 const submittingId = ref('');
+
+// If the selected task vanished from the list without us resolving it (someone
+// else did, or it left this page), close the drawer and say why. Our own
+// submit clears selectedId before the invalidated refetch lands, and the
+// submittingId guard covers the in-flight window, so this never fires then.
+watch(selectedItem, (item) => {
+  if (
+    !item &&
+    selectedId.value &&
+    !submittingId.value &&
+    !activeQuery.value.isLoading.value
+  ) {
+    selectedId.value = '';
+    ElMessage.info('Task was resolved elsewhere.');
+  }
+});
 
 async function submit(item: HumanQueueItem) {
   const draft = draftFor(item.id);
@@ -52,6 +83,7 @@ async function submit(item: HumanQueueItem) {
     }
     await resolve.mutateAsync({ id: item.id, body });
     delete drafts[item.id];
+    selectedId.value = '';
     ElMessage.success(
       draft.action === 'resume'
         ? 'Task answered — run resumed.'
@@ -66,12 +98,6 @@ async function submit(item: HumanQueueItem) {
     submittingId.value = '';
   }
 }
-
-const kindTagType: Record<string, string> = {
-  blocker: 'danger',
-  question: 'warning',
-  review: 'info',
-};
 </script>
 
 <template>
@@ -90,33 +116,23 @@ const kindTagType: Record<string, string> = {
       data-test="queue-empty"
     />
 
-    <div v-else v-loading="activeQuery.isLoading.value" class="task-list" data-test="task-list">
-      <el-card
+    <ul v-else v-loading="activeQuery.isLoading.value" class="task-list" data-test="task-list">
+      <HumanTaskRow
         v-for="item in items"
         :key="item.id"
-        class="task"
-        :data-test="`task-${item.id}`"
-      >
-        <div class="task-head">
-          <el-tag :type="kindTagType[item.kind] ?? 'info'" size="small">{{ item.kind }}</el-tag>
-          <el-tag v-if="item.blocking" type="danger" size="small" data-test="blocking-flag">blocking</el-tag>
-          <span class="title" data-test="task-title">{{ item.title }}</span>
-          <span class="spacer" />
-          <a :href="item.ticket.jira_url" target="_blank" rel="noopener" data-test="task-ticket">
-            {{ item.ticket.key }}
-          </a>
-          <span v-if="item.agent" class="muted">· {{ item.agent.name }}</span>
-          <span class="muted" data-test="task-age">· {{ relativeAge(item.created_at) }} ago</span>
-        </div>
+        :item="item"
+        @select="selectedId = $event"
+      />
+    </ul>
 
-        <MarkdownText v-if="item.details" class="details" :source="item.details" data-test="task-details" />
-
+    <HumanTaskDrawer v-model="drawerOpen" :item="selectedItem">
+      <template #footer="{ item }">
         <!-- open: resolution form -->
-        <template v-if="filter === 'open'">
+        <div v-if="filter === 'open'" class="resolve-form">
           <el-input
             v-model="draftFor(item.id).answer"
             type="textarea"
-            :rows="2"
+            :rows="4"
             placeholder="Answer / note (optional)"
             :data-test="`answer-${item.id}`"
           />
@@ -127,9 +143,8 @@ const kindTagType: Record<string, string> = {
             :workspace-id="item.workspace.id"
             :original-agent-id="item.agent?.id ?? null"
             :task-id="item.id"
-            class="agent-picker-row"
           />
-          <div class="task-actions">
+          <div class="form-actions">
             <el-radio-group v-model="draftFor(item.id).action" :data-test="`action-${item.id}`">
               <el-radio value="resume">Resume</el-radio>
               <el-radio value="done_manually">Done manually</el-radio>
@@ -144,20 +159,19 @@ const kindTagType: Record<string, string> = {
               Submit
             </el-button>
           </div>
-        </template>
+        </div>
 
         <!-- closed: resolution summary -->
-        <div v-else class="resolution" :data-test="`resolution-${item.id}`">
+        <div v-else class="drawer-resolution" data-test="drawer-resolution">
           <el-tag size="small" :type="item.status === 'resolved' ? 'success' : 'info'">
             {{ item.status }}
           </el-tag>
           <span v-if="item.resolution" class="resolution-text">{{ item.resolution }}</span>
-          <span v-if="item.resolved_by" class="muted" :data-test="`resolver-${item.id}`">
-            · by {{ item.resolved_by }}
-          </span>
+          <span v-if="item.resolved_by" class="muted">· by {{ item.resolved_by }}</span>
+          <span v-if="item.resolved_at" class="muted">· {{ formatDateTime(item.resolved_at) }}</span>
         </div>
-      </el-card>
-    </div>
+      </template>
+    </HumanTaskDrawer>
 
     <ListPagination :total="total" v-model:page="page" v-model:page-size="pageSize" />
   </section>
@@ -172,44 +186,35 @@ const kindTagType: Record<string, string> = {
   align-items: center;
 }
 .task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+
+  > :deep(li + li) {
+    border-top: 1px solid var(--el-border-color-lighter);
+  }
+}
+.resolve-form {
   display: flex;
   flex-direction: column;
-  gap: $space-md;
+  gap: $space-sm;
 }
-.task-head {
+.form-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.drawer-resolution {
   display: flex;
   align-items: center;
   gap: $space-sm;
+  flex-wrap: wrap;
 }
-.title {
-  font-weight: $font-weight-medium;
-}
-.spacer {
-  flex: 1;
+.resolution-text {
+  color: var(--el-text-color-regular);
 }
 .muted {
   color: var(--el-text-color-secondary);
   font-size: 13px;
-}
-.details {
-  margin: $space-sm 0;
-  color: var(--el-text-color-regular);
-}
-.agent-picker-row {
-  margin-top: $space-sm;
-}
-.task-actions {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: $space-sm;
-}
-.resolution {
-  display: flex;
-  align-items: center;
-  gap: $space-sm;
-}
-.resolution-text {
-  color: var(--el-text-color-regular);
 }
 </style>

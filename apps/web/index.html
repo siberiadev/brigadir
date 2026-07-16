@@ -4,6 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>BRIGADIR Dashboard</title>
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#141414" />
+    <script>
+      // FOUC guard: apply the persisted theme before Vue mounts. Must mirror
+      // src/composables/useTheme.ts (same storage key, same 'auto' resolution).
+      (function () {
+        try {
+          var mode = localStorage.getItem('brigadir-theme');
+          var dark =
+            mode === 'dark' ||
+            ((mode === 'auto' || mode === null) &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.classList.add(dark ? 'dark' : 'light');
+        } catch (e) {
+          /* storage unavailable — default light */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>

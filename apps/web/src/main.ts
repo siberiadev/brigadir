@@ -3,6 +3,9 @@ import { createPinia } from 'pinia';
 import { VueQueryPlugin } from '@tanstack/vue-query';
 import ElementPlus from 'element-plus';
 import 'element-plus/dist/index.css';
+// Dark-theme --el-* overrides, activated by the `dark` class on <html>
+// (managed by useTheme / the pre-hydration script in index.html).
+import 'element-plus/theme-chalk/dark/css-vars.css';
 // Self-hosted Ubuntu (regular / medium / bold). Each file registers @font-face
 // for every subset it ships — including cyrillic — so the browser lazy-loads
 // only the ranges it needs. Kept before our global stylesheet.

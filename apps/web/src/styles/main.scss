@@ -20,4 +20,13 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  // Follow the Element Plus palette so the page chrome outside el-* components
+  // (page background, plain text) switches with the dark theme too.
+  background-color: var(--el-bg-color);
+  color: var(--el-text-color-primary);
+}
+
+// Native UI (scrollbars, form controls) renders dark when the theme is dark.
+html.dark {
+  color-scheme: dark;
 }

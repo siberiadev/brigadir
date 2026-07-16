@@ -2,6 +2,7 @@
 import { ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useGeneralSettings, useUpdateGeneralSettings } from '../../composables/useGeneralSettings';
+import { useTheme } from '../../composables/useTheme';
 import { ApiError } from '../../api/client';
 
 /**
@@ -12,6 +13,10 @@ import { ApiError } from '../../api/client';
  */
 const query = useGeneralSettings();
 const update = useUpdateGeneralSettings();
+
+// Theme is a device-level preference (localStorage via useTheme), applied
+// instantly — it does not participate in the Save round-trip below.
+const { mode: themeMode } = useTheme();
 
 const instruction = ref('');
 
@@ -38,13 +43,21 @@ async function save() {
 <template>
   <div class="settings-general" v-loading="query.isLoading.value">
     <h3>General</h3>
+
+    <label class="field-label">Theme</label>
+    <p class="hint">Applies immediately on this device. “System” follows the OS setting.</p>
+    <el-radio-group v-model="themeMode" data-test="theme-mode">
+      <el-radio-button value="light" data-test="theme-mode-light">Light</el-radio-button>
+      <el-radio-button value="dark" data-test="theme-mode-dark">Dark</el-radio-button>
+      <el-radio-button value="auto" data-test="theme-mode-auto">System</el-radio-button>
+    </el-radio-group>
+
+    <label class="field-label instruction-label" for="default-orch-instruction">Default orchestrator instruction</label>
     <p class="hint">
       The default instruction copied into each new workspace's <strong>brigadir</strong> orchestrator
       when it is created. Changing it affects only workspaces created afterward; existing
       orchestrators keep their instruction.
     </p>
-
-    <label class="field-label" for="default-orch-instruction">Default orchestrator instruction</label>
     <el-input
       id="default-orch-instruction"
       v-model="instruction"
@@ -83,5 +96,8 @@ async function save() {
 }
 .actions {
   margin-top: $space-md;
+}
+.instruction-label {
+  margin-top: $space-lg;
 }
 </style>

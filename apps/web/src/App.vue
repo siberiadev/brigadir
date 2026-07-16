@@ -3,7 +3,12 @@ import { computed, ref, watch } from 'vue';
 import { RouterView, useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from './stores/auth';
 import { useHumanTaskCount } from './composables/useHumanTasks';
+import { useTheme } from './composables/useTheme';
 import AppSidebar from './components/AppSidebar.vue';
+
+// Apply the persisted theme (light/dark/auto) from app start, not only after
+// the Settings page instantiates the composable.
+useTheme();
 
 // Runtime token gate: the shared dashboard bearer is entered here (kept in
 // sessionStorage), never compiled into the bundle (research R1 / Constitution V).

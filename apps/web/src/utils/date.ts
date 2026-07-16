@@ -32,6 +32,17 @@ export function formatClockTime(iso: string): string {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
+/**
+ * 'YYYY-MM-DD HH:MM' local label for an ISO timestamp (drawer resolved-at).
+ * Manual padding — `toLocaleString` output varies across CI locales.
+ */
+export function formatDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 /** A duration in ms as a compact "1m 5s" / "42s" label; null → em dash. */
 export function formatDuration(ms: number | null): string {
   if (ms == null) return '—';

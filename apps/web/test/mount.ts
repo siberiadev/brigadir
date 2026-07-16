@@ -12,7 +12,7 @@ import type { Component } from 'vue';
 // it builds a memory router from the app's real routes and seeds `initialPath`.
 type MountOptions = {
   props?: Record<string, unknown>;
-  global?: { plugins?: unknown[] };
+  global?: { plugins?: unknown[]; stubs?: Record<string, unknown> };
   routes?: RouteRecordRaw[];
   initialPath?: string;
 };
@@ -58,6 +58,12 @@ export function mountWithProviders(component: Component, options: MountOptions =
         ElementPlus,
         ...extraPlugins,
       ],
+      // Pass-through so a spec can e.g. un-stub <transition> ({ transition:
+      // false }): Element Plus dialogs/drawers sync v-model back to the parent
+      // only in the transition's after-leave hook, which the default VTU
+      // transition stub never fires — user-initiated closes (X button, overlay,
+      // Escape) are untestable under the stub.
+      stubs: options.global?.stubs,
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any);
