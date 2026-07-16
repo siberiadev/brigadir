@@ -15,9 +15,12 @@ No worker agents exist yet. Study the project and propose the team.
 
 ### Project digest
 - Board: <type>; project key: <KEY>
-- Workflow statuses: <name (category)>, …            ← StatusesService (cached, refresh best-effort)
 - Repositories: <name (default)>, …                  ← workspace.settings.repositories
 - Executor profiles available: <name — type/model>, …← executors WHERE enabled
+*(Implementation refinement: workflow statuses are deliberately NOT in the
+digest — the protocol directs the agent to `get_project_overview` for the
+exact names, keeping handoff assembly strictly DB-only and never blocking
+on Jira.)*
 
 ### How to study the project
 You have read-only Jira tools: get_project_overview, search_tickets, get_ticket

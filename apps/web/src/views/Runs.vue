@@ -136,9 +136,11 @@ function openRun(row: RunListItem) {
       </el-table-column>
       <el-table-column label="Ticket">
         <template #default="{ row }">
-          <a :href="row.ticket.jira_url" target="_blank" rel="noopener" @click.stop>
+          <!-- feature 011: ticketless workspace-setup runs get a label, no link. -->
+          <a v-if="row.ticket" :href="row.ticket.jira_url" target="_blank" rel="noopener" @click.stop>
             {{ row.ticket.key }}
           </a>
+          <span v-else class="setup-label" data-test="setup-label">Workspace setup</span>
         </template>
       </el-table-column>
       <el-table-column label="Status">
