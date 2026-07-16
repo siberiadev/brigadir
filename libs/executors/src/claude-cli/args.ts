@@ -2,11 +2,21 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { ReportSchema } from '@brigadir/contracts';
 
-/** The three callback tools' MCP names (contracts/mcp-config.md D3) — appended to --allowed-tools. */
+/**
+ * The brigadir MCP tools' names (contracts/mcp-config.md D3) — appended to
+ * --allowed-tools for every callback-wired run. The three reporting tools are
+ * the agent's voice; the three read-only Jira tools (feature 011) are its eyes
+ * and are pre-allowed BY DESIGN: they cannot write anything, so a live run must
+ * never stall on a permission prompt for them (found on the first live
+ * workspace-setup smoke, 2026-07-16 — the CLI asked permission to call them).
+ */
 export const CALLBACK_TOOL_NAMES = [
   'mcp__brigadir__report_progress',
   'mcp__brigadir__request_human',
   'mcp__brigadir__complete_task',
+  'mcp__brigadir__get_project_overview',
+  'mcp__brigadir__search_tickets',
+  'mcp__brigadir__get_ticket',
 ] as const;
 
 export interface ArgsInput {
