@@ -214,14 +214,14 @@ CREATE TABLE tickets (
 CREATE TABLE runs (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id    uuid NOT NULL REFERENCES workspaces(id),
-  ticket_id       uuid NOT NULL REFERENCES tickets(id),
+  ticket_id       uuid REFERENCES tickets(id),  -- NULL: бестикетный workspace-setup прогон (feature 011)
   agent_id        uuid NOT NULL REFERENCES agents(id),
   executor_type   text NOT NULL,
   status          text NOT NULL DEFAULT 'queued',
     -- queued | running | awaiting_human | succeeded | failed | cancelled | timed_out | superseded
     -- superseded: закрыт resume'ом human-task (на его месте создан новый attempt, см. spec 1.4)
   attempt         int NOT NULL DEFAULT 1,
-  trigger_event   jsonb,                       -- что запустило: manual|webhook|poll|human-resume|triage|rework|answer-triage (feature 010 + answer-triage delta); handoff-поля failing_run_id/deciding_run_id/human_task_id/target_agent/task ездят здесь же
+  trigger_event   jsonb,                       -- что запустило: manual|webhook|poll|human-resume|triage|rework|answer-triage|workspace-setup (feature 010 + answer-triage delta + feature 011); handoff-поля failing_run_id/deciding_run_id/human_task_id/target_agent/task ездят здесь же
   external_ref    text,                        -- claude session_id / routines session_url
   worktree_path   text,
   started_at      timestamptz,
@@ -237,6 +237,10 @@ CREATE TABLE runs (
 -- третий рубеж идемпотентности: один активный прогон на (ticket, agent)
 CREATE UNIQUE INDEX runs_one_active ON runs (ticket_id, agent_id)
   WHERE status IN ('queued', 'running', 'awaiting_human');
+-- feature 011: NULL'ы в unique-индексе различны, поэтому бестикетные прогоны
+-- охраняет парный индекс — максимум ОДИН активный setup-прогон на workspace
+CREATE UNIQUE INDEX runs_one_active_setup ON runs (workspace_id)
+  WHERE status IN ('queued', 'running', 'awaiting_human') AND ticket_id IS NULL;
 CREATE INDEX runs_ticket ON runs (ticket_id, created_at DESC);
 
 CREATE TABLE run_checks (                       -- чеклист UI строится отсюда
@@ -263,7 +267,7 @@ CREATE TABLE human_tasks (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id    uuid NOT NULL REFERENCES workspaces(id),
   run_id          uuid REFERENCES runs(id),
-  ticket_id       uuid NOT NULL REFERENCES tickets(id),
+  ticket_id       uuid REFERENCES tickets(id),  -- NULL: задача setup-прогона (review/failure/question, feature 011)
   kind            text NOT NULL,               -- question | blocker | review
   title           text NOT NULL,               -- короткая формулировка для человека
   details         text,
@@ -378,6 +382,17 @@ export const CallbackTools = {
     blocking: z.boolean().default(true), // true => агент ждёт ответа (или завершает run как awaiting_human)
   }),
   complete_task: ReportSchema,       // см. §6 — финальный отчёт как аргументы тулзы
+  // feature 011: read-only Jira-тулзы — «глаза, не голос». Доступны КАЖДОМУ
+  // callback-wired прогону; чтения исполняет система через Jira-доступ
+  // workspace'а прогона (агент кредов не видит), write-поверхности нет.
+  get_project_overview: z.object({}),                 // тип борды, статусы workflow, типы задач, активный спринт
+  search_tickets: z.object({                          // структурные фильтры — сырой JQL НЕ принимается,
+    text: z.string().max(200).optional(),             // project-скоуп компонует сервер (побег через OR project= невозможен)
+    status: z.string().max(100).optional(),
+    issue_type: z.string().max(100).optional(),
+    max_results: z.number().int().min(1).max(50).optional(),
+  }),
+  get_ticket: z.object({ key: z.string().max(50) }),  // описание + последние комментарии (≤20) + линки; ответы size-bounded с флагом truncated
 };
 ```
 
@@ -394,9 +409,12 @@ export const CallbackTools = {
 POST /api/callbacks/runs/:runId/progress    Authorization: Bearer <run JWT>
 POST /api/callbacks/runs/:runId/human
 POST /api/callbacks/runs/:runId/complete    body = structured report
+GET  /api/callbacks/runs/:runId/jira/overview          (feature 011, read-only)
+POST /api/callbacks/runs/:runId/jira/search            body = структурные фильтры
+GET  /api/callbacks/runs/:runId/jira/tickets/:key      403 out_of_scope вне проекта workspace'а
 ```
 
-Аутентификация: **short-lived JWT per run** `{ sub: runId, wsp: workspaceId, tkt: ticketKey, exp = started_at + timeout + grace }` (единый набор claims фиксируется в `packages/contracts`), подписан ключом backend'а. Инжектируется в env MCP-процесса / в конфиг executor'а; **модель токен не видит** (он живёт в процессе тулзы), для Routines — видит (ограничение канала), поэтому токен максимально узкий: один run, короткий TTL, только callback-скоупы. Guard: подпись + `runId` из пути == `sub` + run в статусе `running/awaiting_human`.
+Аутентификация: **short-lived JWT per run** `{ sub: runId, wsp: workspaceId, tkt?: ticketKey (нет у бестикетных setup-прогонов, feature 011), exp = started_at + timeout + grace }` (единый набор claims фиксируется в `packages/contracts`), подписан ключом backend'а. Инжектируется в env MCP-процесса / в конфиг executor'а; **модель токен не видит** (он живёт в процессе тулзы), для Routines — видит (ограничение канала), поэтому токен максимально узкий: один run, короткий TTL, только callback-скоупы. Guard: подпись + `runId` из пути == `sub` + run в статусе `running/awaiting_human`.
 
 Семантика:
 
@@ -420,7 +438,7 @@ POST /api/callbacks/runs/:runId/complete    body = structured report
   "additionalProperties": false,
   "properties": {
     "schema_version": { "const": 1 },
-    "outcome": { "enum": ["success", "failure", "needs_human", "routed"] },
+    "outcome": { "enum": ["success", "failure", "needs_human", "routed", "team"] },
     "summary": { "type": "string", "maxLength": 2000,
       "description": "2-4 предложения: что сделано / что не получилось" },
     "checks": {
@@ -455,6 +473,32 @@ POST /api/callbacks/runs/:runId/complete    body = structured report
         "task":         { "type": "string", "maxLength": 4000 }
       }
     },
+    "team": {
+      "type": "object",
+      "required": ["agents"],
+      "additionalProperties": false,
+      "description": "feature 011: обязателен при outcome=team (зеркалит routed/needs_human). Эмитит только workspace-setup прогон оркестратора; team от прочих прогонов пайплайн трактует как failure (FR-014). description/instruction проходят скраббер; бизнес-валидация (имена/статусы/executor-профили) — в accept-path, невалидный proposal отклоняется 422 обратно агенту (repair loop, FR-017), валидный применяется одной транзакцией: агенты enabled + review human task.",
+      "properties": {
+        "agents": {
+          "type": "array", "minItems": 1, "maxItems": 20,
+          "items": {
+            "type": "object",
+            "required": ["name", "description", "instruction", "trigger_status", "status_success", "status_failure", "executor"],
+            "additionalProperties": false,
+            "properties": {
+              "name":           { "type": "string", "maxLength": 200 },
+              "description":    { "type": "string", "maxLength": 500 },
+              "instruction":    { "type": "string", "maxLength": 8000 },
+              "trigger_status": { "type": "string", "maxLength": 100 },
+              "status_running": { "type": "string", "maxLength": 100 },
+              "status_success": { "type": "string", "maxLength": 100 },
+              "status_failure": { "type": "string", "maxLength": 100 },
+              "executor":       { "type": "string", "maxLength": 200 }
+            }
+          }
+        }
+      }
+    },
     "artifacts": {
       "type": "object",
       "properties": {
@@ -472,6 +516,7 @@ POST /api/callbacks/runs/:runId/complete    body = structured report
 
 - `outcome=needs_human` ⇒ `human_task` обязателен (валидируется условно на бекенде). Отдельного флага `human_needed` из ранних набросков контракта нет — его семантику полностью несёт `outcome`, два поля с одним смыслом не держим.
 - `outcome=routed` ⇒ `routing` обязателен (feature 010, тем же `superRefine`, что и needs_human). `routed` эмитит только оркестратор; `routed` от не-оркестратора пайплайн трактует как failure (FR-002). `routing.task` скраббится наравне с прочими free-text полями (FR-003). Валидность таргета (exists ∧ enabled ∧ не оркестратор ∧ тот же workspace) и бюджет rework-циклов проверяются в пайплайне, не в схеме.
+- `outcome=team` ⇒ `team` обязателен (feature 011). Принятие — атомарное: валидация proposal'а (имена ∪ существующие агенты, статусы против живой борды, executor-профили по имени, коллизии триггеров) и применение (агенты enabled + бестикетная review-задача + finalize succeeded) в одной транзакции; невалидный proposal — 422 с списком ошибок через complete_task, прогон остаётся running (агент чинит и повторяет).
 - Из `checks` строятся: чеклист ✅/❌ в Vue-дашборде и ADF-коммент в Jira (`taskList` + `panel`).
 - Отчёт проходит **скраббер секретов** (regex+entropy) до записи в БД и постинга в Jira.
 - Схема версионируется (`schema_version`); миграции отчётов — вперёд-совместимые.

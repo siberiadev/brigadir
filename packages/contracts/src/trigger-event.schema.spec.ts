@@ -16,6 +16,9 @@ describe('TriggerEventSchema', () => {
       expect(TriggerEventSchema.safeParse({ mock_scenario: s }).success).toBe(true);
     }
     expect(MOCK_SCENARIOS).toContain('routed');
+    // feature 011 (D15): the setup-loop scenarios.
+    expect(MOCK_SCENARIOS).toContain('team');
+    expect(MOCK_SCENARIOS).toContain('team_invalid');
   });
 
   it('rejects an unknown mock scenario', () => {
@@ -23,7 +26,7 @@ describe('TriggerEventSchema', () => {
   });
 
   describe('source vocabulary (FR-023/D8 + answer-triage delta)', () => {
-    it('accepts exactly the seven known sources', () => {
+    it('accepts exactly the eight known sources', () => {
       expect([...TRIGGER_SOURCES]).toEqual([
         'manual',
         'webhook',
@@ -32,6 +35,7 @@ describe('TriggerEventSchema', () => {
         'triage',
         'rework',
         'answer-triage',
+        'workspace-setup',
       ]);
       for (const s of TRIGGER_SOURCES) {
         expect(TriggerEventSchema.safeParse({ source: s }).success).toBe(true);

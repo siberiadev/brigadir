@@ -16,9 +16,9 @@ export const humanTasks = pgTable(
       .notNull()
       .references(() => workspaces.id),
     runId: uuid('run_id').references(() => runs.id),
-    ticketId: uuid('ticket_id')
-      .notNull()
-      .references(() => tickets.id),
+    // Nullable since feature 011: workspace-setup review/failure/question tasks
+    // carry no ticket (contracts/nullable-ticket.md).
+    ticketId: uuid('ticket_id').references(() => tickets.id),
     kind: text('kind').notNull(),
     title: text('title').notNull(),
     details: text('details'),

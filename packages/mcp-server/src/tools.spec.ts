@@ -181,4 +181,67 @@ describe('createToolHandlers (T095)', () => {
     await handlers.report_progress({ stage: 'x', message: 'y', runToken: 'attacker-supplied' } as never);
     expect(capturedAuth).toBe('Bearer server-side-token');
   });
+
+  // --- feature 011: read-only Jira tools ---
+
+  it('get_project_overview GETs the overview endpoint and never touches the marker', async () => {
+    const markerPath = await setup();
+    let captured: { url?: string; method?: string } = {};
+    const handlers = createToolHandlers({
+      callbackUrl: 'http://callback.test/api/callbacks',
+      runId: 'run-1',
+      runToken: 'tok',
+      markerPath,
+      fetchImpl: async (url, init) => {
+        captured = { url: String(url), method: init?.method };
+        return jsonResponse(200, { project_key: 'BRIG' });
+      },
+    });
+
+    const result = await handlers.get_project_overview({});
+    expect(captured.url).toBe('http://callback.test/api/callbacks/runs/run-1/jira/overview');
+    expect(captured.method).toBe('GET');
+    expect(result.isError).toBeUndefined();
+    expect(await exists(markerPath)).toBe(false);
+  });
+
+  it('search_tickets POSTs the structured filters; a 4xx surfaces as a tool error (no retry)', async () => {
+    const markerPath = await setup();
+    let calls = 0;
+    const handlers = createToolHandlers({
+      callbackUrl: 'http://callback.test/api/callbacks',
+      runId: 'run-1',
+      runToken: 'tok',
+      markerPath,
+      fetchImpl: async () => {
+        calls++;
+        return jsonResponse(422, { ok: false, errors: [{ path: ['jql'] }] });
+      },
+    });
+
+    const result = await handlers.search_tickets({ jql: 'project = OTHER' });
+    expect(result.isError).toBe(true);
+    expect(calls).toBe(1);
+  });
+
+  it('get_ticket URL-encodes the key and rejects a missing key locally', async () => {
+    const markerPath = await setup();
+    let captured: string | undefined;
+    const handlers = createToolHandlers({
+      callbackUrl: 'http://callback.test/api/callbacks',
+      runId: 'run-1',
+      runToken: 'tok',
+      markerPath,
+      fetchImpl: async (url) => {
+        captured = String(url);
+        return jsonResponse(200, { key: 'BRIG-7' });
+      },
+    });
+
+    await handlers.get_ticket({ key: 'BRIG-7' });
+    expect(captured).toBe('http://callback.test/api/callbacks/runs/run-1/jira/tickets/BRIG-7');
+
+    const missing = await handlers.get_ticket({});
+    expect(missing.isError).toBe(true);
+  });
 });

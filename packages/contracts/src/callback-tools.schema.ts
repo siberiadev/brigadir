@@ -40,11 +40,41 @@ export const RequestHumanSchema = z
 /** complete_task carries the full structured report as its arguments. */
 export const CompleteTaskSchema = ReportSchema;
 
+/**
+ * Read-only Jira tools (feature 011, FR-008..011 / contracts/jira-read-tools.md)
+ * — available to EVERY callback-wired run. Reads are served by the system with
+ * the run workspace's own Jira access (agents never hold credentials); the
+ * toolset exposes NO write operation (Principle III untouched). Search filters
+ * are structured — never raw JQL — so workspace scoping is composed
+ * server-side and cannot be escaped from the prompt.
+ */
+export const GetProjectOverviewSchema = z.object({}).strict();
+
+export const SearchTicketsSchema = z
+  .object({
+    text: z.string().min(1).max(200).optional().describe('Free-text match on summary/description.'),
+    status: z.string().min(1).max(100).optional().describe('Exact workflow status name.'),
+    issue_type: z.string().min(1).max(100).optional().describe('Exact issue type name (e.g. Bug).'),
+    max_results: z.number().int().min(1).max(50).optional().describe('Cap on returned tickets (default 20).'),
+  })
+  .strict();
+
+export const GetTicketSchema = z
+  .object({
+    key: z.string().min(1).max(50).describe('Issue key within this workspace\'s project (e.g. PROJ-42).'),
+  })
+  .strict();
+
 export const CallbackTools = {
   report_progress: ReportProgressSchema,
   request_human: RequestHumanSchema,
   complete_task: CompleteTaskSchema,
+  get_project_overview: GetProjectOverviewSchema,
+  search_tickets: SearchTicketsSchema,
+  get_ticket: GetTicketSchema,
 } as const;
 
 export type ReportProgressInput = z.infer<typeof ReportProgressSchema>;
 export type RequestHumanInput = z.infer<typeof RequestHumanSchema>;
+export type SearchTicketsInput = z.infer<typeof SearchTicketsSchema>;
+export type GetTicketInput = z.infer<typeof GetTicketSchema>;

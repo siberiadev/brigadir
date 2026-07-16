@@ -2,8 +2,10 @@
 import { computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { AgentResponse, ErrorIssue } from '@brigadir/contracts';
+import { ApiError } from '../api/client';
 import { useAgents, useDeleteAgent } from '../composables/useAgents';
-import { useWorkspace } from '../composables/useWorkspaces';
+import { useGenerateAgents, useWorkspace } from '../composables/useWorkspaces';
+import { useRuns } from '../composables/useRuns';
 import { usePagination } from '../composables/usePagination';
 import AgentForm from '../components/AgentForm/AgentForm.vue';
 import FormDialog from '../components/FormDialog.vue';
@@ -21,6 +23,39 @@ const workspaceQuery = useWorkspace(props.id);
 const repositories = computed(() => workspaceQuery.data.value?.repositories ?? []);
 
 const deleteAgent = useDeleteAgent(props.id);
+
+// --- feature 011: "Generate agents" — offered while the roster is
+// orchestrator-only and no setup run is active. The setup run's state rides
+// the runs query (existing 5 s poll), filtered by trigger source.
+const setupRunsQuery = useRuns(props.id, { source: 'workspace-setup', page_size: 10 });
+const activeSetupRun = computed(() =>
+  (setupRunsQuery.data.value?.items ?? []).find((r) =>
+    ['queued', 'running', 'awaiting_human'].includes(r.status),
+  ),
+);
+const rosterIsOrchestratorOnly = computed(
+  () =>
+    !agentsQuery.isLoading.value &&
+    (agentsQuery.data.value?.items ?? []).every((a) => a.is_orchestrator) ,
+);
+const showGenerate = computed(() => rosterIsOrchestratorOnly.value && total.value <= 1);
+const generateAgents = useGenerateAgents(props.id);
+
+async function onGenerate() {
+  try {
+    await generateAgents.mutateAsync();
+    ElMessage.success('Workspace setup started — the orchestrator is studying the project.');
+  } catch (err) {
+    const code = err instanceof ApiError ? err.code : undefined;
+    ElMessage.error(
+      code === 'setup_run_active'
+        ? 'A setup run is already in progress.'
+        : code === 'worker_agents_exist'
+          ? 'This workspace already has worker agents.'
+          : 'Could not start workspace setup.',
+    );
+  }
+}
 
 const showForm = ref(false);
 const editing = ref<AgentResponse | null>(null);
@@ -55,9 +90,31 @@ async function onDelete(agent: AgentResponse) {
   <section>
     <div class="header-row">
       <h2>Agents</h2>
-      <el-button type="primary" data-test="new-agent" @click="openCreate">
-        New agent
-      </el-button>
+      <div class="header-actions">
+        <!-- feature 011: one-click team generation for an empty workspace. -->
+        <template v-if="showGenerate">
+          <router-link
+            v-if="activeSetupRun"
+            :to="`/runs/${activeSetupRun.run_id}`"
+            data-test="setup-run-link"
+          >
+            <el-button loading data-test="generate-agents-progress">
+              Generating team…
+            </el-button>
+          </router-link>
+          <el-button
+            v-else
+            data-test="generate-agents"
+            :loading="generateAgents.isPending.value"
+            @click="onGenerate"
+          >
+            Generate agents
+          </el-button>
+        </template>
+        <el-button type="primary" data-test="new-agent" @click="openCreate">
+          New agent
+        </el-button>
+      </div>
     </div>
 
     <FormDialog v-model="showForm" :title="editing ? 'Edit agent' : 'New agent'">
@@ -113,6 +170,12 @@ async function onDelete(agent: AgentResponse) {
 .header-row {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
   align-items: center;
 }
 </style>

@@ -118,8 +118,14 @@ const liveDuration = computed(() => {
     <!-- Header: ticket + status + cancel on ONE line; run meta below -->
     <div class="header-row">
       <h2 class="title" data-test="ticket-key">
-        <a :href="card.ticket.jira_url" target="_blank" rel="noopener">{{ card.ticket.key }}</a>
-        <span class="summary">{{ card.ticket.summary ?? '(no summary)' }}</span>
+        <!-- feature 011: ticketless workspace-setup runs get a label, no link. -->
+        <template v-if="card.ticket">
+          <a :href="card.ticket.jira_url" target="_blank" rel="noopener">{{ card.ticket.key }}</a>
+          <span class="summary">{{ card.ticket.summary ?? '(no summary)' }}</span>
+        </template>
+        <template v-else>
+          <span data-test="setup-label">Workspace setup</span>
+        </template>
       </h2>
       <div class="header-actions">
         <RunStatusTag :status="run.status" />

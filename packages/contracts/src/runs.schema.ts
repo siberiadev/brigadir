@@ -47,7 +47,9 @@ export const RunListItemSchema = z
   .object({
     run_id: z.string(),
     agent: RunAgentRefSchema,
-    ticket: RunTicketRefSchema,
+    // Null for ticketless workspace-setup runs (feature 011) — the UI renders
+    // a static "Workspace setup" label instead of a Jira link.
+    ticket: RunTicketRefSchema.nullable(),
     status: RunStatusSchema,
     attempt: z.number().int(),
     duration_ms: z.number().int().nullable(),
@@ -139,7 +141,8 @@ export type RunCardRun = z.infer<typeof RunCardRunSchema>;
 export const RunCardResponseSchema = z
   .object({
     run: RunCardRunSchema,
-    ticket: RunTicketRefSchema,
+    // Null for ticketless workspace-setup runs (feature 011).
+    ticket: RunTicketRefSchema.nullable(),
     checks: z.array(RunCardCheckSchema),
     events: z.array(RunCardEventSchema),
     history: z.array(RunCardHistoryItemSchema),

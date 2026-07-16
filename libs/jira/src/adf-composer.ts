@@ -19,6 +19,10 @@ const PANEL_BY_OUTCOME = {
   // feature 010 (FR-024): an orchestrator triage run that routed the ticket
   // back to a worker with a rework task.
   routed: { panelType: 'info', heading: 'Routed for rework' },
+  // feature 011: a workspace-setup run's team proposal. Setup runs are
+  // ticketless, so this panel is never actually posted to Jira — present for
+  // outcome-map totality only.
+  team: { panelType: 'info', heading: 'Agent team assembled' },
 } as const;
 
 export function buildRunComment(report: AgentReport): ADFDoc {

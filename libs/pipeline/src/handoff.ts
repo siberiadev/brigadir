@@ -21,6 +21,10 @@ import { getReworkBudget } from './rework-budget';
 export async function buildHandoffSection(
   triggerEvent: TriggerEvent | null | undefined,
   db: BrigadirDb,
+  // feature 011: the workspace-setup section is anchored on the RUN's workspace
+  // (the trigger carries no run refs) — processors pass it; absent ⇒ the setup
+  // branch degrades to '' like any other missing source (best-effort).
+  ctx?: { workspaceId?: string },
 ): Promise<string> {
   const source = triggerEvent?.source;
   try {
@@ -33,6 +37,10 @@ export async function buildHandoffSection(
         return await buildReworkSection(triggerEvent!, db);
       case 'human-resume':
         return await buildHumanResumeSection(triggerEvent!, db);
+      case 'workspace-setup':
+        return ctx?.workspaceId
+          ? await buildWorkspaceSetupSection(triggerEvent!, db, ctx.workspaceId)
+          : '';
       default:
         return '';
     }
@@ -55,7 +63,9 @@ function trunc(value: string, budget: number): string {
 
 interface FailingRunFacts {
   workspaceId: string;
-  ticketId: string;
+  // Null when the referenced run is ticketless (feature 011) — the roster/budget
+  // block degrades away (best-effort, FR-013 of 010).
+  ticketId: string | null;
   report: AgentReport | null;
 }
 
@@ -159,7 +169,7 @@ async function buildTriageSection(triggerEvent: TriggerEvent, db: BrigadirDb): P
   lines.push(...failureLines(failing?.report ?? null, { includeWarnings: true }));
   lines.push('');
 
-  if (failing?.workspaceId) {
+  if (failing?.workspaceId && failing.ticketId !== null) {
     const rb = await rosterAndBudgetLines(db, failing.workspaceId, failing.ticketId);
     lines.push(...rb.lines);
   }
@@ -198,7 +208,7 @@ async function buildAnswerTriageSection(
   lines.push(...failureLines(failing?.report ?? null, { includeWarnings: true }));
   lines.push('');
 
-  if (failing?.workspaceId) {
+  if (failing?.workspaceId && failing.ticketId !== null) {
     const rb = await rosterAndBudgetLines(db, failing.workspaceId, failing.ticketId);
     lines.push(...rb.lines);
     if (!rb.budgetAvailable) {
@@ -292,6 +302,86 @@ async function buildHumanResumeSection(
   ];
 
   lines.push(...(await questionAnswerLines(triggerEvent, db)));
+
+  return lines.join('\n');
+}
+
+/**
+ * Workspace-setup section (feature 011, D13 / contracts/handoff-setup.md):
+ * the project digest (DB-only — workspace row, repositories, enabled executor
+ * profiles) + the study/deliver protocol. Live board data (workflow statuses,
+ * issue types, tickets) deliberately arrives through the read-only Jira tools,
+ * keeping this assembly non-blocking on Jira like every other handoff branch.
+ * When resumed from a parked question, the Q&A block is appended.
+ */
+async function buildWorkspaceSetupSection(
+  triggerEvent: TriggerEvent,
+  db: BrigadirDb,
+  workspaceId: string,
+): Promise<string> {
+  const [ws] = await db
+    .select({
+      name: schema.workspaces.name,
+      projectKey: schema.workspaces.jiraProjectKey,
+      boardType: schema.workspaces.jiraBoardType,
+      settings: schema.workspaces.settings,
+    })
+    .from(schema.workspaces)
+    .where(eq(schema.workspaces.id, workspaceId))
+    .limit(1);
+  if (!ws) return '';
+
+  const lines: string[] = [
+    '## Workspace setup',
+    `You are preparing the agent team for workspace "${trunc(ws.name, DESCRIPTION_BUDGET)}" ` +
+      `(Jira project ${ws.projectKey}${ws.boardType ? `, ${ws.boardType} board` : ''}).`,
+    'No worker agents exist yet. Study the project, then propose the team.',
+    '',
+  ];
+
+  const repositories = ((ws.settings as { repositories?: { name?: string }[] } | null)?.repositories ?? [])
+    .map((r) => r?.name)
+    .filter((n): n is string => typeof n === 'string' && n.length > 0);
+  if (repositories.length > 0) {
+    lines.push(`Repositories: ${repositories.map((r, i) => (i === 0 ? `${r} (default)` : r)).join(', ')}`);
+  }
+
+  const profiles = await db
+    .select({
+      name: schema.executors.name,
+      type: schema.executors.type,
+      config: schema.executors.config,
+    })
+    .from(schema.executors)
+    .where(eq(schema.executors.enabled, true));
+  if (profiles.length > 0) {
+    lines.push('Executor profiles available (reference by NAME):');
+    for (const p of profiles) {
+      const model = (p.config as { model?: string } | null)?.model;
+      lines.push(`- ${p.name} — ${p.type}${model ? ` (${model})` : ''}`);
+    }
+  }
+  lines.push('');
+
+  lines.push(
+    'How to study the project:',
+    '- Call get_project_overview FIRST — it returns the board type, the exact workflow status names, issue types, and the active sprint.',
+    '- Use search_tickets and get_ticket (descriptions, comments, links) to understand the actual work before deciding roles.',
+    '- If the project is empty or the right team is genuinely ambiguous, ask via request_human instead of guessing.',
+    '',
+    'How to deliver the team:',
+    '- Finish with ONE complete_task report with outcome "team": for each agent give name, description (one roster line), instruction (a self-contained role prompt), trigger_status (the status that starts it), optional status_running, status_success, status_failure, and executor (one of the profile NAMES above).',
+    '- Every status MUST be one of the workflow status names from get_project_overview, spelled exactly.',
+    '- Names must be unique and never "brigadir"; two agents must not share the same trigger status.',
+    '- Agents are created ACTIVE, but the workspace stays paused until a human reviews your team and starts it.',
+    '- If validation fails you will receive the errors in the tool result — fix the proposal and call complete_task again.',
+  );
+
+  const qa = await questionAnswerLines(triggerEvent, db);
+  if (qa.length > 0) {
+    lines.push('', 'Earlier question and the operator\'s answer:');
+    lines.push(...qa);
+  }
 
   return lines.join('\n');
 }

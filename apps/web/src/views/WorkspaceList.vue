@@ -21,6 +21,10 @@ const showCreate = ref(false);
 const workspaceFormRef = ref<InstanceType<typeof WorkspaceForm>>();
 function onCreated(id: string) {
   showCreate.value = false;
+  // feature 011 (D14): a new workspace starts PAUSED — the create flow lands
+  // on Agents where "Generate agents" (or manual creation) builds the team;
+  // the Start switch in the list opens the gate when the human is ready.
+  ElMessage.info('Workspace created paused — assemble the team, then press Start.');
   router.push(`/workspaces/${id}/agents`);
 }
 

@@ -22,7 +22,8 @@ interface LoadedRun {
   instruction: string;
   timeoutMinutes: number;
   maxBudgetUsd: string | null;
-  ticketKey: string;
+  // Null for ticketless workspace-setup runs (feature 011) — tickets left-joined.
+  ticketKey: string | null;
   ticketSummary: string | null;
   jiraSiteUrl: string;
   cancelPollMs: number;
@@ -128,7 +129,14 @@ export class ClaudeCliRunProcessor
 
     // Ticket description + browse URL, fetched lazily from Jira (non-fatal).
     // BEFORE the timeout timer starts — fetch time must not eat the run budget.
-    const detail = await fetchTicketDetail(this.jiraFactory, this.logger, loaded);
+    // Ticketless setup runs have nothing to fetch (feature 011).
+    const detail =
+      loaded.ticketKey === null
+        ? null
+        : await fetchTicketDetail(this.jiraFactory, this.logger, {
+            ...loaded,
+            ticketKey: loaded.ticketKey,
+          });
 
     const controller = new AbortController();
     // Test/operator override, same established precedent as the mock
@@ -170,7 +178,9 @@ export class ClaudeCliRunProcessor
     // feature 010 (FR-012/014): prepend the ephemeral handoff section for every
     // handoff source — triage, rework, and human-resume (the last replaces the
     // legacy instructionWithResumeAnswer append). Returns '' otherwise.
-    const handoff = await buildHandoffSection(loaded.triggerEvent as TriggerEvent | null, this.db);
+    const handoff = await buildHandoffSection(loaded.triggerEvent as TriggerEvent | null, this.db, {
+      workspaceId: loaded.workspaceId,
+    });
 
     let result: ExecutorResult;
     try {
@@ -332,7 +342,8 @@ export class ClaudeCliRunProcessor
       })
       .from(schema.runs)
       .innerJoin(schema.agents, eq(schema.runs.agentId, schema.agents.id))
-      .innerJoin(schema.tickets, eq(schema.runs.ticketId, schema.tickets.id))
+      // Left join: ticketless workspace-setup runs must still dispatch (feature 011).
+      .leftJoin(schema.tickets, eq(schema.runs.ticketId, schema.tickets.id))
       .innerJoin(schema.workspaces, eq(schema.runs.workspaceId, schema.workspaces.id))
       .innerJoin(schema.executors, eq(schema.agents.executorId, schema.executors.id))
       .where(eq(schema.runs.id, runId))
@@ -360,16 +371,17 @@ export class ClaudeCliRunProcessor
     };
   }
 
-  private buildContext(loaded: LoadedRun, detail: TicketDetail, handoff: string): RunContext {
+  private buildContext(loaded: LoadedRun, detail: TicketDetail | null, handoff: string): RunContext {
     const httpBaseUrl = process.env.BRIGADIR_CALLBACK_BASE_URL ?? DEFAULT_CALLBACK_BASE_URL;
     // Real per-run JWT only minted for callback-wired runs (contracts/run-jwt.md);
     // non-callback runs never call the callback API, so the placeholder is inert.
+    // The `tkt` claim is informational and omitted for ticketless runs (011 D4).
     const runToken = loaded.useCallbackChannel
       ? signRunToken(
           {
             sub: loaded.runId,
             wsp: loaded.workspaceId,
-            tkt: loaded.ticketKey,
+            ...(loaded.ticketKey === null ? {} : { tkt: loaded.ticketKey }),
             exp: Math.floor(Date.now() / 1000) + loaded.timeoutMinutes * 60 + RUN_TOKEN_GRACE_SECONDS,
           },
           this.jwtSecret,
@@ -378,12 +390,15 @@ export class ClaudeCliRunProcessor
 
     return {
       runId: loaded.runId,
-      ticket: {
-        key: loaded.ticketKey,
-        summary: loaded.ticketSummary ?? '',
-        description: detail.description,
-        url: detail.url,
-      },
+      ticket:
+        loaded.ticketKey === null
+          ? null
+          : {
+              key: loaded.ticketKey,
+              summary: loaded.ticketSummary ?? '',
+              description: detail?.description ?? '',
+              url: detail?.url ?? '',
+            },
       instruction: this.assembleInstruction(loaded, handoff),
       workspaceDir: null,
       callback: { httpBaseUrl, runToken },

@@ -8,7 +8,7 @@ import type {
   BoardStatus,
   StatusCategoryKey,
 } from '@brigadir/contracts';
-import type { JiraClient } from './jira-client.interface';
+import type { JiraClient, JiraIssueDetail } from './jira-client.interface';
 import { RateLimiter } from './rate-limiter';
 import { PerIssueWriteQueue } from './per-issue-write-queue';
 import { TransitionDiscovery, type TransitionPort } from './transition-discovery';
@@ -187,6 +187,87 @@ export class BasicAuthJiraClient implements JiraClient {
       }
     }
     return [...byId.values()];
+  }
+
+  async getProjectIssueTypes(projectKey: string): Promise<string[]> {
+    // Same endpoint/shape as getProjectStatuses — the groups ARE the issue types.
+    const groups = await this.request<Array<{ name?: string }>>(
+      'GET',
+      `/rest/api/3/project/${projectKey}/statuses`,
+    );
+    return [...new Set((groups ?? []).map((g) => g.name).filter((n): n is string => !!n))];
+  }
+
+  async getIssueDetail(issueKey: string): Promise<JiraIssueDetail> {
+    const issue = await this.request<{
+      key?: string;
+      fields?: {
+        summary?: string | null;
+        description?: ADFDoc | string | null;
+        status?: { name?: string };
+        issuetype?: { name?: string };
+        project?: { key?: string };
+        labels?: string[];
+        issuelinks?: Array<{
+          type?: { name?: string };
+          outwardIssue?: { key: string; fields?: { status?: { name?: string } } };
+          inwardIssue?: { key: string; fields?: { status?: { name?: string } } };
+        }>;
+        comment?: {
+          comments?: Array<{
+            author?: { displayName?: string };
+            created?: string;
+            body?: ADFDoc | string | null;
+          }>;
+        };
+      };
+    }>(
+      'GET',
+      `/rest/api/3/issue/${issueKey}?fields=summary,description,status,issuetype,project,labels,issuelinks,comment`,
+    );
+
+    const links = (issue.fields?.issuelinks ?? []).flatMap((link) => {
+      const ref = link.outwardIssue ?? link.inwardIssue;
+      if (!ref) return [];
+      return [
+        {
+          type: link.type?.name ?? 'Relates',
+          direction: (link.outwardIssue ? 'outward' : 'inward') as 'inward' | 'outward',
+          key: ref.key,
+          status: ref.fields?.status?.name ?? '',
+        },
+      ];
+    });
+
+    // Jira returns comments oldest-first — the tool contract is newest-first.
+    const comments = (issue.fields?.comment?.comments ?? [])
+      .map((c) => ({
+        author: c.author?.displayName ?? '',
+        created: c.created ?? '',
+        body: c.body ?? null,
+      }))
+      .reverse();
+
+    return {
+      key: issue.key ?? issueKey,
+      summary: issue.fields?.summary ?? null,
+      status: issue.fields?.status?.name ?? '',
+      issueType: issue.fields?.issuetype?.name ?? '',
+      labels: issue.fields?.labels ?? [],
+      description: issue.fields?.description ?? null,
+      links,
+      comments,
+      projectKey: issue.fields?.project?.key ?? '',
+    };
+  }
+
+  async searchIssues(jql: string, fields: string[], maxResults: number): Promise<JiraIssue[]> {
+    const page = await this.request<SearchPage>('POST', '/rest/api/3/search/jql', {
+      jql,
+      fields,
+      maxResults,
+    });
+    return page.issues ?? [];
   }
 
   private async getIssueContext(

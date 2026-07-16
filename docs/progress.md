@@ -740,3 +740,57 @@ picker, AgentForm description + orchestrator delete hidden. Docs: architecture �
 (schema deltas + `global_settings`) and §6 (`routed` outcome + `routing` payload).
 
 Full suite green: 234 unit, 226 integration, 136 web.
+
+## Iteration 15 — Workspace setup by the orchestrator: "Generate agents" + read-only Jira tools (feature 011, 2026-07-16)
+
+Spec-kit feature `specs/011-workspace-setup` (spec → plan D1–D17 → 43 tasks →
+implementation in one pass). The "planning-режим" idea from plan-internal
+(2026-07-13) landed on 010's foundation: a NEW workspace is created **paused**
+(`settings.enabled=false`, wizard + yaml seeder); an explicit **Generate agents**
+action (`POST /api/workspaces/:id/generate-agents`, button on the Agents tab
+while the roster is orchestrator-only) starts a **ticketless setup run** of the
+seeded brigadir (trigger source `workspace-setup`, no repo, cheap profile). The
+orchestrator studies the project through new **read-only Jira callback tools**
+and returns a one-shot **`team` report outcome**; the accept path validates the
+proposal all-or-nothing (names ∪ existing ∪ 'brigadir', statuses against the
+live board via lintAgent, executor profiles by NAME, trigger collisions) and
+applies it in ONE transaction: agents created **enabled** + a ticketless
+non-blocking review task + guarded finalize. Invalid proposals bounce back as
+422 through complete_task — a repair loop inside the run (FR-017 amended at
+planning, research D9) — so Constitution IV holds with no post-finalize
+demotion; a run that never lands a valid proposal fail-closes into a
+"Workspace setup failed" human task and is never triaged. The single gate
+stays the existing Start switch.
+
+Schema (migration 0005 + REVIEW): `runs.ticket_id` / `human_tasks.ticket_id`
+DROP NOT NULL; new partial unique `runs_one_active_setup (workspace_id) WHERE
+active AND ticket_id IS NULL` (unique-index NULLs are distinct — `runs_one_active`
+cannot cover setup runs). `workspace-setup` joins the BullMQ-dedup skip set;
+generate preconditions + the index give idempotency in depth. Ticket-optional
+plumbing end to end: processors left-join tickets, `RunContext.ticket` nullable,
+wrapper renders a setup header, JWT `tkt` claim optional (guard never checked
+it), runs/human-tasks controllers left-join + serialize `ticket: null`, runs
+list gains a `source` filter (drives the button state on the existing poll).
+
+Read-only tools (US2, for EVERY callback-wired run): `get_project_overview`,
+`search_tickets` (structured filters — raw JQL never accepted, the backend
+composes `project = <ws>` + `sprint in openSprints()` for scrum), `get_ticket`
+(description + last 20 comments + links, project-key scope check → 403
+`out_of_scope`). Served by `JiraReadService` behind the existing RunTokenGuard
+via `JiraClientFactory` (credentials never reach the agent; zero write surface);
+responses size-bounded with `truncated` flags. `JiraClient` gains
+`getIssueDetail`/`searchIssues`/`getProjectIssueTypes`. The setup handoff
+(new `buildHandoffSection` branch) stays DB-only: digest (board/repos/profiles)
++ protocol pointing at the tools + resume Q&A; mock scenarios `team`/`team_invalid`
+drive the loop deterministically (roster via `behavior.team_proposal`).
+
+Resume of a parked setup run creates ANOTHER `workspace-setup` run carrying the
+Q&A (never answer-triage; `target_agent_id` on ticketless tasks → 400). UI:
+Generate button states (offer/progress-link/hidden), "Workspace setup" labels
+at all four ticket-render sites, resume picker hidden for ticketless tasks,
+create-flow hint. Docs: architecture §3 (nullable + new index), §5 (read tools +
+tkt? claim), §6 (`team` outcome).
+
+Tests in the same change: contracts 77, mcp-server 14, unit 244, integration
+249 (incl. the full Scenario A loop, generate race SC-003, atomic rejection
+SC-004, replay SC-007, read-tool scope/truncation/guard parity SC-005), web 160.

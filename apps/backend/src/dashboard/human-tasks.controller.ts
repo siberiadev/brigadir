@@ -69,7 +69,9 @@ export class HumanTasksController {
         agentName: schema.agents.name,
       })
       .from(schema.humanTasks)
-      .innerJoin(schema.tickets, eq(schema.humanTasks.ticketId, schema.tickets.id))
+      // Left join (feature 011): ticketless setup tasks (review/failure/question)
+      // must stay listed and resolvable.
+      .leftJoin(schema.tickets, eq(schema.humanTasks.ticketId, schema.tickets.id))
       .innerJoin(schema.workspaces, eq(schema.humanTasks.workspaceId, schema.workspaces.id))
       // agent is derived via the blocked run, when present.
       .leftJoin(schema.runs, eq(schema.humanTasks.runId, schema.runs.id))
@@ -96,7 +98,10 @@ export class HumanTasksController {
           title: r.title,
           details: r.details ?? null,
           blocking: r.blocking,
-          ticket: { key: r.ticketKey, jira_url: `${r.siteUrl.replace(/\/+$/, '')}/browse/${r.ticketKey}` },
+          ticket:
+            r.ticketKey === null
+              ? null
+              : { key: r.ticketKey, jira_url: `${r.siteUrl.replace(/\/+$/, '')}/browse/${r.ticketKey}` },
           agent: r.agentId && r.agentName ? { id: r.agentId, name: r.agentName } : null,
           workspace: { id: r.workspaceId, name: r.workspaceName },
           run_id: r.runId ?? null,

@@ -36,6 +36,13 @@
       "when": 1784124078730,
       "tag": "0004_orchestrator_routing",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784174188458,
+      "tag": "0005_workspace_setup",
+      "breakpoints": true
     }
   ]
 }

@@ -5,6 +5,7 @@ import { PipelineModule } from '@brigadir/pipeline';
 import { HumanTasksModule } from '@brigadir/human-tasks';
 import { CallbackController } from './callback.controller';
 import { CallbackService } from './callback.service';
+import { JiraReadService } from './jira-read.service';
 import { RunTokenGuard } from './run-token.guard';
 
 /**
@@ -21,6 +22,6 @@ import { RunTokenGuard } from './run-token.guard';
 @Module({
   imports: [AppConfigModule, RunsModule, PipelineModule, HumanTasksModule],
   controllers: [CallbackController],
-  providers: [CallbackService, RunTokenGuard],
+  providers: [CallbackService, JiraReadService, RunTokenGuard],
 })
 export class CallbackModule {}

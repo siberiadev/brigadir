@@ -30,9 +30,11 @@ const visible = defineModel<boolean>({ required: true });
         </div>
         <h3 class="drawer-title">{{ item.title }}</h3>
         <div class="meta">
-          <a :href="item.ticket.jira_url" target="_blank" rel="noopener" data-test="drawer-ticket">
+          <!-- feature 011: ticketless setup tasks get a label, no link. -->
+          <a v-if="item.ticket" :href="item.ticket.jira_url" target="_blank" rel="noopener" data-test="drawer-ticket">
             {{ item.ticket.key }}
           </a>
+          <span v-else data-test="drawer-setup-label">Workspace setup</span>
           <span v-if="item.agent">· {{ item.agent.name }}</span>
           <span>· {{ item.workspace.name }}</span>
           <span data-test="drawer-age">· {{ relativeAge(item.created_at) }} ago</span>

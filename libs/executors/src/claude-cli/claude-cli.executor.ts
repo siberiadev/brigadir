@@ -134,6 +134,15 @@ export class ClaudeCliExecutor implements AgentExecutor {
       }
       // No `worktree_path` persisted — there is no repository worktree to inspect.
     } else {
+      // A repository worktree is branch-named after the ticket — a ticketless
+      // run on a repo-carrying agent is a config error, not a crash-retry case
+      // (feature 011: setup runs always ride the no-repo orchestrator profile).
+      if (!ctx.ticket) {
+        return {
+          exitStatus: 'crashed',
+          diagnostics: 'ticketless run requires a no-repository agent (workspace_mode: none)',
+        };
+      }
       try {
         worktree = await prepare(
           repo!,
@@ -168,9 +177,11 @@ export class ClaudeCliExecutor implements AgentExecutor {
         );
       }
 
-      const featureContextSection = runtimeConfig.useCallbackChannel
-        ? await buildFeatureContextSection({ jira: this.jira, db: this.db }, ctx.ticket.key, workspaceId)
-        : undefined;
+      // Feature context needs a ticket to anchor on — skipped for setup runs.
+      const featureContextSection =
+        runtimeConfig.useCallbackChannel && ctx.ticket
+          ? await buildFeatureContextSection({ jira: this.jira, db: this.db }, ctx.ticket.key, workspaceId)
+          : undefined;
 
       await mkdir(join(worktree.worktreeDir, '.brigadir'), { recursive: true });
       await writeFile(
@@ -269,7 +280,9 @@ export class ClaudeCliExecutor implements AgentExecutor {
       /* child may exit before/while we write (EPIPE) — the close handler owns the outcome */
     });
     group.child.stdin?.end(
-      `Work Jira ticket ${ctx.ticket.key} exactly as described in your system prompt. Begin now.\n`,
+      ctx.ticket
+        ? `Work Jira ticket ${ctx.ticket.key} exactly as described in your system prompt. Begin now.\n`
+        : 'Carry out the workspace task exactly as described in your system prompt. Begin now.\n',
     );
 
     const parser = new ClaudeStreamParser();

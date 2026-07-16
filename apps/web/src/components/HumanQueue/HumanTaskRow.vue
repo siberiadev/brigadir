@@ -45,7 +45,9 @@ const state = computed(() => badgeState(props.item));
         <ChevronRight class="chevron" :size="14" />
       </div>
       <div class="line-meta">
+        <!-- feature 011: ticketless setup tasks get a label, no link. -->
         <a
+          v-if="item.ticket"
           :href="item.ticket.jira_url"
           target="_blank"
           rel="noopener"
@@ -54,6 +56,7 @@ const state = computed(() => badgeState(props.item));
         >
           {{ item.ticket.key }}
         </a>
+        <span v-else data-test="task-setup-label">Workspace setup</span>
         <span v-if="item.agent">· {{ item.agent.name }}</span>
         <span data-test="task-age">· {{ relativeAge(item.created_at) }} ago</span>
         <!-- Closed tasks: the badge color already signals resolved/dismissed,

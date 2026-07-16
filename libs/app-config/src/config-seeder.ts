@@ -70,6 +70,9 @@ export class ConfigSeeder {
           ...(workspace.default_branch !== undefined
             ? { default_branch: workspace.default_branch }
             : {}),
+          // feature 011 (FR-001/D14): NEWLY seeded workspaces start paused,
+          // matching the wizard; existing rows are never touched (DB wins).
+          enabled: false,
         };
         const [row] = await tx
           .insert(schema.workspaces)

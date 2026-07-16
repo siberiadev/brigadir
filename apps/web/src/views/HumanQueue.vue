@@ -141,9 +141,11 @@ async function submit(item: HumanQueueItem) {
             placeholder="Answer / note (optional)"
             :data-test="`answer-${item.id}`"
           />
-          <!-- FR-017: on a blocking task, choose which enabled worker agent resumes. -->
+          <!-- FR-017: on a blocking task, choose which enabled worker agent resumes.
+               feature 011 (D12): a TICKETLESS setup task has nothing to route —
+               resume always re-creates a setup run, so the picker is hidden. -->
           <ResumeAgentPicker
-            v-if="item.blocking && draftFor(item.id).action === 'resume'"
+            v-if="item.blocking && item.ticket !== null && draftFor(item.id).action === 'resume'"
             v-model="draftFor(item.id).targetAgentId"
             :workspace-id="item.workspace.id"
             :original-agent-id="item.agent?.id ?? null"

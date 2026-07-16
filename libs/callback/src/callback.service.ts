@@ -13,7 +13,7 @@ import {
 } from '@brigadir/contracts';
 import { scrub } from '@brigadir/scrubber';
 import { RunsService } from '@brigadir/runs';
-import { PipelineService } from '@brigadir/pipeline';
+import { PipelineService, SetupApplyService } from '@brigadir/pipeline';
 import { HumanTaskService } from '@brigadir/human-tasks';
 
 export interface ValidationFailure {
@@ -47,6 +47,18 @@ function scrubReport(report: AgentReport): AgentReport {
     routing: report.routing
       ? { ...report.routing, task: scrub(report.routing.task) }
       : report.routing,
+    // feature 011 (FR-018): proposal free text is scrubbed before persistence /
+    // agent-row insert; identifiers (name, statuses, executor) are validated
+    // against workspace state instead, mirroring `target_agent`.
+    team: report.team
+      ? {
+          agents: report.team.agents.map((a) => ({
+            ...a,
+            description: scrub(a.description),
+            instruction: scrub(a.instruction),
+          })),
+        }
+      : report.team,
   };
 }
 
@@ -67,6 +79,7 @@ export class CallbackService {
     private readonly moduleRef: ModuleRef,
     private readonly runs: RunsService,
     private readonly pipeline: PipelineService,
+    private readonly setupApply: SetupApplyService,
     private readonly humanTasks: HumanTaskService,
   ) {}
 
@@ -121,6 +134,22 @@ export class CallbackService {
     }
 
     const scrubbedReport = scrubReport(parsed.data);
+
+    // feature 011 (D9/D10): a `team` report takes the setup accept path —
+    // business validation + atomic apply (agents + review task + finalize) in
+    // one transaction. Invalid ⇒ 422 with the issue list; the run stays active
+    // so the agent can correct the proposal and call complete_task again.
+    if (scrubbedReport.outcome === 'team') {
+      const accepted = await this.setupApply.acceptTeamReport(runId, scrubbedReport);
+      if (accepted.kind === 'invalid') return { kind: 'validation', errors: accepted.issues };
+      if (accepted.kind === 'conflict') return { kind: 'conflict' };
+      try {
+        await this.pipeline.onRunFinished(runId);
+      } catch (err) {
+        this.logger.error(`onRunFinished failed for run ${runId} (will be repaired on reconcile): ${String(err)}`);
+      }
+      return { ok: true, outcome: accepted.kind === 'recast_failure' ? 'failure' : 'team' };
+    }
 
     const finalized = await this.runs.finalizeWithReport(runId, scrubbedReport);
     if (!finalized) {

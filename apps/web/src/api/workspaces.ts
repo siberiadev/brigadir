@@ -24,5 +24,9 @@ export function workspacesApi(client: ApiClient = apiClient) {
       client.put<WorkspaceResponse>(`/api/workspaces/${id}/jira-connection`, body),
     updateSettings: (id: string, body: WorkspaceSettingsRequest) =>
       client.put<WorkspaceResponse>(`/api/workspaces/${id}/settings`, body),
+    // feature 011: start the orchestrator's workspace-setup run (202 {run_id};
+    // 409 worker_agents_exist | no_orchestrator | setup_run_active).
+    generateAgents: (id: string) =>
+      client.post<{ run_id: string }>(`/api/workspaces/${id}/generate-agents`),
   };
 }

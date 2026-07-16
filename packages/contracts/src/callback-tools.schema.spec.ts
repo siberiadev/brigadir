@@ -3,6 +3,9 @@ import {
   ReportProgressSchema,
   RequestHumanSchema,
   CompleteTaskSchema,
+  SearchTicketsSchema,
+  GetTicketSchema,
+  GetProjectOverviewSchema,
 } from './callback-tools.schema';
 
 describe('CallbackTools schemas', () => {
@@ -41,5 +44,24 @@ describe('CallbackTools schemas', () => {
         checks: [],
       }).success,
     ).toBe(true);
+  });
+
+  // --- feature 011: read-only Jira tool inputs ---
+
+  it('search_tickets accepts bounded structured filters and rejects raw JQL keys', () => {
+    expect(SearchTicketsSchema.safeParse({}).success).toBe(true);
+    expect(
+      SearchTicketsSchema.safeParse({ text: 'login', status: 'In Progress', max_results: 50 }).success,
+    ).toBe(true);
+    expect(SearchTicketsSchema.safeParse({ jql: 'project = X' }).success).toBe(false);
+    expect(SearchTicketsSchema.safeParse({ max_results: 51 }).success).toBe(false);
+  });
+
+  it('get_ticket requires a bounded key; get_project_overview takes no arguments', () => {
+    expect(GetTicketSchema.safeParse({ key: 'BRIG-7' }).success).toBe(true);
+    expect(GetTicketSchema.safeParse({}).success).toBe(false);
+    expect(GetTicketSchema.safeParse({ key: 'x'.repeat(51) }).success).toBe(false);
+    expect(GetProjectOverviewSchema.safeParse({}).success).toBe(true);
+    expect(GetProjectOverviewSchema.safeParse({ jql: 'x' }).success).toBe(false);
   });
 });

@@ -6,9 +6,9 @@ import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import { runQueueName, backoffStrategy } from '@brigadir/queues';
 import { RunsService, mapExitStatusToRunStatus } from '@brigadir/runs';
 import { ExecutorRegistry, type ExecutorResult, type RunContext } from '@brigadir/executors';
-import { PipelineService, buildHandoffSection } from '@brigadir/pipeline';
+import { PipelineService, SetupApplyService, buildHandoffSection } from '@brigadir/pipeline';
 import { JiraClientFactory } from '@brigadir/jira';
-import type { TriggerEvent } from '@brigadir/contracts';
+import { ReportSchema, type TriggerEvent } from '@brigadir/contracts';
 import { applyExecutorConcurrency, startConcurrencyReapply } from './executor-concurrency';
 import { checkExecutorGate } from './executor-gate';
 import { fetchTicketDetail, type TicketDetail } from './ticket-detail';
@@ -20,7 +20,8 @@ interface LoadedRun {
   triggerEvent: unknown;
   instruction: string;
   timeoutMinutes: number;
-  ticketKey: string;
+  // Null for ticketless workspace-setup runs (feature 011) — tickets left-joined.
+  ticketKey: string | null;
   ticketSummary: string | null;
   jiraSiteUrl: string;
 }
@@ -51,6 +52,7 @@ export class RunProcessor extends WorkerHost implements OnApplicationBootstrap, 
     private readonly runs: RunsService,
     private readonly registry: ExecutorRegistry,
     private readonly pipeline: PipelineService,
+    private readonly setupApply: SetupApplyService,
     private readonly jiraFactory: JiraClientFactory,
   ) {
     super();
@@ -92,12 +94,21 @@ export class RunProcessor extends WorkerHost implements OnApplicationBootstrap, 
     await this.pipeline.onRunStarted(runId);
 
     // Ticket description + browse URL, fetched lazily from Jira (non-fatal).
-    const detail = await fetchTicketDetail(this.jiraFactory, this.logger, loaded);
+    // Ticketless setup runs have nothing to fetch (feature 011).
+    const detail =
+      loaded.ticketKey === null
+        ? null
+        : await fetchTicketDetail(this.jiraFactory, this.logger, {
+            ...loaded,
+            ticketKey: loaded.ticketKey,
+          });
 
     // feature 010 (FR-012): a triage/rework/human-resume trigger prepends an
     // ephemeral handoff section to the assembled instruction — the agent's
     // stored `instruction` row is never touched (SC-002). Returns '' otherwise.
-    const handoff = await buildHandoffSection(loaded.triggerEvent as TriggerEvent | null, this.db);
+    const handoff = await buildHandoffSection(loaded.triggerEvent as TriggerEvent | null, this.db, {
+      workspaceId: loaded.workspaceId,
+    });
 
     let result: ExecutorResult;
     try {
@@ -116,11 +127,27 @@ export class RunProcessor extends WorkerHost implements OnApplicationBootstrap, 
 
     if (result.exitStatus === 'completed') {
       try {
-        await this.runs.finalizeWithReport(runId, result.report, {
-          externalRef: result.externalRef,
-          costUsd: result.costUsd,
-          usage: result.usage,
-        });
+        // feature 011 (D9/D10): a `team` report takes the setup accept path
+        // (validate + apply + finalize in one tx). The mock executor cannot
+        // repair-loop like a live agent, so a business-invalid proposal fails
+        // the run with the issue list — exactly the fail-closed a live setup
+        // run reaches after exhausting its repair attempts.
+        const outcome = (result.report as { outcome?: unknown } | null)?.outcome;
+        if (outcome === 'team') {
+          const report = ReportSchema.parse(result.report);
+          const accepted = await this.setupApply.acceptTeamReport(runId, report);
+          if (accepted.kind === 'invalid') {
+            await this.runs.finalizeStatus(runId, 'failed', {
+              error: `invalid team proposal: ${JSON.stringify(accepted.issues)}`,
+            });
+          }
+        } else {
+          await this.runs.finalizeWithReport(runId, result.report, {
+            externalRef: result.externalRef,
+            costUsd: result.costUsd,
+            usage: result.usage,
+          });
+        }
       } catch (err) {
         // completed without a schema-valid report ⇒ failed (Constitution IV).
         this.logger.error(`invalid report for run ${runId}: ${String(err)}`);
@@ -185,22 +212,26 @@ export class RunProcessor extends WorkerHost implements OnApplicationBootstrap, 
       })
       .from(schema.runs)
       .innerJoin(schema.agents, eq(schema.runs.agentId, schema.agents.id))
-      .innerJoin(schema.tickets, eq(schema.runs.ticketId, schema.tickets.id))
+      // Left join: ticketless workspace-setup runs must still dispatch (feature 011).
+      .leftJoin(schema.tickets, eq(schema.runs.ticketId, schema.tickets.id))
       .innerJoin(schema.workspaces, eq(schema.runs.workspaceId, schema.workspaces.id))
       .where(eq(schema.runs.id, runId))
       .limit(1);
     return row;
   }
 
-  private buildContext(loaded: LoadedRun, detail: TicketDetail, handoff: string): RunContext {
+  private buildContext(loaded: LoadedRun, detail: TicketDetail | null, handoff: string): RunContext {
     return {
       runId: loaded.runId,
-      ticket: {
-        key: loaded.ticketKey,
-        summary: loaded.ticketSummary ?? '',
-        description: detail.description,
-        url: detail.url,
-      },
+      ticket:
+        loaded.ticketKey === null
+          ? null
+          : {
+              key: loaded.ticketKey,
+              summary: loaded.ticketSummary ?? '',
+              description: detail?.description ?? '',
+              url: detail?.url ?? '',
+            },
       instruction: handoff ? `${handoff}\n\n${loaded.instruction}` : loaded.instruction,
       workspaceDir: null,
       callback: { httpBaseUrl: 'http://localhost:3000/api/callbacks', runToken: 'mock-run-token' },

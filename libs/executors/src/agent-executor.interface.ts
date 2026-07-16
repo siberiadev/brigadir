@@ -18,7 +18,9 @@ export type ExitStatus = 'completed' | 'crashed' | 'timeout' | 'rate_limited' | 
 
 export interface RunContext {
   runId: string;
-  ticket: { key: string; summary: string; description: string; url: string };
+  // Null for ticketless workspace-setup runs (feature 011, D4) — the wrapper
+  // renders a workspace-setup header instead of the ticket header.
+  ticket: { key: string; summary: string; description: string; url: string } | null;
   instruction: string;
   workspaceDir: string | null;
   callback: { httpBaseUrl: string; runToken: string; mcpStdioCmd?: string[] };

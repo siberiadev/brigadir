@@ -292,6 +292,16 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
           description: issue.description ?? null,
           parent: epic ? { key: epic.key, fields: { status: { name: epic.statusName } } } : undefined,
           issuelinks: issue.linked.map((linkedKey) => ({ outwardIssue: linkRef(linkedKey) })),
+          // feature 011 (read tools): labels + the comments captured by the
+          // write path, oldest-first like live Jira.
+          labels: issue.labels ?? [],
+          comment: {
+            comments: (comments.get(issue.key) ?? []).map((body, i) => ({
+              author: { displayName: 'Mock Commenter' },
+              created: `2026-07-16T00:0${i % 10}:00.000Z`,
+              body,
+            })),
+          },
         },
       });
     }),

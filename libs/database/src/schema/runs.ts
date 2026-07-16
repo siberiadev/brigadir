@@ -25,9 +25,9 @@ export const runs = pgTable(
     workspaceId: uuid('workspace_id')
       .notNull()
       .references(() => workspaces.id),
-    ticketId: uuid('ticket_id')
-      .notNull()
-      .references(() => tickets.id),
+    // Nullable since feature 011: workspace-setup runs carry no ticket. Every
+    // read path left-joins tickets and tolerates null (contracts/nullable-ticket.md).
+    ticketId: uuid('ticket_id').references(() => tickets.id),
     agentId: uuid('agent_id')
       .notNull()
       .references(() => agents.id),
@@ -52,6 +52,12 @@ export const runs = pgTable(
     uniqueIndex('runs_one_active')
       .on(t.ticketId, t.agentId)
       .where(sql`status IN ('queued', 'running', 'awaiting_human')`),
+    // Feature 011 (D3): unique-index NULLs are distinct, so `runs_one_active`
+    // cannot guard ticketless rows — this companion index allows at most ONE
+    // active ticketless (workspace-setup) run per workspace.
+    uniqueIndex('runs_one_active_setup')
+      .on(t.workspaceId)
+      .where(sql`status IN ('queued', 'running', 'awaiting_human') AND ticket_id IS NULL`),
     index('runs_ticket').on(t.ticketId, t.createdAt.desc()),
     // Feature 006 (data-model additive item 1): supports the workspace-scoped,
     // time-ordered runs table read + the cost period sum. Non-structural.
