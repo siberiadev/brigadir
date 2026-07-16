@@ -426,6 +426,45 @@ GET  /api/callbacks/runs/:runId/jira/tickets/:key      403 out_of_scope вне �
 
 Для Claude-executor'ов — `Stop`-hook: если ни `complete_task`, ни blocking `request_human` не вызывались в этой сессии (проверка по маркер-файлу, который пишет MCP-сервер после любого из них), hook возвращает `{"decision": "block", "reason": "You must call mcp__brigadir__complete_task with your final report before finishing."}`. Плюс жёсткий пояс: процесс завершился без `complete` и не в `awaiting_human` → статус из fallback-каналов (`--json-schema` structured_output, если есть) → иначе `failed`.
 
+### Админская плоскость: `brigadir-admin` (feature 012)
+
+Отдельный stdio MCP-сервер `brigadir-admin` (`packages/admin-mcp`) — НЕ путать с
+callback-MCP выше. Жирная граница между плоскостями:
+
+| | callback-MCP (`brigadir-mcp`, §5 выше) | admin-MCP (`brigadir-admin`, feature 012) |
+|---|---|---|
+| Кто | агент ВНУТРИ прогона | человек + Claude Code СНАРУЖИ прогона |
+| Авторизация | short-lived per-run JWT (`sub=runId`, узкие скоупы) | общий bearer дашборда (`BRIGADIR_DASHBOARD_TOKEN`) |
+| Тулзы | report/human/complete + read-only Jira | recon (list/get) + create workspace/team/agent |
+| Пишет | только репорты (система решает Jira) | agents-строки через тот же API, что и UI |
+| Транспорт | env MCP-процесса воркера | env Claude-Code-сессии оператора |
+
+Сервер — **тонкий HTTP-клиент** админского API (`/api/workspaces*`, `/api/agents*`,
+`/api/executors`), без прямого доступа к БД. Секреты живут ТОЛЬКО в его env
+(`BRIGADIR_API_URL`, `BRIGADIR_DASHBOARD_TOKEN`, `BRIGADIR_JIRA_EMAIL`,
+`BRIGADIR_JIRA_API_TOKEN`) — bearer уходит в заголовок, Jira-креды сервер сам
+подставляет в тело `POST /api/workspaces`; **модель их не видит и не передаёт**
+(Принцип V). stdout — только протокол MCP, логи в stderr. 4xx всплывает модели как
+tool-error С телом ответа (там path-qualified issues — модель по ним чинит ввод),
+без ретраев; 5xx/сеть — ретраи с backoff.
+
+Тулзы (v1): read-only — `list_workspaces`, `get_workspace`, `get_board_statuses`,
+`list_executors`, `list_agents`; write — `create_workspace` (workspace создаётся
+**PAUSED** — feature 011; кнопки Start у сервера НЕТ), `generate_agents` (запуск
+setup-прогона оркестратора, §5/feature 011), `create_team` (атомарный спавн команды),
+`create_agent`/`update_agent` (точечно, тот же `lintAgent`). Каждая тулза объявляет
+`inputSchema` И `outputSchema` (MCP structured output); схемы — zod 4 в
+`packages/contracts`, в JSON Schema через `z.toJSONSchema(schema,{target:'draft-7'})`.
+
+Единственная новая backend-поверхность — `POST /api/workspaces/:id/team`
+(DashboardTokenGuard): переиспользует валидатор + applier из `SetupApplyService`
+(feature 011), но БЕЗ прогона и БЕЗ review-задачи. Рефактор вынес `validateTeam` +
+`insertTeamAgents` из run-bound accept-пути (`acceptTeamReport`) в общие методы —
+поведение run-пути не изменилось (интеграционные тесты feature 011 зелены). Валидация
+all-or-nothing: невалидный агент ⇒ 422 с path-qualified issues и НОЛЬ созданных;
+предусловие — у workspace ещё нет worker-агентов (409 `worker_agents_exist`; v1
+команды не пересобирает). Никаких Jira-записей нигде (Принцип III).
+
 ---
 
 ## 6. Контракт structured output (ReportSchema)

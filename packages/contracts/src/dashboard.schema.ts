@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { WorkspaceRepositorySchema } from './jira.types';
+import { TeamAgentSchema } from './report.schema';
 import { makePaginatedResponseSchema } from './pagination.schema';
 
 /**
@@ -216,6 +217,25 @@ export type AgentListResponse = z.infer<typeof AgentListResponseSchema>;
 /** POST /api/agents/:id/test-run */
 export const TestRunRequestSchema = z.object({ ticket_key: z.string().min(1) }).strict();
 export type TestRunRequest = z.infer<typeof TestRunRequestSchema>;
+
+/**
+ * POST /api/workspaces/:id/team (feature 012) — atomic team spawn from the admin
+ * plane (the `brigadir-admin` MCP). Reuses `TeamAgentSchema` (the same roster the
+ * orchestrator's `team` report carries, feature 011) validated + applied by
+ * `SetupApplyService.createTeamDirect` WITHOUT a run and WITHOUT a review task.
+ * All-or-nothing: an invalid agent mid-list ⇒ 422 with path-qualified issues and
+ * ZERO agents created. Precondition (controller): the workspace has no worker
+ * agents yet (409 `worker_agents_exist`; v1 does not rebuild existing teams).
+ */
+export const CreateTeamRequestSchema = z
+  .object({ agents: z.array(TeamAgentSchema).min(1).max(20) })
+  .strict();
+export type CreateTeamRequest = z.infer<typeof CreateTeamRequestSchema>;
+
+export const CreateTeamResponseSchema = z
+  .object({ workspace_id: z.string(), agents_created: z.number().int() })
+  .strict();
+export type CreateTeamResponse = z.infer<typeof CreateTeamResponseSchema>;
 
 // --- shared, path-qualified error shape (FR-013 / SC-009) ---
 

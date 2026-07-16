@@ -1,6 +1,7 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { RunTriggerService } from '@brigadir/runs';
+import { SetupApplyService } from '@brigadir/pipeline';
 import type { TriggerEvent } from '@brigadir/contracts';
 import {
   DRIZZLE,
@@ -22,6 +23,8 @@ import {
   WorkspaceCreateRequestSchema,
   WorkspaceRotateRequestSchema,
   WorkspaceSettingsRequestSchema,
+  CreateTeamRequestSchema,
+  type CreateTeamResponse,
   type WorkspaceListResponse,
   type WorkspaceResponse,
   type VerifyResponse,
@@ -50,6 +53,7 @@ export class WorkspacesController {
     private readonly jiraFactory: JiraClientFactory,
     private readonly statuses: StatusesService,
     private readonly runTrigger: RunTriggerService,
+    private readonly setupApply: SetupApplyService,
   ) {}
 
   @Get()
@@ -204,6 +208,47 @@ export class WorkspacesController {
 
     res.status(202);
     return { run_id: result.runId };
+  }
+
+  /**
+   * feature 012 (admin MCP `brigadir-admin`): atomically spawn a team of worker
+   * agents on a paused workspace. Reuses the feature-011 validator + applier via
+   * `SetupApplyService.createTeamDirect` WITHOUT a run and WITHOUT a review task.
+   * Preconditions (first failure wins): the workspace exists (404); it has no
+   * worker agents yet (409 `worker_agents_exist` — v1 does not rebuild teams).
+   * An invalid roster ⇒ 422 with path-qualified issues and ZERO agents created
+   * (all-or-nothing, same shape the callback `team` repair loop returns).
+   */
+  @Post(':id/team')
+  @HttpCode(201)
+  async createTeam(@Param('id') id: string, @Body() body: unknown): Promise<CreateTeamResponse> {
+    const parsed = CreateTeamRequestSchema.safeParse(body);
+    if (!parsed.success) throw zodToValidationError(parsed.error);
+
+    const [ws] = await this.db
+      .select({ id: schema.workspaces.id })
+      .from(schema.workspaces)
+      .where(eq(schema.workspaces.id, id))
+      .limit(1);
+    if (!ws) throw notFoundError('workspace_not_found', 'Workspace not found.');
+
+    const [worker] = await this.db
+      .select({ id: schema.agents.id })
+      .from(schema.agents)
+      .where(and(eq(schema.agents.workspaceId, id), eq(schema.agents.isOrchestrator, false)))
+      .limit(1);
+    if (worker) {
+      throw conflictError('worker_agents_exist', 'This workspace already has worker agents.');
+    }
+
+    const result = await this.setupApply.createTeamDirect(id, parsed.data.agents);
+    if (result.kind === 'invalid') {
+      throw validationError(
+        'Team could not be created.',
+        result.issues.map((i) => ({ path: i.path, code: i.code, message: i.message, level: 'error' as const })),
+      );
+    }
+    return { workspace_id: id, agents_created: result.agentsCreated };
   }
 
   @Get(':id/statuses')

@@ -12,3 +12,4 @@ export * from './human-queue.schema';
 export * from './executor.schema';
 export * from './pagination.schema';
 export * from './global-settings.schema';
+export * from './admin-tools.schema';
