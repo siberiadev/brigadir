@@ -16,6 +16,16 @@ interface StubData {
   cycleCount?: number;
   settings?: Record<string, unknown>;
   humanTask?: { title: string; details: string | null };
+  // Workspace-setup branch (feature 011 + editable protocol 2026-07-17):
+  workspace?: {
+    name: string;
+    projectKey: string;
+    boardType: string | null;
+    settings: Record<string, unknown>;
+  };
+  executors?: Array<{ name: string; type: string; config: Record<string, unknown> | null }>;
+  /** Stored `workspace_setup_instruction` global-settings value (unset ⇒ no row). */
+  setupInstruction?: string;
 }
 
 function makeDb(data: StubData): BrigadirDb {
@@ -23,8 +33,12 @@ function makeDb(data: StubData): BrigadirDb {
     const keys = Object.keys(cols ?? {});
     let rows: unknown[] = [];
     if (keys.includes('report')) rows = data.failingRun ? [data.failingRun] : [];
+    else if (keys.includes('projectKey')) rows = data.workspace ? [data.workspace] : [];
+    else if (keys.includes('config') && keys.includes('type')) rows = data.executors ?? [];
     else if (keys.includes('name') && keys.includes('description')) rows = data.roster ?? [];
     else if (keys.includes('count')) rows = [{ count: data.cycleCount ?? 0 }];
+    else if (keys.includes('value'))
+      rows = data.setupInstruction ? [{ value: data.setupInstruction }] : [];
     else if (keys.includes('settings')) rows = [{ settings: data.settings ?? {} }];
     else if (keys.includes('title')) rows = data.humanTask ? [data.humanTask] : [];
     const builder = {
@@ -243,6 +257,58 @@ describe('buildHandoffSection', () => {
       expect(out).toContain('Question: Which staging DB URL?');
       expect(out).toContain('The seed script needs a target.');
       expect(out).toContain('Answer: Use postgres://staging-db:5432/app');
+    });
+  });
+
+  describe('workspace-setup kind (feature 011 + editable protocol 2026-07-17)', () => {
+    const trigger = { source: 'workspace-setup' } as TriggerEvent;
+    const workspace = {
+      name: 'ST3 Delivery',
+      projectKey: 'ST3',
+      boardType: 'scrum',
+      settings: { repositories: [{ name: 'st3_os' }, { name: 'st3_agentic' }] },
+    };
+
+    it('renders the digest and the BUILT-IN protocol when no stored override exists', async () => {
+      const db = makeDb({
+        workspace,
+        executors: [{ name: 'claude', type: 'claude_cli', config: { model: 'claude-sonnet-5' } }],
+      });
+      const out = await buildHandoffSection(trigger, db, { workspaceId: 'ws-1' });
+
+      // Digest (assembled, not part of the editable text).
+      expect(out).toContain('## Workspace setup');
+      expect(out).toContain('Jira project ST3');
+      expect(out).toContain('Repositories: st3_os (default), st3_agentic');
+      expect(out).toContain('- claude — claude_cli (claude-sonnet-5)');
+      // Built-in protocol markers: study + repo recon + instruction quality + delivery.
+      expect(out).toContain('How to study the project:');
+      expect(out).toContain('get_project_overview');
+      expect(out).toContain('Recon the CODE, not just the board');
+      expect(out).toContain('.specify/memory/constitution.md');
+      expect(out).toContain("How to write each agent's instruction");
+      expect(out).toContain("the platform performs ALL Jira writes from the worker's final report");
+      expect(out).toContain('How to deliver the team:');
+      expect(out).toContain('outcome "team"');
+    });
+
+    it('renders a STORED protocol override instead of the built-in text', async () => {
+      const db = makeDb({
+        workspace,
+        executors: [],
+        setupInstruction: 'CUSTOM PROTOCOL: hire exactly one generalist.',
+      });
+      const out = await buildHandoffSection(trigger, db, { workspaceId: 'ws-1' });
+
+      expect(out).toContain('## Workspace setup'); // digest intact
+      expect(out).toContain('CUSTOM PROTOCOL: hire exactly one generalist.');
+      expect(out).not.toContain('How to study the project:');
+      expect(out).not.toContain('How to deliver the team:');
+    });
+
+    it('returns "" without a workspaceId ctx (best-effort)', async () => {
+      const out = await buildHandoffSection(trigger, makeDb({ workspace }), {});
+      expect(out).toBe('');
     });
   });
 });

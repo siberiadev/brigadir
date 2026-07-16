@@ -1,5 +1,5 @@
 import { and, eq } from 'drizzle-orm';
-import { type BrigadirDb, schema } from '@brigadir/database';
+import { type BrigadirDb, schema, getWorkspaceSetupInstruction } from '@brigadir/database';
 import type { AgentReport, TriggerEvent } from '@brigadir/contracts';
 import { getReworkBudget } from './rework-budget';
 
@@ -56,6 +56,9 @@ const REASON_BUDGET = 400;
 const DESCRIPTION_BUDGET = 300;
 const TASK_BUDGET = 4000; // already schema-capped; belt-and-suspenders.
 const DETAILS_BUDGET = 4000;
+// The editable workspace-setup protocol is schema-capped at 20k; same cap here
+// so a stored value never exceeds what the PUT would accept.
+const SETUP_PROTOCOL_BUDGET = 20000;
 
 function trunc(value: string, budget: number): string {
   return value.length <= budget ? value : `${value.slice(0, budget)}…`;
@@ -370,24 +373,12 @@ async function buildWorkspaceSetupSection(
   }
   lines.push('');
 
-  lines.push(
-    'How to study the project:',
-    '- Call get_project_overview FIRST — it returns the board type, the exact workflow status names, issue types, and the active sprint.',
-    '- Use search_tickets and get_ticket (descriptions, comments, links) to understand the actual work before deciding roles.',
-    '- If the project is empty or the right team is genuinely ambiguous, ask via request_human instead of guessing; ' +
-      'attach `options` with the likely answers (e.g. "Minimal team" / "Full team") so the human can answer in one click.',
-    '',
-    'How to name the team (make it feel alive):',
-    '- Invent ONE coherent theme for this workspace and draw every persona from it — pick something and commit (e.g. Ancient Greek heroes, sci-fi movies, The Matrix, superheroes, Norse myth, …). These are only examples; choose your own, and vary it from workspace to workspace.',
-    '- Give each agent a themed persona `name` (Latin letters, e.g. "Achilles", "Hera") AND a functional `role` ("Developer", "QA", "Reviewer", "Planner", …). Personas must be distinct within the team; do NOT invent a key — the system derives it from name + role.',
-    '',
-    'How to deliver the team:',
-    '- Finish with ONE complete_task report with outcome "team": for each agent give name (themed persona), role (its function), description (one roster line), instruction (a self-contained role prompt), trigger_status (the status that starts it), optional status_running, status_success, status_failure, and executor (one of the profile NAMES above).',
-    '- Every status MUST be one of the workflow status names from get_project_overview, spelled exactly.',
-    '- Two agents must not share the same trigger status.',
-    '- Agents are created ACTIVE, but the workspace stays paused until a human reviews your team and starts it.',
-    '- If validation fails you will receive the errors in the tool result — fix the proposal and call complete_task again.',
-  );
+  // The study/name/deliver protocol is an OPERATOR-EDITABLE global setting
+  // (2026-07-16, `workspace_setup_instruction`), read live so an edit applies
+  // to the very next generate-agents run. The built-in default lives in
+  // @brigadir/contracts (orchestrator-defaults.ts). Bounded like every other
+  // handoff field — an oversized custom text must not blow the prompt.
+  lines.push(trunc(await getWorkspaceSetupInstruction(db), SETUP_PROTOCOL_BUDGET));
 
   const qa = await questionAnswerLines(triggerEvent, db);
   if (qa.length > 0) {

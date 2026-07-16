@@ -5,17 +5,24 @@ import { z } from 'zod';
  * Backed by the `global_settings` key-value table; surfaced through the
  * `GET/PUT /api/general-settings` endpoints and the "General" settings tab.
  *
- * First and only key so far: `default_orchestrator_instruction`, copied into a
- * workspace's seeded orchestrator at creation time (changing it affects only
- * workspaces created afterward — SC-006).
+ * Two keys (2026-07-16 — editable brigadir instructions):
+ * - `default_orchestrator_instruction` — the routing (triage) instruction,
+ *   copied into a workspace's seeded orchestrator at creation time (changing
+ *   it affects only workspaces created afterward — SC-006);
+ * - `workspace_setup_instruction` — the agent-creation (workspace setup)
+ *   protocol, read LIVE by the setup handoff on every generate-agents run.
  */
 export const GeneralSettingsSchema = z
   .object({
     default_orchestrator_instruction: z.string().max(20000),
+    workspace_setup_instruction: z.string().max(20000),
   })
   .strict();
 
 export type GeneralSettings = z.infer<typeof GeneralSettingsSchema>;
 
-/** `global_settings.key` under which the default orchestrator instruction is stored. */
+/** `global_settings.key` under which the default orchestrator (routing) instruction is stored. */
 export const DEFAULT_ORCHESTRATOR_INSTRUCTION_KEY = 'default_orchestrator_instruction';
+
+/** `global_settings.key` under which the agent-creation (workspace setup) instruction is stored. */
+export const WORKSPACE_SETUP_INSTRUCTION_KEY = 'workspace_setup_instruction';

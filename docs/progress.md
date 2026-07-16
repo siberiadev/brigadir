@@ -1005,3 +1005,46 @@ files) + contracts 107 (12) + admin-mcp 14 + web 165 (25), integration 268/269 �
 the one failure (`serve-static` SPA fallback) reproduces identically on the
 pristine tree (web `dist` not built in this worktree), i.e. pre-existing and
 unrelated to this feature.
+
+## Iteration 20 — Editable brigadir instructions + repo-recon setup protocol (2026-07-17)
+
+Two operator-editable brigadir texts in Settings → General, each with its own
+"Reset to default": the **routing (triage)** instruction (the existing
+`default_orchestrator_instruction` key — unchanged semantics: copied into the
+seeded orchestrator at workspace creation, SC-006) and the new **agent-creation
+(workspace setup)** protocol (`workspace_setup_instruction` key). The setup
+protocol was previously hardcoded prompt lines in
+`libs/pipeline/src/handoff.ts::buildWorkspaceSetupSection`; it is now read LIVE
+per generate-agents run (`getWorkspaceSetupInstruction`, fallback to the
+built-in), truncated to the same 20k cap the PUT schema enforces. The dynamic
+digest (workspace, repositories, executor profiles) and the Q&A block stay
+assembled around it. No DB migration — both keys live in the existing
+`global_settings` KV table.
+
+Built-in texts moved to `packages/contracts/src/orchestrator-defaults.ts`
+(dep-free module; `@brigadir/database` re-exports for the old import path) so
+the web app imports them at runtime via the
+`@brigadir/contracts/orchestrator-defaults` alias (pagination-constants
+pattern) for client-side Reset. `GET/PUT /api/general-settings` now round-trips
+both fields (strict — both required).
+
+The new DEFAULT setup protocol upgrades team quality (root cause found by
+comparing two live workspaces' generated teams, 2026-07-16): a conditional
+code-recon step (clone connected repos into `.repos/<name>`, read
+AGENTS.md/README/CLAUDE.md + `.specify/memory/constitution.md`, extract gate
+commands — best-effort, skipped without repo access) and a "How to write each
+agent's instruction" section (project-specific commands, per-repo hard rules,
+multi-repo handling, completion contract, escalation, and the platform rule
+that workers NEVER write to Jira — the system transitions from their report).
+Known limitation: the seeded `brigadir-orchestrator` profile is
+`workspaceMode:'none'` (Haiku, 15 turns), so the recon branch stays dormant
+until the workspace's brigadir agent is pointed at a repo-capable executor —
+candidate follow-up: repo-mounted setup runs.
+
+Tests in the same iteration: handoff unit spec + workspace-setup branch
+(built-in protocol rendered; stored override replaces it; no-ctx degrades to
+''), global-settings integration (both fields round-trip, both required,
+strict), web settings-page spec (both fields seeded, Reset restores built-ins,
+Save PUTs both). Gates green: typecheck (all packages + vue-tsc), lint, unit
+254 (39 files), web 166 (25), affected integration suites 11/11
+(global-settings, workspace-setup).

@@ -160,7 +160,11 @@ describe('orchestrator lifecycle (T038)', () => {
     const putRes = await fetch(`${url}/api/general-settings`, {
       method: 'PUT',
       headers: authHeaders,
-      body: JSON.stringify({ default_orchestrator_instruction: newDefault }),
+      // Both fields are required since the editable setup protocol (2026-07-17).
+      body: JSON.stringify({
+        default_orchestrator_instruction: newDefault,
+        workspace_setup_instruction: 'Study the board, then propose the team.',
+      }),
     });
     expect(putRes.status).toBe(200);
 

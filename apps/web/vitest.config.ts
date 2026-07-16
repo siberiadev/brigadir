@@ -15,6 +15,9 @@ export default defineConfig({
       '@brigadir/contracts/pagination': fileURLToPath(
         new URL('../../packages/contracts/src/pagination.constants.ts', import.meta.url),
       ),
+      '@brigadir/contracts/orchestrator-defaults': fileURLToPath(
+        new URL('../../packages/contracts/src/orchestrator-defaults.ts', import.meta.url),
+      ),
     },
   },
   test: {

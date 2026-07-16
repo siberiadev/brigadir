@@ -15,3 +15,4 @@ export * from './executor.schema';
 export * from './pagination.schema';
 export * from './global-settings.schema';
 export * from './admin-tools.schema';
+export * from './orchestrator-defaults';
