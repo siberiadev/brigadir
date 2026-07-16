@@ -27,6 +27,8 @@ export async function buildHandoffSection(
     switch (source) {
       case 'triage':
         return await buildTriageSection(triggerEvent!, db);
+      case 'answer-triage':
+        return await buildAnswerTriageSection(triggerEvent!, db);
       case 'rework':
         return await buildReworkSection(triggerEvent!, db);
       case 'human-resume':
@@ -104,6 +106,47 @@ function failureLines(report: AgentReport | null, opts: { includeWarnings: boole
   return lines;
 }
 
+/**
+ * Worker roster (enabled, non-orchestrator; FR-020) + the rework-cycle count —
+ * shared by the triage and answer-triage sections, byte-identical to the
+ * original triage rendering.
+ */
+async function rosterAndBudgetLines(
+  db: BrigadirDb,
+  workspaceId: string,
+  ticketId: string,
+): Promise<{ lines: string[]; budgetAvailable: boolean }> {
+  const lines: string[] = [];
+  const roster = await db
+    .select({ name: schema.agents.name, description: schema.agents.description })
+    .from(schema.agents)
+    .where(
+      and(
+        eq(schema.agents.workspaceId, workspaceId),
+        eq(schema.agents.enabled, true),
+        eq(schema.agents.isOrchestrator, false),
+      ),
+    );
+  if (roster.length > 0) {
+    lines.push('Available worker agents (route to one of these by name):');
+    for (const a of roster) {
+      lines.push(`- ${a.name}${a.description ? `: ${trunc(a.description, DESCRIPTION_BUDGET)}` : ''}`);
+    }
+    lines.push('');
+  }
+
+  const budget = await getReworkBudget(db, ticketId, workspaceId);
+  lines.push(`Rework cycles used: ${budget.cycleCount} of ${budget.max}`);
+  lines.push('');
+  return { lines, budgetAvailable: budget.available };
+}
+
+const DECISION_PROTOCOL_LINES = [
+  'Decision protocol:',
+  '- Reply with outcome "routed" (target_agent + task) to send it back to a worker, OR',
+  '- outcome "needs_human" to escalate. Do not exceed the rework budget — the system enforces it.',
+];
+
 async function buildTriageSection(triggerEvent: TriggerEvent, db: BrigadirDb): Promise<string> {
   const failing = await loadFailingRun(db, triggerEvent.failing_run_id);
 
@@ -116,38 +159,57 @@ async function buildTriageSection(triggerEvent: TriggerEvent, db: BrigadirDb): P
   lines.push(...failureLines(failing?.report ?? null, { includeWarnings: true }));
   lines.push('');
 
-  // Worker roster (enabled, non-orchestrator) — name + description (FR-020).
   if (failing?.workspaceId) {
-    const roster = await db
-      .select({ name: schema.agents.name, description: schema.agents.description })
-      .from(schema.agents)
-      .where(
-        and(
-          eq(schema.agents.workspaceId, failing.workspaceId),
-          eq(schema.agents.enabled, true),
-          eq(schema.agents.isOrchestrator, false),
-        ),
-      );
-    if (roster.length > 0) {
-      lines.push('Available worker agents (route to one of these by name):');
-      for (const a of roster) {
-        lines.push(`- ${a.name}${a.description ? `: ${trunc(a.description, DESCRIPTION_BUDGET)}` : ''}`);
-      }
-      lines.push('');
-    }
+    const rb = await rosterAndBudgetLines(db, failing.workspaceId, failing.ticketId);
+    lines.push(...rb.lines);
+  }
 
-    const budget = await getReworkBudget(db, failing.ticketId, failing.workspaceId);
-    lines.push(`Rework cycles used: ${budget.cycleCount} of ${budget.max}`);
+  lines.push(...DECISION_PROTOCOL_LINES);
+
+  return lines.join('\n');
+}
+
+/**
+ * Answer-triage (delta on feature 010): a human resolved a blocking task with
+ * the orchestrator as the resume target. Same decision material as `triage`,
+ * plus the Q&A up top — the answer is the primary input to the decision. When
+ * the budget is exhausted, the section says routing is still permitted: the
+ * human answer grants one more cycle (`processOrchestratorDecision` exempts
+ * this decision from the exhausted-budget override).
+ */
+async function buildAnswerTriageSection(
+  triggerEvent: TriggerEvent,
+  db: BrigadirDb,
+): Promise<string> {
+  const failing = await loadFailingRun(db, triggerEvent.failing_run_id);
+
+  const lines: string[] = [
+    '## Handoff — triage (human answered)',
+    'A blocked question on this ticket received a human answer. Read the Q&A first and let the answer drive your decision.',
+    '',
+  ];
+
+  const qa = await questionAnswerLines(triggerEvent, db);
+  if (qa.length > 0) {
+    lines.push(...qa);
     lines.push('');
   }
 
-  lines.push('Decision protocol:');
-  lines.push(
-    '- Reply with outcome "routed" (target_agent + task) to send it back to a worker, OR',
-  );
-  lines.push(
-    '- outcome "needs_human" to escalate. Do not exceed the rework budget — the system enforces it.',
-  );
+  lines.push(...failureLines(failing?.report ?? null, { includeWarnings: true }));
+  lines.push('');
+
+  if (failing?.workspaceId) {
+    const rb = await rosterAndBudgetLines(db, failing.workspaceId, failing.ticketId);
+    lines.push(...rb.lines);
+    if (!rb.budgetAvailable) {
+      lines.push(
+        'The rework budget above is exhausted, but because a human answered, the system permits ONE more rework cycle for this decision.',
+      );
+      lines.push('');
+    }
+  }
+
+  lines.push(...DECISION_PROTOCOL_LINES);
 
   return lines.join('\n');
 }
@@ -189,16 +251,16 @@ async function buildReworkSection(triggerEvent: TriggerEvent, db: BrigadirDb): P
   return lines.join('\n');
 }
 
-async function buildHumanResumeSection(
+/**
+ * `Question:`/`Answer:` lines from the human task + operator resolution —
+ * shared by the human-resume and answer-triage sections, byte-identical to the
+ * original human-resume rendering.
+ */
+async function questionAnswerLines(
   triggerEvent: TriggerEvent,
   db: BrigadirDb,
-): Promise<string> {
-  const lines: string[] = [
-    '## Handoff — human answer',
-    'You earlier asked for help. A human responded.',
-    '',
-  ];
-
+): Promise<string[]> {
+  const lines: string[] = [];
   if (triggerEvent.human_task_id) {
     const [task] = await db
       .select({ title: schema.humanTasks.title, details: schema.humanTasks.details })
@@ -216,6 +278,20 @@ async function buildHumanResumeSection(
   if (answer) {
     lines.push(`Answer: ${trunc(answer, DETAILS_BUDGET)}`);
   }
+  return lines;
+}
+
+async function buildHumanResumeSection(
+  triggerEvent: TriggerEvent,
+  db: BrigadirDb,
+): Promise<string> {
+  const lines: string[] = [
+    '## Handoff — human answer',
+    'You earlier asked for help. A human responded.',
+    '',
+  ];
+
+  lines.push(...(await questionAnswerLines(triggerEvent, db)));
 
   return lines.join('\n');
 }

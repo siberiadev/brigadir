@@ -172,7 +172,7 @@ CREATE TABLE agents (
   name            text NOT NULL,               -- "Implementer", "QA Agent"
   description     text,                        -- feature 010: roster line показывается оркестратору в handoff (nullable)
   instruction     text NOT NULL,               -- user prompt (без обёртки)
-  is_orchestrator boolean NOT NULL DEFAULT false, -- feature 010: пер-workspace оркестратор "brigadir" (никогда не poll-триггерится, неудаляем, исключён из routing-таргетов и resume-пикера)
+  is_orchestrator boolean NOT NULL DEFAULT false, -- feature 010: пер-workspace оркестратор "brigadir" (никогда не poll-триггерится, неудаляем, исключён из routing-таргетов; в resume-пикере ПРИСУТСТВУЕТ и преселектнут по умолчанию — answer-triage delta: резолв на него создаёт answer-triage run)
   trigger_status  text,                        -- Jira status name, ИЛИ:
   trigger_jql     text,                        -- дополнительный JQL-фильтр (AND)
   status_running  text,                        -- optional: куда перевести на время работы
@@ -221,7 +221,7 @@ CREATE TABLE runs (
     -- queued | running | awaiting_human | succeeded | failed | cancelled | timed_out | superseded
     -- superseded: закрыт resume'ом human-task (на его месте создан новый attempt, см. spec 1.4)
   attempt         int NOT NULL DEFAULT 1,
-  trigger_event   jsonb,                       -- что запустило: manual|webhook|poll|human-resume|triage|rework (feature 010); handoff-поля failing_run_id/deciding_run_id/human_task_id/target_agent/task ездят здесь же
+  trigger_event   jsonb,                       -- что запустило: manual|webhook|poll|human-resume|triage|rework|answer-triage (feature 010 + answer-triage delta); handoff-поля failing_run_id/deciding_run_id/human_task_id/target_agent/task ездят здесь же
   external_ref    text,                        -- claude session_id / routines session_url
   worktree_path   text,
   started_at      timestamptz,
@@ -401,7 +401,7 @@ POST /api/callbacks/runs/:runId/complete    body = structured report
 Семантика:
 
 - `progress` → `run_events` + `job.updateProgress()` + SSE в дашборд.
-- `human` (blocking=true) — канонический flow: создаётся human_task, run → `awaiting_human`, тикет → Blocked + ADF-коммент с вопросом; в ответе агенту — инструкция «finish now without complete_task, the system will resume you with the answer». Маркер завершения (см. Enforcement) пишется самим `request_human`, поэтому Stop-hook выпустит агента. Resume закрывает старый run как `superseded` и создаёт новый attempt с `resolution` в контексте. Non-blocking — только задача в очереди, run продолжается.
+- `human` (blocking=true) — канонический flow: создаётся human_task, run → `awaiting_human`, тикет → Blocked + ADF-коммент с вопросом; в ответе агенту — инструкция «finish now without complete_task, the system will resume you with the answer». Маркер завершения (см. Enforcement) пишется самим `request_human`, поэтому Stop-hook выпустит агента. Resume закрывает старый run как `superseded` и создаёт новый attempt с `resolution` в контексте; answer-triage delta: эффективный resume-таргет по умолчанию — оркестратор (пикер преселектит brigadir) ⇒ новый run — `answer-triage` (brigadir читает Q&A + отчёт упавшего run'а и роутит через `routed`; его rework освобождён от override'а исчерпанного бюджета — ответ человека даёт один доп. цикл). Выбор worker-агента в пикере — прямой resume как раньше. Non-blocking — только задача в очереди, run продолжается.
 - `complete` → валидация по `ReportSchema` (zod) → транзакция: runs.report/outcome/checks + решение PipelineModule (transition в Jira; для `needs_human` — human_task, только если у run ещё нет open-задачи: дедуп per run) → ACK агенту. Повторный `complete` для завершённого run → 409 (идемпотентность).
 
 ### Enforcement

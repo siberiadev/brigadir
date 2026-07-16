@@ -13,7 +13,7 @@ with a `REVIEW-0004_orchestrator_routing.md` SQL review against §3 (rule 5).
 | Column | Type | Null | Default | Purpose |
 |--------|------|------|---------|---------|
 | `description` | `text` | yes | `NULL` | Roster line shown to the orchestrator in the handoff (FR-020). |
-| `is_orchestrator` | `boolean` | no | `false` | Marks the per-workspace orchestrator (FR-018/019). Never poll-triggered, non-deletable, excluded from routing targets and the resume picker. |
+| `is_orchestrator` | `boolean` | no | `false` | Marks the per-workspace orchestrator (FR-018/019). Never poll-triggered, non-deletable, excluded from routing targets. In the resume picker it IS listed and preselected (answer-triage delta, FR-017/025) — resolving to it creates an answer-triage run. |
 
 Constraints/rules:
 - The orchestrator row has `is_orchestrator=true`, `trigger_status=NULL`, `trigger_jql=NULL`,
@@ -67,8 +67,9 @@ superRefine: outcome==='routed' ⇒ routing required   (mirrors needs_human ⇒ 
 ### 2.2 Trigger-event vocabulary (`packages/contracts/src/trigger-event.schema.ts`)
 
 ```
-TRIGGER_SOURCES: ['manual','webhook','poll','human-resume','triage','rework']
+TRIGGER_SOURCES: ['manual','webhook','poll','human-resume','triage','rework','answer-triage']
                   # was 'human_resume' (bug) → 'human-resume' (FR-023)
+                  # 'answer-triage' added by the answer-triage delta (FR-025)
 Optional handoff fields (typed, still .passthrough()):
   failing_run_id?, deciding_run_id?, human_task_id?, target_agent?, task?
 MOCK_SCENARIOS += 'routed'   (FR-024)
@@ -78,7 +79,8 @@ Handoff-source classification:
 | `source` | handoff kind | references |
 |----------|-------------|-----------|
 | `triage` | triage handoff | `failing_run_id` |
-| `rework` | rework handoff | `failing_run_id`, `deciding_run_id`, `task`, `target_agent` |
+| `answer-triage` | answer-triage handoff (Q&A + triage material) | `failing_run_id`, `human_task_id`, `resolution` |
+| `rework` | rework handoff | `failing_run_id`, `deciding_run_id`, `task`, `target_agent`, `human_task_id?` (when the decision was human-answered) |
 | `human-resume` | resume handoff | `human_task_id`, parked run (via `resolution`) |
 
 ### 2.3 Handoff section (ephemeral, per-run)
@@ -98,6 +100,12 @@ budget_available    = cycle_count(ticket) < workspace.settings.rework_max (defau
 ```
 
 Evaluated deterministically in pipeline code (FR-006); never trusted to the model.
+
+Answer-triage exemption (FR-026): a routed decision whose DECIDING run has
+`trigger_event.source == 'answer-triage'` bypasses the exhausted-budget override —
+the human answer grants exactly one extra cycle. The resulting rework run keeps
+`source='rework'` and counts in `cycle_count`, so the next automatic triage
+escalates `cycle_limit` as usual.
 
 ### 3.2 Triage decision (recorded in the `jira_action` marker)
 
@@ -133,6 +141,15 @@ worker run (failed/timed_out)
         └─▶ needs_human ──▶ human task
         └─▶ orchestrator failed ──▶ human task (no re-triage)
   └─▶ [budget exhausted OR no orchestrator] human task (non-blocking) — no triage run
+
+human resolves a BLOCKING task (answer-triage delta)
+  └─▶ [target = orchestrator, the picker default] answer-triage run
+        (source='answer-triage', agent=brigadir, refs: human_task + failing run)
+        └─▶ routed(valid) ──▶ rework run (source='rework', +human_task_id) —
+              exempt from the exhausted-budget override (one human-granted cycle)
+        └─▶ routed(invalid target) ──▶ human task (override, as automatic triage)
+        └─▶ needs_human ──▶ human task
+  └─▶ [target = worker agent] human-resume run (unchanged direct resume)
 ```
 
 ---
@@ -146,9 +163,9 @@ worker run (failed/timed_out)
 | `routing.task` | ≤4000 chars; scrubbed before persist/post | FR-001/003 |
 | `routed` from non-orchestrator | rejected → failure + noted in comment | FR-002 |
 | rework-cycle count | `< rework_max` to route; else override to human | FR-006/009 |
-| `resolve.target_agent_id` | optional; if set must exist ∧ enabled ∧ same workspace, else reject (nothing changes) | FR-015 |
+| `resolve.target_agent_id` | optional; if set must exist ∧ enabled ∧ same workspace, else reject (nothing changes); the orchestrator is a VALID target (⇒ answer-triage run) | FR-015/025 |
 | orchestrator delete | API rejects with 409 conflict | FR-019 |
-| trigger `source` | one of the six-value vocabulary; resumed mock runs validate | FR-023 |
+| trigger `source` | one of the seven-value vocabulary; resumed mock runs validate | FR-023/025 |
 
 ---
 

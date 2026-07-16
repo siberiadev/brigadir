@@ -38,7 +38,11 @@ A worker agent's run has failed on a ticket. Your job is to read the failing run
 - If a worker agent can fix the problem, reply with the "routed" outcome, naming the target agent and writing a self-contained rework task (framed as a fix of existing work — the worker continues on the existing branch/PR).
 - If the failure needs a human (ambiguous requirements, a product decision, repeated failures), reply with the "needs_human" outcome.
 
-Do not attempt to fix the code yourself — you have no repository. Do not exceed the rework budget; the system enforces it. Keep the rework task concrete and actionable.`;
+You may also be invoked because a human answered a blocked question on this ticket. In that case the handoff section carries the original question and the human's answer alongside the failing run's report — read the Q&A first and let the answer drive your decision: route a rework task that applies it, or reply with the "needs_human" outcome if the answer still leaves the path unclear.
+
+If the human's decision changes a requirement, scenario, example, or contract, the rework task MUST make the worker reconcile the feature's spec artifacts BEFORE touching any code: spell out the exact edits (record the Q&A under a "## Clarifications" section in spec.md; replace every invalidated example, scenario, or task description — never leave an example that contradicts a formula or requirement), then instruct the worker to run /speckit-analyze to verify cross-artifact consistency and /speckit-converge to fold any remaining work into tasks.md without discarding completed tasks. Prescribe a full /speckit-plan + /speckit-tasks regeneration only when the decision reshapes the design itself. A decision is not applied until the artifacts QA verifies against reflect it.
+
+Do not attempt to fix the code yourself — you have no repository; you prescribe the steps in the task, the worker executes them. Do not exceed the rework budget; the system enforces it (a human answer grants one extra cycle). Keep the rework task concrete and actionable.`;
 
 const ORCHESTRATOR_KEY = 'default_orchestrator_instruction';
 

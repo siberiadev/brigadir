@@ -27,11 +27,15 @@ export const MOCK_SCENARIOS = [
 export type MockScenario = (typeof MOCK_SCENARIOS)[number];
 
 /**
- * Six-value trigger-source vocabulary (feature 010, FR-023/D8).
+ * Trigger-source vocabulary (feature 010, FR-023/D8 + the answer-triage delta).
  * - `human-resume` fixes the pre-existing `human_resume` bug — `resume.service.ts`
  *   has always WRITTEN `human-resume`, which the old enum rejected on validation.
  * - `triage`: orchestrator run created from a terminally-failed worker run.
  * - `rework`: worker run created from a valid routing decision.
+ * - `answer-triage`: orchestrator run created by a human resolving a blocking
+ *   task with the orchestrator as the resume target — carries the Q&A
+ *   (`human_task_id` + `resolution`) alongside the failing-run reference; the
+ *   rework run it decides is exempt from the cycle budget (a human answered).
  */
 export const TRIGGER_SOURCES = [
   'manual',
@@ -40,6 +44,7 @@ export const TRIGGER_SOURCES = [
   'human-resume',
   'triage',
   'rework',
+  'answer-triage',
 ] as const;
 
 export type TriggerSource = (typeof TRIGGER_SOURCES)[number];

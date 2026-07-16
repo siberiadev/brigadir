@@ -21,6 +21,10 @@ export type ResolveResult =
 interface ResumeTarget {
   id: string;
   executorType: string;
+  // answer-triage delta: picking the orchestrator as the resume target creates
+  // an answer-triage run instead of a plain human-resume run.
+  isOrchestrator: boolean;
+  behavior: unknown;
 }
 
 /**
@@ -35,6 +39,13 @@ interface ResumeTarget {
  *   (FR-017, non-fatal like the existing onRunStarted transition).
  * - `done_manually` / `dismiss` — close the task and its parked run without
  *   a new attempt and without an automated ticket transition (FR-019).
+ *
+ * Answer-triage delta: when the EFFECTIVE resume target is the workspace
+ * orchestrator ("brigadir" — the picker's default), the new run is an
+ * `answer-triage` run instead: the orchestrator reads the Q&A + the failing
+ * run's report in its handoff and routes via the ordinary `routed` contract.
+ * Its `statusRunning` is NULL, so no ticket transition happens here — the
+ * routed decision transitions the ticket to the rework target's status.
  */
 @Injectable()
 export class ResumeService {
@@ -108,7 +119,12 @@ export class ResumeService {
     agentId: string,
   ): Promise<ResumeTarget | undefined> {
     const [row] = await this.db
-      .select({ id: schema.agents.id, executorType: schema.executors.type })
+      .select({
+        id: schema.agents.id,
+        executorType: schema.executors.type,
+        isOrchestrator: schema.agents.isOrchestrator,
+        behavior: schema.agents.behavior,
+      })
       .from(schema.agents)
       .innerJoin(schema.executors, eq(schema.agents.executorId, schema.executors.id))
       .where(
@@ -135,6 +151,7 @@ export class ResumeService {
         agentId: schema.runs.agentId,
         attempt: schema.runs.attempt,
         executorType: schema.runs.executorType,
+        triggerEvent: schema.runs.triggerEvent,
       })
       .from(schema.runs)
       .where(eq(schema.runs.id, parkedRunId))
@@ -147,6 +164,42 @@ export class ResumeService {
     const newAgentId = target?.id ?? parked.agentId;
     const newExecutorType = target?.executorType ?? parked.executorType;
     const newAttempt = differentAgent ? 1 : parked.attempt + 1;
+
+    // answer-triage delta: the EFFECTIVE agent (chosen target, else the parked
+    // run's own agent) decides the trigger shape — an orchestrator gets an
+    // answer-triage run carrying the Q&A + failure reference; a worker keeps the
+    // plain human-resume trigger. Keyed off the effective agent (not just
+    // `target`) because the web guard suppresses `target_agent_id` when it
+    // equals the original agent — a parked ORCHESTRATOR run resumed with no
+    // explicit target must still re-triage, not plain-resume.
+    const [parkedAgent] = await this.db
+      .select({
+        isOrchestrator: schema.agents.isOrchestrator,
+        behavior: schema.agents.behavior,
+      })
+      .from(schema.agents)
+      .where(eq(schema.agents.id, parked.agentId))
+      .limit(1);
+    const parkedIsOrchestrator = parkedAgent?.isOrchestrator ?? false;
+    const effectiveIsOrchestrator = target ? target.isOrchestrator : parkedIsOrchestrator;
+    const effectiveBehavior = target ? target.behavior : parkedAgent?.behavior;
+
+    const triggerEvent = effectiveIsOrchestrator
+      ? answerTriageTriggerEvent({
+          parkedRunId,
+          parkedTriggerEvent: parked.triggerEvent,
+          parkedIsOrchestrator,
+          humanTaskId,
+          answer,
+          behavior: effectiveBehavior,
+        })
+      : {
+          // human_task_id lets the handoff section render the question + answer
+          // (FR-016); the answer also rides in `resolution` (legacy consumers).
+          source: 'human-resume',
+          resolution: answer ?? null,
+          human_task_id: humanTaskId,
+        };
 
     let newRunId: string | undefined;
     await this.db.transaction(async (tx) => {
@@ -166,13 +219,7 @@ export class ResumeService {
           executorType: newExecutorType,
           status: 'queued',
           attempt: newAttempt,
-          // human_task_id lets the handoff section render the question + answer
-          // (FR-016); the answer also rides in `resolution` (legacy consumers).
-          triggerEvent: {
-            source: 'human-resume',
-            resolution: answer ?? null,
-            human_task_id: humanTaskId,
-          },
+          triggerEvent,
         })
         .returning({ id: schema.runs.id });
       newRunId = inserted.id;
@@ -224,4 +271,53 @@ export class ResumeService {
       this.logger.warn(`resume: running-status transition failed (non-fatal) for run ${newRunId}: ${String(err)}`);
     }
   }
+}
+
+/**
+ * The trigger event for a human-initiated triage run (answer-triage delta):
+ * the human resolved a blocking task with the orchestrator as the resume
+ * target, so the new run carries the Q&A alongside the failing-run reference
+ * for the handoff, and marks the eventual rework run as human-granted (budget
+ * exemption in `processOrchestratorDecision`).
+ *
+ * `failing_run_id`: the parked run — its report is what the orchestrator should
+ * read. When the parked run is itself an ORCHESTRATOR run (brigadir's own
+ * needs_human), its report is just the question; the original worker failure
+ * carried in ITS trigger event is the useful context, so that reference is
+ * forwarded instead (falling back to the parked run id).
+ */
+function answerTriageTriggerEvent(opts: {
+  parkedRunId: string;
+  parkedTriggerEvent: unknown;
+  parkedIsOrchestrator: boolean;
+  humanTaskId: string;
+  answer: string | undefined;
+  behavior: unknown;
+}): Record<string, unknown> {
+  const forwarded = opts.parkedIsOrchestrator
+    ? (opts.parkedTriggerEvent as { failing_run_id?: string } | null)?.failing_run_id
+    : undefined;
+  const scenario = mockScenarioOf(opts.behavior);
+  const routeTarget = routeTargetOf(opts.behavior);
+  return {
+    source: 'answer-triage',
+    failing_run_id: forwarded ?? opts.parkedRunId,
+    human_task_id: opts.humanTaskId,
+    resolution: opts.answer ?? null,
+    ...(scenario ? { mock_scenario: scenario } : {}),
+    ...(routeTarget ? { target_agent: routeTarget } : {}),
+  };
+}
+
+// Local copies of the tiny behavior readers in libs/pipeline/src/pipeline.service.ts
+// (`mockScenarioOf`/`routeTargetOf`) — importing them would create a lib cycle
+// (pipeline already depends on human-tasks). Keep the three in sync.
+function mockScenarioOf(behavior: unknown): string | undefined {
+  const s = (behavior as { mock_scenario?: unknown } | null)?.mock_scenario;
+  return typeof s === 'string' ? s : undefined;
+}
+
+function routeTargetOf(behavior: unknown): string | undefined {
+  const t = (behavior as { route_target?: unknown } | null)?.route_target;
+  return typeof t === 'string' ? t : undefined;
 }

@@ -22,8 +22,8 @@ describe('TriggerEventSchema', () => {
     expect(TriggerEventSchema.safeParse({ mock_scenario: 'explode' }).success).toBe(false);
   });
 
-  describe('six-value source vocabulary (FR-023/D8)', () => {
-    it('accepts exactly the six known sources', () => {
+  describe('source vocabulary (FR-023/D8 + answer-triage delta)', () => {
+    it('accepts exactly the seven known sources', () => {
       expect([...TRIGGER_SOURCES]).toEqual([
         'manual',
         'webhook',
@@ -31,10 +31,23 @@ describe('TriggerEventSchema', () => {
         'human-resume',
         'triage',
         'rework',
+        'answer-triage',
       ]);
       for (const s of TRIGGER_SOURCES) {
         expect(TriggerEventSchema.safeParse({ source: s }).success).toBe(true);
       }
+    });
+
+    it('validates an answer-triage trigger stored by resume.service.ts (FR-025)', () => {
+      const res = TriggerEventSchema.safeParse({
+        source: 'answer-triage',
+        failing_run_id: '11111111-1111-4111-8111-111111111111',
+        human_task_id: '33333333-3333-4333-8333-333333333333',
+        resolution: 'Option 1 — the formula is authoritative.',
+        mock_scenario: 'routed',
+        target_agent: 'Developer',
+      });
+      expect(res.success).toBe(true);
     });
 
     it('rejects the old bug value "human_resume" (underscore)', () => {

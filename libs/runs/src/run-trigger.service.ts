@@ -28,7 +28,7 @@ const ACTIVE_STATUSES = ['queued', 'running', 'awaiting_human'];
  * row stuck in `queued`. For these the `runs_one_active` partial unique index
  * (idempotency level 3) is the authority, so the BullMQ dedup layer is dropped.
  */
-const CONTINUATION_SOURCES = new Set(['triage', 'rework', 'human-resume']);
+const CONTINUATION_SOURCES = new Set(['triage', 'rework', 'human-resume', 'answer-triage']);
 
 /**
  * RunTriggerService (contracts C6) — the single enqueue seam.

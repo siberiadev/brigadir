@@ -166,6 +166,65 @@ describe('buildHandoffSection', () => {
     expect(out.length).toBeLessThan(huge.length);
   });
 
+  describe('answer-triage kind (answer-triage delta, FR-025)', () => {
+    const trigger = {
+      source: 'answer-triage',
+      failing_run_id: FAILING_RUN_ID,
+      human_task_id: '33333333-3333-4333-8333-333333333333',
+      resolution: 'Option 1 — the formula is authoritative.',
+    } as TriggerEvent;
+
+    it('renders the Q&A, the failure context, the roster, the cycle count, and the protocol', async () => {
+      const db = makeDb({
+        failingRun: { workspaceId: 'ws-1', ticketId: 'tk-1', report: failingReport },
+        roster: [{ name: 'Developer', description: 'Implements features' }],
+        cycleCount: 1,
+        settings: { rework_max: 3 },
+        humanTask: { title: 'Formula or example?', details: 'FR-004 contradicts scenario 4.' },
+      });
+
+      const out = await buildHandoffSection(trigger, db);
+
+      expect(out).toContain('## Handoff — triage (human answered)');
+      expect(out).toContain('Question: Formula or example?');
+      expect(out).toContain('FR-004 contradicts scenario 4.');
+      expect(out).toContain('Answer: Option 1 — the formula is authoritative.');
+      expect(out).toContain('Failing run: Implemented the endpoint but two tests fail.');
+      expect(out).toContain('- Developer: Implements features');
+      expect(out).toContain('Rework cycles used: 1 of 3');
+      expect(out).toContain('Decision protocol:');
+      // Budget still available — no grant note.
+      expect(out).not.toContain('permits ONE more rework cycle');
+    });
+
+    it('states the one-cycle grant when the budget is exhausted', async () => {
+      const db = makeDb({
+        failingRun: { workspaceId: 'ws-1', ticketId: 'tk-1', report: failingReport },
+        roster: [{ name: 'Developer', description: null }],
+        cycleCount: 2,
+        settings: { rework_max: 2 },
+        humanTask: { title: 'Q', details: null },
+      });
+      const out = await buildHandoffSection(trigger, db);
+      expect(out).toContain('Rework cycles used: 2 of 2');
+      expect(out).toContain(
+        'The rework budget above is exhausted, but because a human answered, the system permits ONE more rework cycle for this decision.',
+      );
+    });
+
+    it('degrades best-effort when the parked run has no report (request_human park)', async () => {
+      const db = makeDb({
+        humanTask: { title: 'Which auth provider?', details: null },
+      });
+      const out = await buildHandoffSection(trigger, db);
+      expect(out).toContain('## Handoff — triage (human answered)');
+      expect(out).toContain('Question: Which auth provider?');
+      expect(out).toContain('Answer: Option 1 — the formula is authoritative.');
+      expect(out).not.toContain('Failing run:');
+      expect(out).toContain('Decision protocol:');
+    });
+  });
+
   describe('human-resume kind (T030)', () => {
     it('renders the question title/details and the operator answer verbatim', async () => {
       const db = makeDb({

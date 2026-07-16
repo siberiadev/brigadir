@@ -64,6 +64,35 @@ Question: <human_task.title>
 Answer: <resolution>
 ```
 
+### `answer-triage` (orchestrator run from a human-resolved blocking task — delta)
+```
+## Handoff — triage (human answered)
+A blocked question on this ticket received a human answer. Read the Q&A first and let the answer drive your decision.
+
+Question: <human_task.title>
+<human_task.details>
+
+Answer: <resolution>
+
+Failing run: <summary>
+Failed/warning checks:
+- <name>: <status> — <reason>
+Artifacts: branch <branch>, PR <pr_url>
+
+Available worker agents (route to one of these by name):
+- <agent.name>: <agent.description>
+
+Rework cycles used: <n> of <rework_max>
+[when exhausted:] The rework budget above is exhausted, but because a human answered, the system permits ONE more rework cycle for this decision.
+
+Decision protocol:
+- Reply with outcome "routed" (target_agent + task) to send it back to a worker, OR
+- outcome "needs_human" to escalate. Do not exceed the rework budget — the system enforces it.
+```
+The failing run is the parked run (its report, when persisted); for a parked orchestrator run the
+reference forwarded from its own trigger. Runs parked by the blocking `request_human` callback have
+no report — the failure lines degrade away, Q&A + roster + protocol still render.
+
 ## Tests (`handoff.spec.ts`, unit)
 
 - Each kind renders its expected fields from seeded run/task rows.

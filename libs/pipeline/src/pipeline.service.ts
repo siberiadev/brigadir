@@ -362,9 +362,17 @@ export class PipelineService {
     const target = await this.resolveRoutingTarget(run.workspaceId, routing.target_agent);
     const budget = await getReworkBudget(this.db, run.ticketId, run.workspaceId);
 
+    // Answer-triage delta: a human explicitly answered and picked the
+    // orchestrator, which itself grants ONE more rework cycle — this decision's
+    // rework run is exempt from the exhausted-budget override. It still counts
+    // in run history, so the NEXT automatic triage escalates `cycle_limit`.
+    // The automatic fail-triage cap (decideTriage) is unchanged.
+    const humanGranted =
+      (run.triggerEvent as { source?: string } | null)?.source === 'answer-triage';
+
     // FR-009: invalid target or exhausted budget ⇒ override to a human task
     // carrying the orchestrator's task text + the override reason.
-    if (!target || !budget.available) {
+    if (!target || (!budget.available && !humanGranted)) {
       const reason = !target
         ? `target agent "${routing.target_agent}" is not a valid, enabled worker in this workspace`
         : `rework budget exhausted (${budget.cycleCount} of ${budget.max})`;
@@ -379,7 +387,13 @@ export class PipelineService {
     // FR-008: valid routing ⇒ enqueue the rework run, transition the ticket to
     // the target's running status directly (never through a trigger status), and
     // post a routing comment naming the target + task.
-    const failingRunId = (run.triggerEvent as { failing_run_id?: string } | null)?.failing_run_id;
+    const trigger = run.triggerEvent as
+      | { failing_run_id?: string; human_task_id?: string }
+      | null;
+    const failingRunId = trigger?.failing_run_id;
+    // Traceability (answer-triage delta): the human task whose answer drove
+    // this decision rides along into the rework run.
+    const humanTaskId = trigger?.human_task_id;
     const targetScenario = mockScenarioOf(target.behavior);
     await this.runTrigger.trigger({
       ticketId: run.ticketId,
@@ -390,6 +404,7 @@ export class PipelineService {
         target_agent: routing.target_agent,
         task: routing.task,
         ...(failingRunId ? { failing_run_id: failingRunId } : {}),
+        ...(humanTaskId ? { human_task_id: humanTaskId } : {}),
         ...(targetScenario ? { mock_scenario: targetScenario } : {}),
       } as TriggerEvent,
     });

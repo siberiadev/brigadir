@@ -48,7 +48,7 @@ Rework cycles cannot ping-pong forever between a worker and the orchestrator. Th
 
 ### User Story 3 - Human resolves a blocked ticket by choosing which agent resumes (Priority: P2)
 
-When a ticket lands in the Human Queue (an agent asked for help, or the automated loop escalated), the operator reads the question, writes an answer, and — new — picks which agent should take the ticket next from a dropdown (defaulting to the agent that was originally working). Submitting resumes the pipeline: a new run is created for the chosen agent, and the human's answer together with the original question is automatically injected into that run's prompt.
+When a ticket lands in the Human Queue (an agent asked for help, or the automated loop escalated), the operator reads the question, writes an answer, and — new — picks which agent should take the ticket next from a dropdown. The dropdown includes the workspace's orchestrator ("brigadir"), **preselected by default** (answer-triage delta): resolving to it creates an *answer-triage* run — the orchestrator reads the Q&A plus the parked run's failure context in its handoff and routes via the ordinary "routed" contract, so the human's decision is interpreted centrally instead of being dumped on one worker. Picking a worker agent instead resumes it directly (original behavior). Either way the human's answer together with the original question is automatically injected into the new run's prompt.
 
 **Why this priority**: This is the manual half of the hybrid model — the human stays in control of genuinely ambiguous blocks, and their answer must not get lost between the queue and the next run.
 
@@ -57,9 +57,11 @@ When a ticket lands in the Human Queue (an agent asked for help, or the automate
 **Acceptance Scenarios**:
 
 1. **Given** an open blocking human task, **When** the operator resolves it with "resume" and no agent selection, **Then** the parked run is superseded and a new run is created for the original agent (current behavior preserved), and the new run's prompt contains the human task's title, details, and the operator's answer.
-2. **Given** an open blocking human task, **When** the operator resolves it with "resume" and selects a different enabled agent of the same workspace, **Then** the new run is created for the chosen agent (first attempt for that agent), and the ticket transitions to the chosen agent's running status.
+2. **Given** an open blocking human task, **When** the operator resolves it with "resume" and selects a different enabled worker agent of the same workspace, **Then** the new run is created for the chosen agent (first attempt for that agent), and the ticket transitions to the chosen agent's running status.
 3. **Given** a resolve request naming an agent that does not exist, is disabled, or belongs to another workspace, **When** it is submitted, **Then** the request is rejected with a validation error and nothing changes.
-4. **Given** the Human Queue UI on a blocking task with action "resume", **When** the operator opens the agent selector, **Then** it lists the workspace's enabled agents excluding the orchestrator, with the original agent preselected.
+4. **Given** the Human Queue UI on a blocking task with action "resume", **When** the operator opens the agent selector, **Then** it lists the workspace's enabled agents including the orchestrator, with the **orchestrator preselected** (falling back to the original agent when the orchestrator is disabled).
+5. **Given** an open blocking human task, **When** the operator resolves it with "resume" targeting the orchestrator (explicitly, or implicitly because the parked run belongs to the orchestrator), **Then** the new run is an *answer-triage* run: its trigger references the human task and the failing run, its prompt carries the Q&A + the failure context + the roster + the decision protocol, and no ticket transition happens until the orchestrator's routed decision moves the ticket to the rework target's running status.
+6. **Given** an answer-triage run that completes with a valid routing decision, **When** the ticket's rework budget is already exhausted, **Then** the rework run is still created — the human answer grants one extra cycle — and that rework run counts in run history, so the next automatic triage on a subsequent failure escalates with `cycle_limit`.
 
 ---
 
@@ -90,6 +92,9 @@ Every workspace automatically gets an orchestrator agent named "brigadir" — on
 - **Rework run on a repository state that moved on** (target branch merged/deleted): the handoff carries branch and PR references as text; the worker agent handles a missing branch as it would any instruction pointing at repository state.
 - **Pre-existing trigger-source mismatch**: the stored trigger-source vocabulary contains a variant ("human_resume") that the resume flow never writes (it writes "human-resume"), which today makes mock-executor resumed runs crash on validation. The vocabulary must be corrected as part of extending it, and resumed mock runs must work.
 - **Routing comment or status transition fails in Jira** (board misconfiguration): follows the existing non-fatal transition semantics — the failure is recorded and reconciliation retries; the rework run itself is already safely enqueued exactly once.
+- **Answer-triage on a parked orchestrator run** (brigadir's own needs_human, resumed with no explicit target): the effective agent is the orchestrator, so the resume still produces an answer-triage run; the failing-run reference is forwarded from the parked run's own trigger (the original worker failure holds the useful report), falling back to the parked run id.
+- **Answer-triage on a run parked by the blocking `request_human` callback** (no persisted report): the handoff degrades best-effort — Q&A, roster, and protocol render; the failure lines are omitted.
+- **Answer-triage with the rework budget exhausted**: the orchestrator's routed decision is exempt from the exhausted-budget override (the human answer grants one extra cycle); the handoff states this explicitly. Automatic fail-triage keeps the hard cap.
 
 ## Requirements *(mandatory)*
 
@@ -125,7 +130,9 @@ Every workspace automatically gets an orchestrator agent named "brigadir" — on
 
 - **FR-015**: The human-task resolve operation MUST accept an optional target agent; when present, the resumed run is created for that agent (validated: exists, enabled, same workspace — otherwise the request is rejected and nothing changes) with the executor profile of the chosen agent; when absent, current same-agent behavior is preserved. Attempt numbering restarts for a newly chosen agent.
 - **FR-016**: The resumed run's trigger MUST reference the human task and the parked run so the handoff section can render the question and answer.
-- **FR-017**: The Human Queue UI MUST offer an agent selector on blocking-task resume, listing the workspace's enabled non-orchestrator agents with the original agent preselected, and queue items MUST expose the workspace reference the selector needs.
+- **FR-017**: The Human Queue UI MUST offer an agent selector on blocking-task resume, listing the workspace's enabled agents including the orchestrator, with the orchestrator preselected (original agent when the orchestrator is disabled), and queue items MUST expose the workspace reference the selector needs.
+- **FR-025** *(answer-triage delta)*: When the EFFECTIVE resume target (explicit selection, else the parked run's own agent) is the orchestrator, the resume MUST create an `answer-triage` run instead of a `human-resume` run: trigger source `answer-triage`, carrying `human_task_id`, `resolution`, and a `failing_run_id` (the parked run; for a parked orchestrator run, the failing-run reference forwarded from its own trigger, falling back to the parked run id). Its handoff MUST render the Q&A, the failure context, the roster, the cycle count, and the decision protocol.
+- **FR-026** *(answer-triage delta)*: A routed decision from an `answer-triage` run MUST be exempt from the exhausted-budget override (the human answer grants one extra rework cycle, exactly once — the decision-time check keys off the deciding run's trigger source). The resulting rework run keeps `source='rework'` and counts in the budget; invalid-target overrides still apply; the automatic fail-triage cap (FR-005/006) is unchanged. The deciding human task's id MUST be forwarded into the rework trigger for traceability.
 
 **Orchestrator lifecycle**
 
@@ -148,6 +155,7 @@ Every workspace automatically gets an orchestrator agent named "brigadir" — on
 - **Orchestrator agent ("brigadir")**: a per-workspace agent marked as orchestrator; never poll-triggered; non-deletable; instruction editable; runs on a dedicated cheap executor profile without a repository checkout.
 - **Routing decision**: the orchestrator's report outcome — either "routed" (target agent name + rework task text) or "needs human" (existing human-task payload).
 - **Triage run**: an orchestrator run created in-process from a terminally failed worker run; its trigger references the failing run.
+- **Answer-triage run** *(delta)*: an orchestrator run created by a human resolving a blocking task with the orchestrator as the (default) resume target; its trigger references the human task and the failing run, and its routed decision is exempt from the exhausted-budget override.
 - **Rework run**: a worker-agent run created from a valid routing decision; its trigger references the failing run, the deciding triage run, and carries the task text; counts against the ticket's rework-cycle budget.
 - **Handoff section**: the automatically assembled prompt block that carries cross-run context (failure report, roster, task, human answer) to the next run.
 - **Rework-cycle budget**: per-ticket count of rework runs against a per-workspace maximum (default 2), enforced deterministically by the pipeline.
@@ -159,8 +167,8 @@ Every workspace automatically gets an orchestrator agent named "brigadir" — on
 
 - **SC-001**: A terminally failed worker run on a workspace with an enabled orchestrator produces exactly one triage run, with no operator involvement and no polling delay, and replay of the completion processing never produces a second one.
 - **SC-002**: A routed decision produces a rework run whose prompt contains the orchestrator's task and the failing run's report context, with zero changes to any worker agent's stored instruction.
-- **SC-003**: No ticket ever exceeds its configured rework-cycle maximum (default 2): the cycle after the last budgeted one always ends in a human task, in 100% of integration scenarios including invalid-target and orchestrator-failure paths.
-- **SC-004**: An operator resolving a blocked ticket can select any enabled worker agent of the workspace and have it take over in one submit; the chosen agent's run prompt contains the question and the answer verbatim.
+- **SC-003**: No ticket ever exceeds its configured rework-cycle maximum (default 2) through AUTOMATIC triage: the automatic cycle after the last budgeted one always ends in a human task, in 100% of integration scenarios including invalid-target and orchestrator-failure paths. The single exception is deliberate: a human-answered (answer-triage) decision may route one rework run past the cap, and that run still counts toward the budget afterwards.
+- **SC-004**: An operator resolving a blocked ticket can select any enabled agent of the workspace and have it take over in one submit. Choosing a worker: that agent's run prompt contains the question and the answer verbatim. Choosing the orchestrator (the default): the answer-triage run's prompt contains the question and the answer verbatim, and the human's decision reaches the eventual rework worker via the orchestrator's task.
 - **SC-005**: Every workspace — newly created or pre-existing at upgrade — has a "brigadir" orchestrator agent; deletion attempts fail while instruction edits succeed.
 - **SC-006**: Changing the default orchestrator instruction in General settings changes the instruction of orchestrators in workspaces created afterwards, and changes nothing in existing workspaces.
 - **SC-007**: The full fail → triage → route → rework → success loop completes end-to-end under the mock executor in integration tests, with the ticket's Jira status and comments reflecting each step.
