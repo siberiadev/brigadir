@@ -1,5 +1,5 @@
 import { Controller, Get, Inject, Query, UseGuards } from '@nestjs/common';
-import { desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import {
   type HumanQueueCountResponse,
@@ -25,15 +25,23 @@ export class HumanTasksController {
   @Get()
   async list(
     @Query('status') statusRaw?: string,
+    @Query('workspace') workspace?: string,
     @Query('page') pageRaw?: string,
     @Query('page_size') pageSizeRaw?: string,
   ): Promise<HumanQueueListResponse> {
     const closed = statusRaw === 'closed';
     const { page, pageSize, limit, offset } = parsePagination(pageRaw, pageSizeRaw);
 
-    const where = closed
+    // The queue is global by default; the workspace tab (feature: workspace
+    // Human queue) scopes it to one workspace via `?workspace=<id>` — served by
+    // the same query, backed by the `human_tasks_open` (workspace_id, status)
+    // partial index. The count endpoint stays global (sidebar badge).
+    const statusFilter = closed
       ? inArray(schema.humanTasks.status, ['resolved', 'dismissed'])
       : eq(schema.humanTasks.status, 'open');
+    const where = workspace
+      ? and(statusFilter, eq(schema.humanTasks.workspaceId, workspace))
+      : statusFilter;
 
     const [{ total }] = await this.db
       .select({ total: sql<number>`count(*)::int` })

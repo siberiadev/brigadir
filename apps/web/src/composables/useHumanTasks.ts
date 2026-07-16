@@ -22,10 +22,13 @@ export const humanTasksCountKey = ['human-tasks', 'count'] as const;
 export function useHumanTasks(
   status: HumanQueueStatus = 'open',
   params: MaybeRefOrGetter<Partial<PaginationQuery>> = {},
+  workspaceId: MaybeRefOrGetter<string | undefined> = undefined,
 ) {
   return useQuery({
-    queryKey: computed(() => [...humanTasksKey(status), toValue(params)]),
-    queryFn: () => api.list(status, toValue(params)),
+    // workspaceId is part of the key so the global queue and a workspace-scoped
+    // tab keep separate caches.
+    queryKey: computed(() => [...humanTasksKey(status), toValue(workspaceId), toValue(params)]),
+    queryFn: () => api.list(status, toValue(params), toValue(workspaceId)),
     refetchInterval: status === 'open' ? 4000 : false,
     placeholderData: (prev) => prev,
   });

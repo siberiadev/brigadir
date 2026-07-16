@@ -129,3 +129,83 @@ describe('human queue list/count/resolve (T030)', () => {
     expect(count.open).toBe(1);
   });
 });
+
+/**
+ * Workspace-scoped Human queue tab: `GET /api/human-tasks?workspace=<id>` filters
+ * the same list to one workspace (open & closed), while the unfiltered list stays
+ * global. Isolated seed (two workspaces) so it doesn't touch the global-count
+ * assertions above.
+ */
+describe('human queue workspace filter', () => {
+  let db: DbHarness;
+  let redis: RedisHarness;
+  let app: INestApplication;
+  let url: string;
+  let wsA: Awaited<ReturnType<typeof seedPipeline>>;
+  let wsB: Awaited<ReturnType<typeof seedPipeline>>;
+
+  const authHeaders = { 'content-type': 'application/json', authorization: `Bearer ${TEST_DASHBOARD_TOKEN}` };
+
+  beforeAll(async () => {
+    db = await startDatabase();
+    redis = await startRedis();
+    process.env.DATABASE_URL = db.url;
+    process.env.REDIS_URL = redis.url;
+    process.env.AGENTS_CONFIG_PATH = join(process.cwd(), 'test', 'fixtures', 'does-not-exist.yaml');
+
+    wsA = await seedPipeline(db.db, { ticketKey: 'AAA-1' });
+    wsB = await seedPipeline(db.db, { ticketKey: 'BBB-1' });
+
+    // wsA: one open + one closed. wsB: one open.
+    await db.db.insert(schema.humanTasks).values({
+      workspaceId: wsA.workspaceId, ticketId: wsA.ticketId, kind: 'question',
+      title: 'A open', blocking: false, status: 'open', createdAt: new Date('2026-07-12T08:00:00.000Z'),
+    });
+    await db.db.insert(schema.humanTasks).values({
+      workspaceId: wsA.workspaceId, ticketId: wsA.ticketId, kind: 'review',
+      title: 'A closed', blocking: false, status: 'resolved',
+      resolution: 'ok', resolvedBy: 'dima', resolvedAt: new Date('2026-07-11T00:00:00.000Z'),
+      createdAt: new Date('2026-07-10T00:00:00.000Z'),
+    });
+    await db.db.insert(schema.humanTasks).values({
+      workspaceId: wsB.workspaceId, ticketId: wsB.ticketId, kind: 'question',
+      title: 'B open', blocking: false, status: 'open', createdAt: new Date('2026-07-12T09:00:00.000Z'),
+    });
+
+    const moduleRef: TestingModule = await Test.createTestingModule({ imports: [BackendAppModule] }).compile();
+    app = moduleRef.createNestApplication();
+    await app.init();
+    await app.listen(0);
+    url = await app.getUrl();
+  }, 240_000);
+
+  afterAll(async () => {
+    await app?.close();
+    await db?.stop();
+    await redis?.stop();
+  });
+
+  it('open list scoped to a workspace returns only its tasks', async () => {
+    const body = await fetch(`${url}/api/human-tasks?status=open&workspace=${wsA.workspaceId}`, { headers: authHeaders }).then((r) => r.json());
+    expect(body.items.map((t: { title: string }) => t.title)).toEqual(['A open']);
+    expect(body.total).toBe(1);
+    expect(body.items[0].workspace.id).toBe(wsA.workspaceId);
+  });
+
+  it('closed list scoped to a workspace returns only its tasks', async () => {
+    const body = await fetch(`${url}/api/human-tasks?status=closed&workspace=${wsA.workspaceId}`, { headers: authHeaders }).then((r) => r.json());
+    expect(body.items.map((t: { title: string }) => t.title)).toEqual(['A closed']);
+    expect(body.total).toBe(1);
+
+    // wsB has no closed tasks → empty scoped list.
+    const empty = await fetch(`${url}/api/human-tasks?status=closed&workspace=${wsB.workspaceId}`, { headers: authHeaders }).then((r) => r.json());
+    expect(empty.items).toHaveLength(0);
+    expect(empty.total).toBe(0);
+  });
+
+  it('unfiltered list stays global across workspaces', async () => {
+    const body = await fetch(`${url}/api/human-tasks?status=open`, { headers: authHeaders }).then((r) => r.json());
+    expect(body.items.map((t: { title: string }) => t.title).sort()).toEqual(['A open', 'B open']);
+    expect(body.total).toBe(2);
+  });
+});

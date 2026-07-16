@@ -34,6 +34,16 @@ export const routes: RouteRecordRaw[] = [
         props: true,
       },
       {
+        // Workspace-scoped Human queue tab. Reuses the global HumanQueue.vue,
+        // passing the route `:id` as its `workspaceId` prop so the queue is
+        // filtered to this workspace. Distinct route name from the global
+        // `human-queue` (line ~61). Declared before `:catchAll`.
+        path: 'human-queue',
+        name: 'workspace-human-queue',
+        component: () => import('../views/HumanQueue.vue'),
+        props: (to) => ({ workspaceId: to.params.id }),
+      },
+      {
         // Feature 008 (US3): the standalone settings page is retired — settings
         // is now a nested tab child. Declared BEFORE `:catchAll` so the
         // `/workspaces/:id/settings` deep-link resolves to this tab and is not

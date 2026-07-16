@@ -46,7 +46,7 @@ async function save() {
 
     <label class="field-label">Theme</label>
     <p class="hint">Applies immediately on this device. “System” follows the OS setting.</p>
-    <el-radio-group v-model="themeMode" data-test="theme-mode">
+    <el-radio-group v-model="themeMode" size="small" data-test="theme-mode">
       <el-radio-button value="light" data-test="theme-mode-light">Light</el-radio-button>
       <el-radio-button value="dark" data-test="theme-mode-dark">Dark</el-radio-button>
       <el-radio-button value="auto" data-test="theme-mode-auto">System</el-radio-button>

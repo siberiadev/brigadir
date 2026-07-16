@@ -19,8 +19,14 @@ export type ResolveResult =
  */
 export function humanTasksApi(client: ApiClient = apiClient) {
   return {
-    list: (status: HumanQueueStatus = 'open', params: Partial<PaginationQuery> = {}) =>
-      client.get<HumanQueueListResponse>(`/api/human-tasks${toQuery({ status, ...params })}`),
+    list: (
+      status: HumanQueueStatus = 'open',
+      params: Partial<PaginationQuery> = {},
+      workspaceId?: string,
+    ) =>
+      client.get<HumanQueueListResponse>(
+        `/api/human-tasks${toQuery({ status, ...params, ...(workspaceId ? { workspace: workspaceId } : {}) })}`,
+      ),
     count: () => client.get<HumanQueueCountResponse>('/api/human-tasks/count'),
     resolve: (id: string, body: ResolveHumanTaskInput) =>
       client.post<ResolveResult>(`/api/human-tasks/${id}/resolve`, body),

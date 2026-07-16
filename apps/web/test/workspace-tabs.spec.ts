@@ -10,6 +10,7 @@ import '../src/views/WorkspacePage.vue';
 import '../src/views/AgentsList.vue';
 import '../src/views/Runs.vue';
 import '../src/views/WorkspaceSettings.vue';
+import '../src/views/HumanQueue.vue';
 
 /**
  * Feature 007 — Workspace Tabs Navigation. These component tests drive the app's
@@ -132,6 +133,33 @@ describe('WorkspaceTabs — unknown-tab fallback & settings precedence (US2)', (
     // nested `settings` tab child, declared before `:catchAll` so it is not
     // swallowed by the unknown-tab redirect.
     expect(router.resolve('/workspaces/ws-1/settings').name).toBe('settings');
+  });
+});
+
+describe('WorkspaceTabs — Human queue tab (workspace-scoped)', () => {
+  it('renders the workspace-scoped Human queue body under the tab strip and swaps to it', async () => {
+    const { wrapper, router } = await mountApp('/workspaces/ws-1/runs');
+
+    // The tab appears in the strip.
+    expect(wrapper.find('[data-test="workspace-tab-workspace-human-queue"]').exists()).toBe(true);
+
+    await switchTab(wrapper, router, 'workspace-human-queue');
+
+    expect(router.currentRoute.value.name).toBe('workspace-human-queue');
+    expect(router.currentRoute.value.path).toBe('/workspaces/ws-1/human-queue');
+    // The reused HumanQueue body mounts (Open/History filter present); the global
+    // page <h2> is hidden in the scoped tab.
+    expect(wrapper.find('[data-test="queue-filter"]').exists()).toBe(true);
+    expect(wrapper.find('h2').exists()).toBe(false);
+  });
+
+  it('resolves the /human-queue deep-link to the nested workspace tab, not the global route', async () => {
+    const { router } = await mountApp('/workspaces/ws-1/human-queue');
+
+    expect(router.currentRoute.value.name).toBe('workspace-human-queue');
+    expect(router.currentRoute.value.params.id).toBe('ws-1');
+    // The standalone global queue keeps its own route.
+    expect(router.resolve('/human-queue').name).toBe('human-queue');
   });
 });
 

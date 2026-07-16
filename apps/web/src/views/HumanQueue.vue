@@ -11,14 +11,19 @@ import HumanTaskRow from '../components/HumanQueue/HumanTaskRow.vue';
 import HumanTaskDrawer from '../components/HumanQueue/HumanTaskDrawer.vue';
 import ResumeAgentPicker from '../components/ResumeAgentPicker.vue';
 
-// The global (cross-workspace) needs-human queue (US1). Open tasks are
-// oldest-first (longest-waiting on top); history shows the closed tasks with
-// their resolution + resolver. Live via the composable's refetchInterval.
+// The needs-human queue (US1). Open tasks are oldest-first (longest-waiting on
+// top); history shows the closed tasks with their resolution + resolver. Live
+// via the composable's refetchInterval.
 // Одна пагинация на оба таба: переключение таба = смена фильтра → страница 1.
+// Без `workspaceId` — глобальная (cross-workspace) очередь (роут /human-queue);
+// с ним — вкладка Human queue конкретного workspace (заголовок уже даёт
+// WorkspaceHeader, поэтому свой h2 скрываем).
+const props = defineProps<{ workspaceId?: string }>();
 const filter = ref<HumanQueueStatus>('open');
 const { page, pageSize, params, bindTotal } = usePagination({ resetOn: filter });
-const queue = useHumanTasks('open', params);
-const closedQueue = useHumanTasks('closed', params);
+const wsId = () => props.workspaceId;
+const queue = useHumanTasks('open', params, wsId);
+const closedQueue = useHumanTasks('closed', params, wsId);
 
 const activeQuery = computed(() => (filter.value === 'open' ? queue : closedQueue));
 const items = computed<HumanQueueItem[]>(() => activeQuery.value.data.value?.items ?? []);
@@ -103,11 +108,11 @@ async function submit(item: HumanQueueItem) {
 <template>
   <section class="human-queue">
     <div class="header-row">
-      <h2>Needs-human queue</h2>
-      <el-radio-group v-model="filter" data-test="queue-filter">
+      <el-radio-group v-model="filter" size="small" data-test="queue-filter">
         <el-radio-button label="open" value="open">Open</el-radio-button>
         <el-radio-button label="closed" value="closed">History</el-radio-button>
       </el-radio-group>
+      <h2 v-if="!workspaceId">Needs-human queue</h2>
     </div>
 
     <el-empty
