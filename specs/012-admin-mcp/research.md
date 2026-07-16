@@ -63,7 +63,7 @@ stay green (FR-012).
   envelope in the handler (v1: a single page of 100 is enough for an internal tool; if
   `total > 100` the handler notes truncation in stderr — documented, not silent).
 - `get_workspace` → `GET /api/workspaces/:id`.
-- `get_board_statuses` → `GET /api/workspaces/:id/statuses?refresh=1` (the sanctioned
+- `get_board_statuses` → `GET /api/workspaces/:id/statuses?refresh=true` (the sanctioned
   status-name source; refresh so a freshly-created board is populated).
 - `list_executors` → `GET /api/executors?page_size=100`.
 - `list_agents` → `GET /api/agents?workspace=:id&page_size=100`.

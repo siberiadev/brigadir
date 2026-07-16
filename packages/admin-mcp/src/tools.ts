@@ -209,7 +209,9 @@ export function createToolHandlers(config: AdminToolConfig): AdminToolHandlers {
     async get_board_statuses(args: unknown): Promise<ToolCallResult> {
       const id = requireId(args, 'workspace_id');
       if (!id) return localError('workspace_id is required');
-      const res = await call('GET', `/api/workspaces/${encodeURIComponent(id)}/statuses?refresh=1`);
+      // `refresh=true` VERBATIM — the controller checks `refresh === 'true'`;
+      // any other value silently serves the 5-minute cache (StatusesService TTL).
+      const res = await call('GET', `/api/workspaces/${encodeURIComponent(id)}/statuses?refresh=true`);
       if (res.status < 200 || res.status >= 300) return toolError(res.body);
       const statuses = (asRecord(res.body).statuses ?? []) as Record<string, unknown>[];
       return ok({

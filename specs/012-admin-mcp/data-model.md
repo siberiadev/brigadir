@@ -19,7 +19,7 @@ surface — input/output zod schemas authored in
 |------|-------|--------|------|
 | `list_workspaces` | `{}` | `{ items: WorkspaceSummary[] }` | GET `/api/workspaces?page_size=100` |
 | `get_workspace` | `{ workspace_id: uuid }` | `WorkspaceDetail` (+ `enabled`) | GET `/api/workspaces/:id` |
-| `get_board_statuses` | `{ workspace_id: uuid }` | `{ statuses: BoardStatusSummary[] }` | GET `/api/workspaces/:id/statuses?refresh=1` |
+| `get_board_statuses` | `{ workspace_id: uuid }` | `{ statuses: BoardStatusSummary[] }` | GET `/api/workspaces/:id/statuses?refresh=true` |
 | `list_executors` | `{}` | `{ items: ExecutorSummary[] }` | GET `/api/executors?page_size=100` |
 | `list_agents` | `{ workspace_id: uuid }` | `{ items: AgentSummary[] }` | GET `/api/agents?workspace=:id&page_size=100` |
 | `create_workspace` | `{ name, jira_site_url(url), board, expires_at(iso), repositories? }` | `{ workspace_id, project_key, board_type, enabled(false) }` | POST `/api/workspaces` (server injects email/token) |
