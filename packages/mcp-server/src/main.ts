@@ -57,6 +57,27 @@ const TOOL_DEFS = [
       'Finish the run with a structured report (outcome, summary, checks, optional artifacts). The single normal way to end a session.',
     schema: CallbackTools.complete_task,
   },
+  // feature 011: read-only Jira tools — eyes, not voice. Reads are served by
+  // the orchestration system with the workspace's own Jira access; nothing
+  // here can write to Jira.
+  {
+    name: 'get_project_overview',
+    description:
+      'Read the Jira project overview for this workspace: board type, exact workflow status names, issue types, and the active sprint (if any). Read-only.',
+    schema: CallbackTools.get_project_overview,
+  },
+  {
+    name: 'search_tickets',
+    description:
+      'Search tickets within this workspace (structured filters: text, status, issue_type, max_results ≤ 50). Returns key/summary/status/type/assignee/updated, newest first. Read-only.',
+    schema: CallbackTools.search_tickets,
+  },
+  {
+    name: 'get_ticket',
+    description:
+      'Read one ticket of this workspace by key: summary, description, status, type, labels, links, and the latest comments. Read-only.',
+    schema: CallbackTools.get_ticket,
+  },
 ] as const;
 
 const server = new Server({ name: 'brigadir', version: '0.0.1' }, { capabilities: { tools: {} } });
@@ -78,6 +99,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request): Promise<ServerR
       return (await handlers.request_human(args)) as unknown as ServerResult;
     case 'complete_task':
       return (await handlers.complete_task(args)) as unknown as ServerResult;
+    case 'get_project_overview':
+      return (await handlers.get_project_overview(args)) as unknown as ServerResult;
+    case 'search_tickets':
+      return (await handlers.search_tickets(args)) as unknown as ServerResult;
+    case 'get_ticket':
+      return (await handlers.get_ticket(args)) as unknown as ServerResult;
     default:
       return {
         content: [{ type: 'text', text: `unknown tool: ${name}` }],

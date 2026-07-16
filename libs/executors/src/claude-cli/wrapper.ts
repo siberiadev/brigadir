@@ -35,6 +35,12 @@ function callbackToolsSection(): string[] {
       'it to be scannable; keep `title` a plain-text one-liner.',
     '- mcp__brigadir__complete_task(schema_version, outcome, summary, checks[, human_task]' +
       '[, artifacts]) — finish the run. This is the single normal way to end a session.',
+    'You also have read-only Jira tools — eyes, not voice: ' +
+      'mcp__brigadir__get_project_overview() for the board type, workflow status names, issue ' +
+      'types, and active sprint; mcp__brigadir__search_tickets(text?, status?, issue_type?) to ' +
+      'find tickets in this workspace; mcp__brigadir__get_ticket(key) for a ticket\'s full ' +
+      'description, latest comments, and links. Use them whenever you need more context than ' +
+      'this prompt carries; they cannot change anything in Jira.',
     '- outcome="success" ONLY if every required check actually passed in this session. Never ' +
       'claim a check passed without running it.',
     '- outcome="failure" if something required failed — report each check honestly with its ' +

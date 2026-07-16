@@ -6,7 +6,7 @@ import type {
   JiraFeatureContext,
   BoardStatus,
 } from '@brigadir/contracts';
-import type { JiraClient } from './jira-client.interface';
+import type { JiraClient, JiraIssueDetail } from './jira-client.interface';
 
 /**
  * What the resolver returns on each resolution: a cheap credential
@@ -74,6 +74,15 @@ export class LazyJiraClient implements JiraClient {
   }
   async getProjectStatuses(projectKey: string): Promise<BoardStatus[]> {
     return (await this.client()).getProjectStatuses(projectKey);
+  }
+  async getProjectIssueTypes(projectKey: string): Promise<string[]> {
+    return (await this.client()).getProjectIssueTypes(projectKey);
+  }
+  async getIssueDetail(issueKey: string): Promise<JiraIssueDetail> {
+    return (await this.client()).getIssueDetail(issueKey);
+  }
+  async searchIssues(jql: string, fields: string[], maxResults: number): Promise<JiraIssue[]> {
+    return (await this.client()).searchIssues(jql, fields, maxResults);
   }
   async transitionTo(issueKey: string, targetStatusName: string): Promise<void> {
     return (await this.client()).transitionTo(issueKey, targetStatusName);

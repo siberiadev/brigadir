@@ -89,6 +89,44 @@ async function postWithRetry(
   }
 }
 
+/** GET with the same bounded-retry posture (feature 011 read tools). */
+async function getWithRetry(
+  url: string,
+  runToken: string,
+  cfg: Required<Pick<ToolHandlersConfig, 'fetchImpl' | 'maxRetries' | 'retryDelayMs'>>,
+): Promise<CallbackResponse> {
+  let attempt = 0;
+  for (;;) {
+    let res: Response | undefined;
+    let networkError: unknown;
+    try {
+      res = await cfg.fetchImpl(url, {
+        method: 'GET',
+        headers: { authorization: `Bearer ${runToken}` },
+      });
+    } catch (err) {
+      networkError = err;
+    }
+
+    const transient = networkError !== undefined || (res !== undefined && res.status >= 500);
+    if (!transient) {
+      return { status: res!.status, body: await safeJson(res!) };
+    }
+
+    attempt++;
+    if (attempt > cfg.maxRetries) {
+      if (networkError !== undefined) {
+        return {
+          status: 0,
+          body: { ok: false, error: `network error: ${String(networkError)}` },
+        };
+      }
+      return { status: res!.status, body: await safeJson(res!) };
+    }
+    await sleep(cfg.retryDelayMs(attempt));
+  }
+}
+
 function toResult(response: CallbackResponse): ToolCallResult {
   const isError = response.status < 200 || response.status >= 300;
   return {
@@ -101,6 +139,9 @@ export function createToolHandlers(config: ToolHandlersConfig): {
   report_progress: (args: unknown) => Promise<ToolCallResult>;
   request_human: (args: unknown) => Promise<ToolCallResult>;
   complete_task: (args: unknown) => Promise<ToolCallResult>;
+  get_project_overview: (args: unknown) => Promise<ToolCallResult>;
+  search_tickets: (args: unknown) => Promise<ToolCallResult>;
+  get_ticket: (args: unknown) => Promise<ToolCallResult>;
 } {
   const cfg = {
     fetchImpl: config.fetchImpl ?? fetch,
@@ -146,6 +187,45 @@ export function createToolHandlers(config: ToolHandlersConfig): {
       if (response.status >= 200 && response.status < 300) {
         await writeMarker(config.markerPath);
       }
+      return toResult(response);
+    },
+
+    // --- feature 011: read-only Jira tools (contracts/jira-read-tools.md).
+    // Reads never touch the completion marker; 4xx (403 out_of_scope, 404,
+    // 422) surfaces verbatim to the model as a tool error.
+
+    async get_project_overview(_args: unknown): Promise<ToolCallResult> {
+      const response = await getWithRetry(
+        `${base}/runs/${config.runId}/jira/overview`,
+        config.runToken,
+        cfg,
+      );
+      return toResult(response);
+    },
+
+    async search_tickets(args: unknown): Promise<ToolCallResult> {
+      const response = await postWithRetry(
+        `${base}/runs/${config.runId}/jira/search`,
+        args ?? {},
+        config.runToken,
+        cfg,
+      );
+      return toResult(response);
+    },
+
+    async get_ticket(args: unknown): Promise<ToolCallResult> {
+      const key = (args as { key?: unknown } | null)?.key;
+      if (typeof key !== 'string' || key.length === 0) {
+        return {
+          content: [{ type: 'text', text: '{"ok":false,"error":"key is required"}' }],
+          isError: true,
+        };
+      }
+      const response = await getWithRetry(
+        `${base}/runs/${config.runId}/jira/tickets/${encodeURIComponent(key)}`,
+        config.runToken,
+        cfg,
+      );
       return toResult(response);
     },
   };

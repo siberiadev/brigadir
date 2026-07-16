@@ -40,11 +40,40 @@ export interface JiraClient {
    * column-less list (feature 005, R3 / FR-011).
    */
   getProjectStatuses(projectKey: string): Promise<BoardStatus[]>;
+  /** The project's issue-type names, from the same /statuses response shape (feature 011, D7). */
+  getProjectIssueTypes(projectKey: string): Promise<string[]>;
+  /**
+   * GET /issue/{key}?fields=summary,description,status,issuetype,labels,issuelinks,comment
+   * — the full single-ticket read backing the `get_ticket` callback tool
+   * (feature 011, D7). Comments newest-first; bodies are ADF (Cloud v3),
+   * markdown conversion is the caller's concern.
+   */
+  getIssueDetail(issueKey: string): Promise<JiraIssueDetail>;
+  /**
+   * One bounded page of POST /rest/api/3/search/jql (never auto-paginates,
+   * unlike searchUpdated) — backs the `search_tickets` callback tool
+   * (feature 011, D7). Callers compose the JQL server-side (D6).
+   */
+  searchIssues(jql: string, fields: string[], maxResults: number): Promise<JiraIssue[]>;
 
   // --- mutations (serialized per issue key) ---
   /** Discover→match-by-name→POST; TTL cache; 409 retry once; NoTransitionPath. */
   transitionTo(issueKey: string, targetStatusName: string): Promise<void>;
   addComment(issueKey: string, body: ADFDoc): Promise<void>;
+}
+
+/** The `get_ticket` read shape (feature 011). */
+export interface JiraIssueDetail {
+  key: string;
+  summary: string | null;
+  status: string;
+  issueType: string;
+  labels: string[];
+  description: ADFDoc | string | null;
+  links: Array<{ type: string; direction: 'inward' | 'outward'; key: string; status: string }>;
+  /** Newest first. */
+  comments: Array<{ author: string; created: string; body: ADFDoc | string | null }>;
+  projectKey: string;
 }
 
 export const JIRA_CLIENT = Symbol('JIRA_CLIENT');

@@ -2,13 +2,16 @@ import {
   Body,
   ConflictException,
   Controller,
+  Get,
   HttpCode,
   Param,
   Post,
   UnprocessableEntityException,
   UseGuards,
 } from '@nestjs/common';
+import { GetTicketSchema, SearchTicketsSchema } from '@brigadir/contracts';
 import { CallbackService } from './callback.service';
+import { JiraReadService } from './jira-read.service';
 import { RunTokenGuard } from './run-token.guard';
 
 /**
@@ -19,7 +22,12 @@ import { RunTokenGuard } from './run-token.guard';
 @Controller('api/callbacks/runs/:runId')
 @UseGuards(RunTokenGuard)
 export class CallbackController {
-  constructor(private readonly callback: CallbackService) {}
+  constructor(
+    private readonly callback: CallbackService,
+    // feature 011 (FR-008..011): read-only Jira reads for EVERY run — same
+    // guard, workspace-scoped, credential-free for the agent.
+    private readonly jiraRead: JiraReadService,
+  ) {}
 
   @Post('progress')
   @HttpCode(200)
@@ -52,5 +60,31 @@ export class CallbackController {
       throw new ConflictException({ ok: false, error: 'conflict' });
     }
     return result;
+  }
+
+  // --- feature 011: read-only Jira tools (contracts/jira-read-tools.md) ---
+
+  @Get('jira/overview')
+  async jiraOverview(@Param('runId') runId: string): Promise<unknown> {
+    return this.jiraRead.overview(runId);
+  }
+
+  @Post('jira/search')
+  @HttpCode(200)
+  async jiraSearch(@Param('runId') runId: string, @Body() body: unknown): Promise<unknown> {
+    const parsed = SearchTicketsSchema.safeParse(body ?? {});
+    if (!parsed.success) {
+      throw new UnprocessableEntityException({ ok: false, errors: parsed.error.issues });
+    }
+    return this.jiraRead.search(runId, parsed.data);
+  }
+
+  @Get('jira/tickets/:key')
+  async jiraTicket(@Param('runId') runId: string, @Param('key') key: string): Promise<unknown> {
+    const parsed = GetTicketSchema.safeParse({ key });
+    if (!parsed.success) {
+      throw new UnprocessableEntityException({ ok: false, errors: parsed.error.issues });
+    }
+    return this.jiraRead.getTicket(runId, parsed.data);
   }
 }
