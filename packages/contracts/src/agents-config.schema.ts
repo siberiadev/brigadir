@@ -152,14 +152,14 @@ export const AgentsConfigSchema = z
     config.agents.forEach((agent, index) => {
       if (!executorNames.has(agent.executor)) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: 'custom',
           path: ['agents', index, 'executor'],
           message: `references unknown executor "${agent.executor}"`,
         });
       }
       if (seenAgentNames.has(agent.name)) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: 'custom',
           path: ['agents', index, 'name'],
           message: `duplicate agent name "${agent.name}"`,
         });
@@ -174,7 +174,7 @@ export const AgentsConfigSchema = z
       if (executor.type !== 'claude_cli') continue;
       if (!repoNames.has(executor.repository)) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: 'custom',
           path: ['executors', name, 'repository'],
           message: `references unknown repository "${executor.repository}" — must match one of workspace.repositories[].name`,
         });
@@ -191,7 +191,7 @@ export const AgentsConfigSchema = z
       const behaviorTools = agent.behavior?.allowed_tools;
       if (!behaviorTools || behaviorTools.length === 0) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: 'custom',
           path: ['agents', index, 'behavior', 'allowed_tools'],
           message: `agent "${agent.name}" uses claude_cli executor "${agent.executor}" but neither the executor's allowedTools nor the agent's behavior.allowed_tools declare any tools`,
         });

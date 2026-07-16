@@ -794,3 +794,35 @@ tkt? claim), §6 (`team` outcome).
 Tests in the same change: contracts 77, mcp-server 14, unit 244, integration
 249 (incl. the full Scenario A loop, generate race SC-003, atomic rejection
 SC-004, replay SC-007, read-tool scope/truncation/guard parity SC-005), web 160.
+
+## Iteration 16 — zod 3 → zod 4 migration (2026-07-16)
+
+Whole-monorepo bump to `zod@^4` (installed 4.4.3), dropping `zod-to-json-schema`
+entirely: both JSON Schema production sites (`--json-schema` argv in
+`libs/executors/src/claude-cli/args.ts` and the MCP `inputSchema` in
+`packages/mcp-server/src/main.ts`) now use the native `z.toJSONSchema(schema,
+{ target: 'draft-7' })` — the target is PINNED to draft-07 deliberately, so the
+wire dialect fed to the claude CLI and MCP clients does not change with the
+migration (zod 4 defaults to draft 2020-12; switching dialects is a separate
+decision, not a side effect). The `zodToJsonSchemaUntyped` boxing hack (zod
+3.25 v3/v4 declaration split) died with the dependency.
+
+Code deltas were small: `z.ZodIssueCode.custom` → literal `'custom'` (8 sites,
+valid in both versions), and zod 4 widening `issue.path` to `PropertyKey[]` —
+handled centrally by a new `zodIssuePath()` helper in
+`apps/backend/src/dashboard/dashboard.errors.ts` (symbols stringified; the wire
+`ErrorIssue.path` stays `(string|number)[]`), used by every controller that
+serializes zod issues into 422 bodies. `z.record` call sites were already
+two-argument. Deprecated-but-functional v3 idioms (`.strict()`, `.passthrough()`,
+`z.string().uuid()/.url()`) left as-is — cosmetic modernization deferred.
+
+Motivation (analysis 2026-07-16): native converter maintained with the schemas
+(kills a third-party fidelity risk), ~100× fewer type instantiations for the
+strict monorepo typecheck, smaller client bundle for apps/web, and the upcoming
+admin-mcp package gets `.meta()`/`z.toJSONSchema` first-class instead of a
+schema-parity test against v3 contracts.
+
+Verified: args snapshot updated after asserting the draft-07 output is
+semantically identical ($schema, enums incl. `team`, required, additionalProperties,
+bounds, descriptions). Full gates green: contracts 77, mcp-server 14, unit 244,
+web 160, integration 249.

@@ -28,7 +28,7 @@ import {
   type LintableAgent,
 } from '@brigadir/contracts';
 import { DashboardTokenGuard } from './dashboard-token.guard';
-import { statusesUnavailable, validationError } from './dashboard.errors';
+import { statusesUnavailable, validationError, zodIssuePath } from './dashboard.errors';
 import { parsePagination } from './dashboard.helpers';
 
 type AgentRow = typeof schema.agents.$inferSelect;
@@ -204,7 +204,7 @@ export class AgentsController {
     if (!parsed.success) {
       throw validationError(
         'Request could not be validated.',
-        parsed.error.issues.map((i) => ({ path: i.path, code: i.code, message: i.message, level: 'error' as const })),
+        parsed.error.issues.map((i) => ({ path: zodIssuePath(i.path), code: i.code, message: i.message, level: 'error' as const })),
       );
     }
 
@@ -236,7 +236,7 @@ export class AgentsController {
     if (!parsed.success) {
       throw validationError(
         'Agent could not be saved.',
-        parsed.error.issues.map((i) => ({ path: i.path, code: i.code, message: i.message, level: 'error' as const })),
+        parsed.error.issues.map((i) => ({ path: zodIssuePath(i.path), code: i.code, message: i.message, level: 'error' as const })),
       );
     }
     return parsed.data;

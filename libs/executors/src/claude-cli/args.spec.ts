@@ -1,17 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { z } from 'zod';
 import { ReportSchema } from '@brigadir/contracts';
 import { buildArgs, type ArgsInput } from './args';
-
-// See args.ts's comment: zod-to-json-schema's types import from "zod/v3",
-// structurally distinct (and too deep for TS to unify) from the plain "zod"
-// ReportSchema is declared with. Boxed through `unknown` here too, purely to
-// keep this test file itself typecheckable outside vitest's type-stripping
-// transform.
-const zodToJsonSchemaUntyped = zodToJsonSchema as unknown as (
-  schema: unknown,
-  options?: unknown,
-) => Record<string, unknown>;
 
 const input: ArgsInput = {
   model: 'claude-sonnet-5',
@@ -56,12 +46,13 @@ describe('buildArgs (T077)', () => {
     expect(keys).not.toContain('ticket');
   });
 
-  it('--json-schema value JSON.parses to a schema equivalent to zodToJsonSchema(ReportSchema)', () => {
+  it('--json-schema value JSON.parses to a schema equivalent to z.toJSONSchema(ReportSchema)', () => {
     const args = buildArgs(input);
     const idx = args.indexOf('--json-schema');
     expect(idx).toBeGreaterThanOrEqual(0);
     const parsed = JSON.parse(args[idx + 1]);
-    expect(parsed).toEqual(zodToJsonSchemaUntyped(ReportSchema, { target: 'jsonSchema7' }));
+    // draft-07 target pinned — the CLI has always been fed this dialect.
+    expect(parsed).toEqual(z.toJSONSchema(ReportSchema, { target: 'draft-7' }));
   });
 
   it('omits --max-turns/--max-budget-usd when not configured', () => {

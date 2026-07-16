@@ -130,28 +130,28 @@ export const ReportSchema = z
   .superRefine((report, ctx) => {
     if (report.outcome === 'needs_human' && report.human_task === undefined) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: 'custom',
         path: ['human_task'],
         message: 'human_task is required when outcome is "needs_human"',
       });
     }
     if (report.outcome === 'routed' && report.routing === undefined) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: 'custom',
         path: ['routing'],
         message: 'routing is required when outcome is "routed"',
       });
     }
     if (report.outcome === 'team' && report.team === undefined) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: 'custom',
         path: ['team'],
         message: 'team is required when outcome is "team"',
       });
     }
     if (report.outcome !== 'team' && report.team !== undefined) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: 'custom',
         path: ['team'],
         message: 'team is only allowed when outcome is "team"',
       });

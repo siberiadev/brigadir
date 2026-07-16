@@ -1,18 +1,6 @@
 import { join } from 'node:path';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { z } from 'zod';
 import { ReportSchema } from '@brigadir/contracts';
-
-// zod-to-json-schema's types import from the "zod/v3" compat subpath, which
-// TS treats as structurally distinct from the plain "zod" import contracts'
-// ReportSchema is built with (zod 3.25's v3/v4 split) — same runtime classes,
-// incompatible declaration identities, and deep enough to blow TS's
-// instantiation-depth limit. The call is boxed through `unknown` so runtime
-// behavior (calling the real function with the real schema) is untouched
-// while sidestepping that cross-declaration generic inference entirely.
-const zodToJsonSchemaUntyped = zodToJsonSchema as unknown as (
-  schema: unknown,
-  options?: unknown,
-) => Record<string, unknown>;
 
 /** The three callback tools' MCP names (contracts/mcp-config.md D3) — appended to --allowed-tools. */
 export const CALLBACK_TOOL_NAMES = [
@@ -35,7 +23,13 @@ export interface ArgsInput {
   stopHookSettingsJson?: string;
 }
 
-const REPORT_JSON_SCHEMA = zodToJsonSchemaUntyped(ReportSchema, { target: 'jsonSchema7' });
+// zod 4 native converter (migration 2026-07-16, replaces zod-to-json-schema).
+// target stays draft-07: that's what the CLI consumer has always been fed —
+// the migration must not change the wire dialect of `--json-schema`.
+const REPORT_JSON_SCHEMA = z.toJSONSchema(ReportSchema, { target: 'draft-7' }) as Record<
+  string,
+  unknown
+>;
 
 /**
  * Build the `claude` argv (research D1/D7, contracts/cli-io.md's verified

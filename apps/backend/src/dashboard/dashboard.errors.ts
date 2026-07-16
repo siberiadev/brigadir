@@ -6,6 +6,14 @@ import type { ErrorIssue } from '@brigadir/contracts';
  * error shape). The wizard/agent form attaches each issue to its field. No raw
  * stack traces (SC-009).
  */
+/**
+ * zod 4: `issue.path` is `PropertyKey[]` (symbols possible in exotic schemas);
+ * the wire `ErrorIssue.path` stays `(string | number)[]` — symbols stringified.
+ */
+export function zodIssuePath(path: PropertyKey[]): (string | number)[] {
+  return path.map((p) => (typeof p === 'symbol' ? String(p) : p));
+}
+
 export function validationError(
   message: string,
   issues: ErrorIssue[],

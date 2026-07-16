@@ -28,7 +28,7 @@ import {
   type JiraBoardType,
 } from '@brigadir/contracts';
 import { DashboardTokenGuard } from './dashboard-token.guard';
-import { conflictError, fieldError, notFoundError, statusesUnavailable, validationError } from './dashboard.errors';
+import { conflictError, fieldError, notFoundError, statusesUnavailable, validationError, zodIssuePath } from './dashboard.errors';
 import { extractBoardId, deriveCredentialStatus, parsePagination } from './dashboard.helpers';
 
 /** Minimal response shape — avoids an `@types/express` dependency (same as agents.controller). */
@@ -377,9 +377,9 @@ export class WorkspacesController {
 }
 
 /** Map a zod parse failure to the shared path-qualified error shape. */
-function zodToValidationError(error: { issues: { path: (string | number)[]; message: string; code: string }[] }) {
+function zodToValidationError(error: { issues: { path: PropertyKey[]; message: string; code: string }[] }) {
   return validationError(
     'Request could not be validated.',
-    error.issues.map((i) => ({ path: i.path, code: i.code, message: i.message, level: 'error' as const })),
+    error.issues.map((i) => ({ path: zodIssuePath(i.path), code: i.code, message: i.message, level: 'error' as const })),
   );
 }
