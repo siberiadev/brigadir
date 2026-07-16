@@ -55,7 +55,9 @@ function trunc(value: string, budget: number): string {
 
 interface FailingRunFacts {
   workspaceId: string;
-  ticketId: string;
+  // Null when the referenced run is ticketless (feature 011) — the roster/budget
+  // block degrades away (best-effort, FR-013 of 010).
+  ticketId: string | null;
   report: AgentReport | null;
 }
 
@@ -159,7 +161,7 @@ async function buildTriageSection(triggerEvent: TriggerEvent, db: BrigadirDb): P
   lines.push(...failureLines(failing?.report ?? null, { includeWarnings: true }));
   lines.push('');
 
-  if (failing?.workspaceId) {
+  if (failing?.workspaceId && failing.ticketId !== null) {
     const rb = await rosterAndBudgetLines(db, failing.workspaceId, failing.ticketId);
     lines.push(...rb.lines);
   }
@@ -198,7 +200,7 @@ async function buildAnswerTriageSection(
   lines.push(...failureLines(failing?.report ?? null, { includeWarnings: true }));
   lines.push('');
 
-  if (failing?.workspaceId) {
+  if (failing?.workspaceId && failing.ticketId !== null) {
     const rb = await rosterAndBudgetLines(db, failing.workspaceId, failing.ticketId);
     lines.push(...rb.lines);
     if (!rb.budgetAvailable) {

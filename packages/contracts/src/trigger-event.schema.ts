@@ -22,6 +22,14 @@ export const MOCK_SCENARIOS = [
   // FR-024: the mock orchestrator emits a `routed` report (target read from the
   // trigger event) so integration tests can drive the full triage→route loop.
   'routed',
+  // Feature 011 (D15): the mock orchestrator emits a `team` report (roster read
+  // from the agent's behavior) so integration tests can drive the full
+  // generate→propose→apply→review loop without a live agent.
+  'team',
+  // Feature 011 (D15): first submits a proposal with a bogus status (must be
+  // rejected 422 with zero agents created), then exits without a valid report —
+  // exercising the repair-loop rejection and the fail-closed path.
+  'team_invalid',
 ] as const;
 
 export type MockScenario = (typeof MOCK_SCENARIOS)[number];
@@ -36,6 +44,10 @@ export type MockScenario = (typeof MOCK_SCENARIOS)[number];
  *   task with the orchestrator as the resume target — carries the Q&A
  *   (`human_task_id` + `resolution`) alongside the failing-run reference; the
  *   rework run it decides is exempt from the cycle budget (a human answered).
+ * - `workspace-setup` (feature 011, D1): ticketless orchestrator run started by
+ *   the explicit "Generate agents" action; carries `human_task_id`/`resolution`
+ *   when resumed from a parked setup question. Skips BullMQ dedup like the
+ *   continuation sources — `runs_one_active_setup` is the authority.
  */
 export const TRIGGER_SOURCES = [
   'manual',
@@ -45,6 +57,7 @@ export const TRIGGER_SOURCES = [
   'triage',
   'rework',
   'answer-triage',
+  'workspace-setup',
 ] as const;
 
 export type TriggerSource = (typeof TRIGGER_SOURCES)[number];

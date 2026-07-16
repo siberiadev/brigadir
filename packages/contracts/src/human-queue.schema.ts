@@ -35,7 +35,9 @@ export const HumanQueueItemSchema = z
     title: z.string(),
     details: z.string().nullable(),
     blocking: z.boolean(),
-    ticket: HumanTaskTicketRefSchema,
+    // Null for ticketless tasks (feature 011: workspace-setup review/failure/
+    // question tasks) — the UI renders a "Workspace setup" label, no Jira link.
+    ticket: HumanTaskTicketRefSchema.nullable(),
     agent: HumanTaskAgentRefSchema.nullable(),
     // feature 010 (FR-017): the task's workspace, so the resume picker can load
     // that workspace's enabled non-orchestrator agents.

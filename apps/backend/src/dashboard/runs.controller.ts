@@ -1,5 +1,5 @@
 import { Controller, Get, HttpCode, Inject, Param, Post, Query, UseGuards } from '@nestjs/common';
-import { and, desc, eq, ilike, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, isNull, sql } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import { RunTriggerService } from '@brigadir/runs';
 import {
@@ -41,6 +41,7 @@ export class RunsController {
     @Query('agent') agent?: string,
     @Query('status') status?: string,
     @Query('ticket') ticket?: string,
+    @Query('source') source?: string,
     @Query('page') pageRaw?: string,
     @Query('page_size') pageSizeRaw?: string,
   ): Promise<RunListResponse> {
@@ -49,7 +50,11 @@ export class RunsController {
     const filters = [eq(schema.runs.workspaceId, workspaceId)];
     if (agent) filters.push(eq(schema.runs.agentId, agent));
     if (status) filters.push(eq(schema.runs.status, status));
+    // Left-joined column: NULL never ilike-matches, so ticketless setup runs
+    // simply never match a key filter — `source` is the way to find them.
     if (ticket) filters.push(ilike(schema.tickets.jiraKey, `%${ticket}%`));
+    // Feature 011 (D11): trigger-source filter — drives the Generate button state.
+    if (source) filters.push(sql`${schema.runs.triggerEvent} ->> 'source' = ${source}`);
     const where = and(...filters);
 
     const siteUrl = await this.workspaceSiteUrl(workspaceId);
@@ -57,7 +62,7 @@ export class RunsController {
     const [{ total }] = await this.db
       .select({ total: sql<number>`count(*)::int` })
       .from(schema.runs)
-      .innerJoin(schema.tickets, eq(schema.runs.ticketId, schema.tickets.id))
+      .leftJoin(schema.tickets, eq(schema.runs.ticketId, schema.tickets.id))
       .where(where);
 
     const rows = await this.db
@@ -75,7 +80,8 @@ export class RunsController {
         createdAt: schema.runs.createdAt,
       })
       .from(schema.runs)
-      .innerJoin(schema.tickets, eq(schema.runs.ticketId, schema.tickets.id))
+      // Left join (feature 011): ticketless workspace-setup runs stay listed.
+      .leftJoin(schema.tickets, eq(schema.runs.ticketId, schema.tickets.id))
       .innerJoin(schema.agents, eq(schema.runs.agentId, schema.agents.id))
       .where(where)
       .orderBy(desc(schema.runs.createdAt))
@@ -86,7 +92,10 @@ export class RunsController {
       items: rows.map((r) => ({
         run_id: r.runId,
         agent: { id: r.agentId, name: r.agentName },
-        ticket: { key: r.ticketKey, summary: r.ticketSummary, jira_url: deepLink(siteUrl, r.ticketKey) },
+        ticket:
+          r.ticketKey === null
+            ? null
+            : { key: r.ticketKey, summary: r.ticketSummary, jira_url: deepLink(siteUrl, r.ticketKey) },
         status: r.status as RunStatus,
         attempt: r.attempt,
         duration_ms: durationMs(r.startedAt, r.finishedAt),
@@ -152,7 +161,8 @@ export class RunsController {
       })
       .from(schema.runs)
       .innerJoin(schema.agents, eq(schema.runs.agentId, schema.agents.id))
-      .innerJoin(schema.tickets, eq(schema.runs.ticketId, schema.tickets.id))
+      // Left join (feature 011): a ticketless setup run's card must resolve.
+      .leftJoin(schema.tickets, eq(schema.runs.ticketId, schema.tickets.id))
       .innerJoin(schema.workspaces, eq(schema.runs.workspaceId, schema.workspaces.id))
       .where(eq(schema.runs.id, runId))
       .limit(1);
@@ -184,7 +194,12 @@ export class RunsController {
       })
       .from(schema.runs)
       .innerJoin(schema.agents, eq(schema.runs.agentId, schema.agents.id))
-      .where(eq(schema.runs.ticketId, run.ticketId))
+      // Ticketless runs: history = the workspace's setup runs (feature 011).
+      .where(
+        run.ticketId === null
+          ? and(eq(schema.runs.workspaceId, run.workspaceId), isNull(schema.runs.ticketId))
+          : eq(schema.runs.ticketId, run.ticketId),
+      )
       .orderBy(desc(schema.runs.createdAt));
 
     return {
@@ -205,11 +220,14 @@ export class RunsController {
         started_at: run.startedAt ? run.startedAt.toISOString() : null,
         finished_at: run.finishedAt ? run.finishedAt.toISOString() : null,
       },
-      ticket: {
-        key: run.ticketKey,
-        summary: run.ticketSummary,
-        jira_url: deepLink(run.siteUrl, run.ticketKey),
-      },
+      ticket:
+        run.ticketKey === null
+          ? null
+          : {
+              key: run.ticketKey,
+              summary: run.ticketSummary,
+              jira_url: deepLink(run.siteUrl, run.ticketKey),
+            },
       checks: checks.map((c) => ({
         position: c.position,
         name: c.name,

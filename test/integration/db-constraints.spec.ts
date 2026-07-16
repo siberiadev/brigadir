@@ -62,3 +62,79 @@ describe('runs_one_active partial unique index (T014)', () => {
     expect(active).toHaveLength(1);
   });
 });
+
+describe('runs_one_active_setup partial unique index + nullable tickets (feature 011, T006)', () => {
+  let h: DbHarness;
+  let p: SeededPipeline;
+
+  beforeAll(async () => {
+    h = await startDatabase();
+    p = await seedPipeline(h.db);
+  });
+
+  afterAll(async () => {
+    await h?.stop();
+  });
+
+  async function insertSetupRun(status = 'queued'): Promise<void> {
+    await h.db.insert(schema.runs).values({
+      workspaceId: p.workspaceId,
+      ticketId: null,
+      agentId: p.agentId,
+      executorType: 'mock',
+      status,
+      triggerEvent: { source: 'workspace-setup' },
+    });
+  }
+
+  it('accepts ticketless rows on runs and human_tasks', async () => {
+    await expect(insertSetupRun('succeeded')).resolves.toBeUndefined();
+    await expect(
+      h.db.insert(schema.humanTasks).values({
+        workspaceId: p.workspaceId,
+        ticketId: null,
+        kind: 'review',
+        title: 'Team assembled — review the workspace',
+        blocking: false,
+        status: 'open',
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it('permits exactly one ACTIVE ticketless run per workspace under a concurrent race', async () => {
+    const results = await Promise.allSettled([insertSetupRun(), insertSetupRun()]);
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
+
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0].reason as { code?: string }).code).toBe('23505');
+  });
+
+  it('does not let ticketless rows interfere with the ticketed guard (and vice versa)', async () => {
+    // An active TICKETED run coexists with the active ticketless one.
+    await expect(
+      h.db.insert(schema.runs).values({
+        workspaceId: p.workspaceId,
+        ticketId: p.ticketId,
+        agentId: p.agentId,
+        executorType: 'mock',
+        status: 'queued',
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it('allows a new setup run once the prior one is terminal', async () => {
+    await h.db
+      .update(schema.runs)
+      .set({ status: 'failed', finishedAt: sql`now()` })
+      .where(
+        and(
+          eq(schema.runs.workspaceId, p.workspaceId),
+          sql`${schema.runs.ticketId} IS NULL`,
+          inArray(schema.runs.status, ACTIVE),
+        ),
+      );
+    await expect(insertSetupRun()).resolves.toBeUndefined();
+  });
+});

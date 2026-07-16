@@ -50,4 +50,17 @@ describe('buildWrapperText (T103, D6)', () => {
     const text = buildWrapperText(ctx, '/tmp/wt', { useCallbackChannel: true });
     expect(text).not.toContain('## Feature context');
   });
+
+  // feature 011 (D4): ticketless workspace-setup runs get the orchestrator
+  // header — no ticket key, no Jira-ticket framing; the setup handoff (already
+  // prepended to `instruction`) carries the digest and protocol.
+  it('ticketless run: renders the workspace-setup header instead of the ticket header', () => {
+    const setupCtx: RunContext = { ...ctx, ticket: null, instruction: 'Propose the team.' };
+    const text = buildWrapperText(setupCtx, '/tmp/wt', { useCallbackChannel: true });
+    expect(text).toContain('workspace orchestrator');
+    expect(text).toContain('There is no Jira ticket for this run.');
+    expect(text).toContain('Propose the team.');
+    expect(text).not.toContain('BRIG-1');
+    expect(text).not.toContain('working on Jira ticket');
+  });
 });

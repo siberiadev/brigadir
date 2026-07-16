@@ -53,9 +53,17 @@ export interface WrapperOptions {
 }
 
 export function buildWrapperText(ctx: RunContext, worktreeDir: string, options: WrapperOptions): string {
+  // Ticketless workspace-setup runs (feature 011, D4): no ticket header, no
+  // description — the setup handoff (prepended to ctx.instruction) carries the
+  // workspace digest and the team-proposal protocol instead.
+  const header = ctx.ticket
+    ? [
+        `You are an autonomous coding agent working on Jira ticket ${ctx.ticket.key}: ${ctx.ticket.summary}`,
+        ctx.ticket.description ? `\n${ctx.ticket.description}` : '',
+      ]
+    : ['You are the workspace orchestrator preparing this workspace. There is no Jira ticket for this run.'];
   const lines = [
-    `You are an autonomous coding agent working on Jira ticket ${ctx.ticket.key}: ${ctx.ticket.summary}`,
-    ctx.ticket.description ? `\n${ctx.ticket.description}` : '',
+    ...header,
     '',
     '## Your task',
     ctx.instruction,

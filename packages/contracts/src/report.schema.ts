@@ -10,7 +10,7 @@ import { z } from 'zod';
  * outcome=needs_human REQUIRES human_task (Constitution Principle IV).
  */
 
-export const REPORT_OUTCOMES = ['success', 'failure', 'needs_human', 'routed'] as const;
+export const REPORT_OUTCOMES = ['success', 'failure', 'needs_human', 'routed', 'team'] as const;
 export const CHECK_STATUSES = ['pass', 'fail', 'skip', 'warn'] as const;
 export const HUMAN_TASK_KINDS = ['question', 'blocker', 'review'] as const;
 
@@ -33,6 +33,49 @@ export const ReportRoutingSchema = z
       .describe(
         'Self-contained rework task in GitHub-flavored Markdown, framed as a fix of existing work.',
       ),
+  })
+  .strict();
+
+/**
+ * Team proposal (feature 011, FR-013) — required when `outcome==='team'`; only
+ * an orchestrator's workspace-setup run may return it (FR-014, enforced in the
+ * accept path, not the schema). Statuses and the executor profile are NAMES
+ * validated against workspace state at completion-accept time (all-or-nothing;
+ * an invalid proposal is rejected back to the agent as a 422 repair loop).
+ * `description`/`instruction` pass the secret scrubber; identifiers do not.
+ */
+export const TeamAgentSchema = z
+  .object({
+    name: z.string().min(1).max(200).describe('Unique agent name (never the orchestrator\'s).'),
+    description: z
+      .string()
+      .min(1)
+      .max(500)
+      .describe('One roster line: what this agent does (shown to the orchestrator in handoffs).'),
+    instruction: z
+      .string()
+      .min(1)
+      .max(8000)
+      .describe('Self-contained role prompt in GitHub-flavored Markdown.'),
+    trigger_status: z
+      .string()
+      .min(1)
+      .max(100)
+      .describe('Board workflow status that starts this agent.'),
+    status_running: z.string().min(1).max(100).optional(),
+    status_success: z.string().min(1).max(100),
+    status_failure: z.string().min(1).max(100),
+    executor: z
+      .string()
+      .min(1)
+      .max(200)
+      .describe('Executor PROFILE NAME (one of the enabled profiles listed in the handoff).'),
+  })
+  .strict();
+
+export const ReportTeamSchema = z
+  .object({
+    agents: z.array(TeamAgentSchema).min(1).max(20),
   })
   .strict();
 
@@ -80,6 +123,7 @@ export const ReportSchema = z
     checks: z.array(ReportCheckSchema).max(50),
     human_task: ReportHumanTaskSchema.optional(),
     routing: ReportRoutingSchema.optional(),
+    team: ReportTeamSchema.optional(),
     artifacts: ReportArtifactsSchema.optional(),
   })
   .strict()
@@ -96,6 +140,20 @@ export const ReportSchema = z
         code: z.ZodIssueCode.custom,
         path: ['routing'],
         message: 'routing is required when outcome is "routed"',
+      });
+    }
+    if (report.outcome === 'team' && report.team === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['team'],
+        message: 'team is required when outcome is "team"',
+      });
+    }
+    if (report.outcome !== 'team' && report.team !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['team'],
+        message: 'team is only allowed when outcome is "team"',
       });
     }
   });

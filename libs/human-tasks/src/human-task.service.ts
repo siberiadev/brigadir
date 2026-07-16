@@ -116,9 +116,12 @@ export class HumanTaskService {
   private async transitionAndComment(
     workspaceId: string,
     agentId: string,
-    ticketId: string,
+    ticketId: string | null,
     input: CreateHumanTaskInput,
   ): Promise<void> {
+    // Ticketless workspace-setup runs (feature 011): there is no Jira side to
+    // drive — the park + human_tasks row above are the whole effect.
+    if (ticketId === null) return;
     const [agent] = await this.db
       .select({ statusFailure: schema.agents.statusFailure })
       .from(schema.agents)

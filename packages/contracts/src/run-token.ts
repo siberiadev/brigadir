@@ -9,7 +9,9 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 export interface RunTokenClaims {
   sub: string; // runId
   wsp: string; // workspaceId
-  tkt: string; // ticketKey
+  // Ticket key — informational only (the guard verifies `sub` + DB run status,
+  // never `tkt`). Absent for ticketless workspace-setup runs (feature 011, D4).
+  tkt?: string;
   iat: number; // epoch seconds
   exp: number; // epoch seconds
 }

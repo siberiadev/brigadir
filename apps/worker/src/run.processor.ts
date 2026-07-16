@@ -20,7 +20,8 @@ interface LoadedRun {
   triggerEvent: unknown;
   instruction: string;
   timeoutMinutes: number;
-  ticketKey: string;
+  // Null for ticketless workspace-setup runs (feature 011) — tickets left-joined.
+  ticketKey: string | null;
   ticketSummary: string | null;
   jiraSiteUrl: string;
 }
@@ -92,7 +93,14 @@ export class RunProcessor extends WorkerHost implements OnApplicationBootstrap, 
     await this.pipeline.onRunStarted(runId);
 
     // Ticket description + browse URL, fetched lazily from Jira (non-fatal).
-    const detail = await fetchTicketDetail(this.jiraFactory, this.logger, loaded);
+    // Ticketless setup runs have nothing to fetch (feature 011).
+    const detail =
+      loaded.ticketKey === null
+        ? null
+        : await fetchTicketDetail(this.jiraFactory, this.logger, {
+            ...loaded,
+            ticketKey: loaded.ticketKey,
+          });
 
     // feature 010 (FR-012): a triage/rework/human-resume trigger prepends an
     // ephemeral handoff section to the assembled instruction — the agent's
@@ -185,22 +193,26 @@ export class RunProcessor extends WorkerHost implements OnApplicationBootstrap, 
       })
       .from(schema.runs)
       .innerJoin(schema.agents, eq(schema.runs.agentId, schema.agents.id))
-      .innerJoin(schema.tickets, eq(schema.runs.ticketId, schema.tickets.id))
+      // Left join: ticketless workspace-setup runs must still dispatch (feature 011).
+      .leftJoin(schema.tickets, eq(schema.runs.ticketId, schema.tickets.id))
       .innerJoin(schema.workspaces, eq(schema.runs.workspaceId, schema.workspaces.id))
       .where(eq(schema.runs.id, runId))
       .limit(1);
     return row;
   }
 
-  private buildContext(loaded: LoadedRun, detail: TicketDetail, handoff: string): RunContext {
+  private buildContext(loaded: LoadedRun, detail: TicketDetail | null, handoff: string): RunContext {
     return {
       runId: loaded.runId,
-      ticket: {
-        key: loaded.ticketKey,
-        summary: loaded.ticketSummary ?? '',
-        description: detail.description,
-        url: detail.url,
-      },
+      ticket:
+        loaded.ticketKey === null
+          ? null
+          : {
+              key: loaded.ticketKey,
+              summary: loaded.ticketSummary ?? '',
+              description: detail?.description ?? '',
+              url: detail?.url ?? '',
+            },
       instruction: handoff ? `${handoff}\n\n${loaded.instruction}` : loaded.instruction,
       workspaceDir: null,
       callback: { httpBaseUrl: 'http://localhost:3000/api/callbacks', runToken: 'mock-run-token' },

@@ -73,6 +73,11 @@ export class ResumeService {
         await this.closeTask(taskId, 'resolved', input);
         return { outcome: 'closed' };
       }
+      // feature 011 (D12): a ticketless (workspace-setup) task has no ticket to
+      // route — resume always re-creates a setup run; a target agent is invalid.
+      if (input.target_agent_id && task.ticketId === null) {
+        return { outcome: 'invalid_target' };
+      }
       // feature 010 (FR-015): an optional target agent. Validate BEFORE touching
       // any row so an invalid id changes nothing (AC US3-3).
       let target: ResumeTarget | undefined;
@@ -184,7 +189,22 @@ export class ResumeService {
     const effectiveIsOrchestrator = target ? target.isOrchestrator : parkedIsOrchestrator;
     const effectiveBehavior = target ? target.behavior : parkedAgent?.behavior;
 
-    const triggerEvent = effectiveIsOrchestrator
+    // feature 011 (FR-020/D12): a parked workspace-setup run resumes as ANOTHER
+    // setup run carrying the Q&A — never answer-triage (there is no failing
+    // worker run to route, and no ticket).
+    const parkedSource = (parked.triggerEvent as { source?: string } | null)?.source;
+    const isSetupResume = parkedSource === 'workspace-setup';
+
+    const triggerEvent = isSetupResume
+      ? {
+          source: 'workspace-setup',
+          human_task_id: humanTaskId,
+          resolution: answer ?? null,
+          ...(mockScenarioOf(effectiveBehavior)
+            ? { mock_scenario: mockScenarioOf(effectiveBehavior) }
+            : {}),
+        }
+      : effectiveIsOrchestrator
       ? answerTriageTriggerEvent({
           parkedRunId,
           parkedTriggerEvent: parked.triggerEvent,
@@ -247,9 +267,11 @@ export class ResumeService {
   private async transitionToRunning(
     workspaceId: string,
     agentId: string,
-    ticketId: string,
+    ticketId: string | null,
     newRunId: string,
   ): Promise<void> {
+    // Ticketless setup resume (feature 011): nothing to transition.
+    if (ticketId === null) return;
     const [agent] = await this.db
       .select({ statusRunning: schema.agents.statusRunning })
       .from(schema.agents)

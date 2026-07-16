@@ -2,13 +2,15 @@ import { Injectable, Inject, Logger } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { getQueueToken } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import { runQueueName } from '@brigadir/queues';
 import type { TriggerEvent } from '@brigadir/contracts';
 
 export interface TriggerInput {
-  ticketId: string;
+  // Null for ticketless workspace-setup runs (feature 011, D2) — the
+  // `runs_one_active_setup` partial index guards those per workspace.
+  ticketId: string | null;
   agentId: string;
   triggerEvent?: TriggerEvent;
 }
@@ -29,6 +31,14 @@ const ACTIVE_STATUSES = ['queued', 'running', 'awaiting_human'];
  * (idempotency level 3) is the authority, so the BullMQ dedup layer is dropped.
  */
 const CONTINUATION_SOURCES = new Set(['triage', 'rework', 'human-resume', 'answer-triage']);
+
+/**
+ * Sources that skip the BullMQ dedup layer entirely. `workspace-setup` joins
+ * the continuation set (feature 011, D1): its dedup id would be built from a
+ * NULL ticket, and a retained completed setup job must not swallow a later
+ * legitimate regeneration — `runs_one_active_setup` (level 3) is the authority.
+ */
+const QUEUE_DEDUP_SKIP_SOURCES = new Set([...CONTINUATION_SOURCES, 'workspace-setup']);
 
 /**
  * RunTriggerService (contracts C6) — the single enqueue seam.
@@ -90,26 +100,29 @@ export class RunTriggerService {
       runId = row.id;
     } catch (err) {
       if ((err as { code?: string }).code === '23505') {
+        // 23505 comes from `runs_one_active` (ticketed) or `runs_one_active_setup`
+        // (ticketless, per-workspace) — the lookup mirrors whichever guard fired.
         const [existing] = await this.db
           .select({ id: schema.runs.id })
           .from(schema.runs)
           .where(
             and(
-              eq(schema.runs.ticketId, ticketId),
-              eq(schema.runs.agentId, agentId),
+              ticketId === null
+                ? and(eq(schema.runs.workspaceId, agent.workspaceId), isNull(schema.runs.ticketId))
+                : and(eq(schema.runs.ticketId, ticketId), eq(schema.runs.agentId, agentId)),
               inArray(schema.runs.status, ACTIVE_STATUSES),
             ),
           )
           .limit(1);
         this.logger.log(
-          `trigger deduplicated (ticket ${ticketId}, agent ${agentId}) → existing run ${existing?.id ?? '?'}`,
+          `trigger deduplicated (ticket ${ticketId ?? 'none'}, agent ${agentId}) → existing run ${existing?.id ?? '?'}`,
         );
         return { deduplicated: true, existingRunId: existing?.id };
       }
       throw err;
     }
 
-    const isContinuation = CONTINUATION_SOURCES.has(triggerEvent?.source ?? 'manual');
+    const skipQueueDedup = QUEUE_DEDUP_SKIP_SOURCES.has(triggerEvent?.source ?? 'manual');
     const queue = this.getRunQueue(executorType);
     await queue.add(
       'run',
@@ -119,10 +132,10 @@ export class RunTriggerService {
         // resolve the exact BullMQ Job for job.updateProgress() from the
         // backend process without a new DB column.
         jobId: runId,
-        // Triage/rework/resume continuations skip the BullMQ dedup layer to
-        // avoid the retained-job swallow (see CONTINUATION_SOURCES); the DB
-        // `runs_one_active` guard already made this enqueue exactly-once.
-        ...(isContinuation ? {} : { deduplication: { id: `${ticketId}:${agentId}` } }),
+        // Triage/rework/resume continuations and workspace-setup skip the BullMQ
+        // dedup layer to avoid the retained-job swallow (QUEUE_DEDUP_SKIP_SOURCES);
+        // the DB partial unique guards already made this enqueue exactly-once.
+        ...(skipQueueDedup ? {} : { deduplication: { id: `${ticketId}:${agentId}` } }),
         attempts: agent.maxAttempts,
         backoff: { type: 'custom' },
       },

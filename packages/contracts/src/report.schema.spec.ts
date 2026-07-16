@@ -110,4 +110,72 @@ describe('ReportSchema v1', () => {
       expect(ReportSchema.safeParse(r).success).toBe(false);
     });
   });
+
+  describe('team outcome (feature 011, FR-013)', () => {
+    const teamAgent = {
+      name: 'Developer',
+      description: 'Implements tickets end to end.',
+      instruction: 'You implement the ticket. Open a PR.',
+      trigger_status: 'To Do',
+      status_running: 'In Progress',
+      status_success: 'In Review',
+      status_failure: 'Blocked',
+      executor: 'claude-default',
+    };
+
+    it('accepts team when the payload is present', () => {
+      const r = {
+        ...baseSuccess,
+        outcome: 'team' as const,
+        team: { agents: [teamAgent] },
+      };
+      expect(ReportSchema.safeParse(r).success).toBe(true);
+    });
+
+    it('rejects team without the payload (mirrors routed/needs_human rule)', () => {
+      const r = { ...baseSuccess, outcome: 'team' as const };
+      const res = ReportSchema.safeParse(r);
+      expect(res.success).toBe(false);
+      if (!res.success) {
+        expect(res.error.issues[0]?.path).toEqual(['team']);
+      }
+    });
+
+    it('rejects a team payload on a non-team outcome', () => {
+      const r = { ...baseSuccess, team: { agents: [teamAgent] } };
+      expect(ReportSchema.safeParse(r).success).toBe(false);
+    });
+
+    it('rejects an empty agent list', () => {
+      const r = { ...baseSuccess, outcome: 'team' as const, team: { agents: [] } };
+      expect(ReportSchema.safeParse(r).success).toBe(false);
+    });
+
+    it('rejects more than 20 agents', () => {
+      const r = {
+        ...baseSuccess,
+        outcome: 'team' as const,
+        team: { agents: Array.from({ length: 21 }, (_, i) => ({ ...teamAgent, name: `A${i}` })) },
+      };
+      expect(ReportSchema.safeParse(r).success).toBe(false);
+    });
+
+    it('rejects unknown keys inside a team agent (.strict())', () => {
+      const r = {
+        ...baseSuccess,
+        outcome: 'team' as const,
+        team: { agents: [{ ...teamAgent, model: 'opus' }] },
+      };
+      expect(ReportSchema.safeParse(r).success).toBe(false);
+    });
+
+    it('rejects an oversized instruction (> 8000 chars)', () => {
+      const r = {
+        ...baseSuccess,
+        outcome: 'team' as const,
+        team: { agents: [{ ...teamAgent, instruction: 'x'.repeat(8001) }] },
+      };
+      expect(ReportSchema.safeParse(r).success).toBe(false);
+    });
+  });
 });

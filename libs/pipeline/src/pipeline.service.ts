@@ -115,6 +115,8 @@ export class PipelineService {
       .where(eq(schema.runs.id, runId))
       .limit(1);
     if (!run) return;
+    // Ticketless workspace-setup runs (feature 011): no ticket, no transition.
+    if (run.ticketId === null) return;
 
     const [agent] = await this.db
       .select({ statusRunning: schema.agents.statusRunning })
@@ -176,24 +178,41 @@ export class PipelineService {
       .from(schema.agents)
       .where(eq(schema.agents.id, run.agentId))
       .limit(1);
+    if (!agent) {
+      this.logger.warn(`onRunFinished: agent missing for run ${runId}`);
+      return;
+    }
+
+    // Feature 011 (D10): a ticketless run is a workspace-setup run — no Jira
+    // side at all; the completion is marker-only (+ failure human task).
+    if (run.ticketId === null) {
+      if (!agent.isOrchestrator) {
+        // Cannot happen through any trigger path today — logged, not thrown.
+        this.logger.warn(`onRunFinished: ticketless run ${runId} on a non-orchestrator agent — skipped`);
+        return;
+      }
+      await this.onSetupFinished(runId, run, agent);
+      return;
+    }
+
     const [ticket] = await this.db
       .select({ jiraKey: schema.tickets.jiraKey })
       .from(schema.tickets)
       .where(eq(schema.tickets.id, run.ticketId))
       .limit(1);
-    if (!agent || !ticket) {
-      this.logger.warn(`onRunFinished: agent/ticket missing for run ${runId}`);
+    if (!ticket) {
+      this.logger.warn(`onRunFinished: ticket missing for run ${runId}`);
       return;
     }
 
     // feature 010 (FR-007): a completed ORCHESTRATOR run takes NONE of the
     // generic success/failure transitions — its decision drives the ticket.
     if (agent.isOrchestrator) {
-      await this.onOrchestratorFinished(runId, run, agent, ticket.jiraKey);
+      await this.onOrchestratorFinished(runId, run, run.ticketId, agent, ticket.jiraKey);
       return;
     }
 
-    await this.onWorkerFinished(runId, run, agent, ticket.jiraKey);
+    await this.onWorkerFinished(runId, run, run.ticketId, agent, ticket.jiraKey);
   }
 
   /**
@@ -206,6 +225,7 @@ export class PipelineService {
   private async onWorkerFinished(
     runId: string,
     run: LoadedRun,
+    ticketId: string,
     agent: LoadedAgent,
     jiraKey: string,
   ): Promise<void> {
@@ -228,7 +248,7 @@ export class PipelineService {
       // failure transition + comment, before the marker.
       let triageDecision: string | undefined;
       if (run.status === 'failed' || run.status === 'timed_out') {
-        triageDecision = await this.decideTriage(runId, run);
+        triageDecision = await this.decideTriage(runId, ticketId, run.workspaceId);
       }
 
       await this.db.insert(schema.runEvents).values({
@@ -270,8 +290,12 @@ export class PipelineService {
    * - otherwise ⇒ `triaged`: exactly one triage run for the orchestrator,
    *   enqueued through RunTriggerService (inherits the three dedup layers).
    */
-  private async decideTriage(failingRunId: string, run: LoadedRun): Promise<string> {
-    const budget = await getReworkBudget(this.db, run.ticketId, run.workspaceId);
+  private async decideTriage(
+    failingRunId: string,
+    ticketId: string,
+    workspaceId: string,
+  ): Promise<string> {
+    const budget = await getReworkBudget(this.db, ticketId, workspaceId);
     if (!budget.available) {
       await this.humanTasks.createNonBlocking(failingRunId, {
         kind: 'blocker',
@@ -281,7 +305,7 @@ export class PipelineService {
       return 'cycle_limit';
     }
 
-    const orchestrator = await this.findEnabledOrchestrator(run.workspaceId);
+    const orchestrator = await this.findEnabledOrchestrator(workspaceId);
     if (!orchestrator) {
       return 'no_orchestrator';
     }
@@ -289,7 +313,7 @@ export class PipelineService {
     const scenario = mockScenarioOf(orchestrator.behavior);
     const routeTarget = routeTargetOf(orchestrator.behavior);
     await this.runTrigger.trigger({
-      ticketId: run.ticketId,
+      ticketId,
       agentId: orchestrator.id,
       triggerEvent: {
         source: 'triage',
@@ -309,10 +333,11 @@ export class PipelineService {
   private async onOrchestratorFinished(
     runId: string,
     run: LoadedRun,
+    ticketId: string,
     agent: LoadedAgent,
     jiraKey: string,
   ): Promise<void> {
-    const decision = await this.processOrchestratorDecision(runId, run, agent, jiraKey);
+    const decision = await this.processOrchestratorDecision(runId, run, ticketId, agent, jiraKey);
     await this.db.insert(schema.runEvents).values({
       runId,
       type: 'jira_action',
@@ -324,6 +349,7 @@ export class PipelineService {
   private async processOrchestratorDecision(
     runId: string,
     run: LoadedRun,
+    ticketId: string,
     agent: LoadedAgent,
     jiraKey: string,
   ): Promise<string> {
@@ -360,7 +386,7 @@ export class PipelineService {
 
     const routing = report.routing;
     const target = await this.resolveRoutingTarget(run.workspaceId, routing.target_agent);
-    const budget = await getReworkBudget(this.db, run.ticketId, run.workspaceId);
+    const budget = await getReworkBudget(this.db, ticketId, run.workspaceId);
 
     // Answer-triage delta: a human explicitly answered and picked the
     // orchestrator, which itself grants ONE more rework cycle — this decision's
@@ -396,7 +422,7 @@ export class PipelineService {
     const humanTaskId = trigger?.human_task_id;
     const targetScenario = mockScenarioOf(target.behavior);
     await this.runTrigger.trigger({
-      ticketId: run.ticketId,
+      ticketId,
       agentId: target.id,
       triggerEvent: {
         source: 'rework',
@@ -415,6 +441,50 @@ export class PipelineService {
     }
     await jira.addComment(jiraKey, buildRunComment(report));
     return 'routed';
+  }
+
+  /**
+   * Feature 011 (D10): a finished workspace-setup run. There is no Jira side at
+   * all on this path — the accept path (`SetupApplyService` inside
+   * `finalizeWithReport`) already validated and applied the team + review task
+   * in one transaction — so completion processing only records the marker
+   * (drift-repair replays no-op on it) and turns a failed/timed-out setup run
+   * into a ticketless human task. The triager is never triaged (FR-010 spirit):
+   * `decideTriage` is unreachable here by construction.
+   */
+  private async onSetupFinished(runId: string, run: LoadedRun, agent: LoadedAgent): Promise<void> {
+    let setup: string;
+    let agentsCreated: number | undefined;
+
+    if (run.status === 'failed' || run.status === 'timed_out') {
+      const issues = lastValidationIssues(run.error);
+      await this.humanTasks.createNonBlocking(runId, {
+        kind: 'blocker',
+        title: 'Workspace setup failed — team not generated',
+        details:
+          `The orchestrator ("${agent.name}") setup run ${run.status === 'failed' ? 'failed' : 'timed out'}.` +
+          (issues ? `\n\n${issues}` : '') +
+          '\n\nFix the problem and press "Generate agents" again — no agents were created.',
+      });
+      setup = 'failed';
+    } else if (run.status === 'awaiting_human') {
+      // Parked on a blocking question — resolving the task resumes setup as a
+      // fresh workspace-setup run (ResumeService), which gets its own marker.
+      setup = 'needs_human';
+    } else {
+      const report = run.report as AgentReport | null;
+      agentsCreated = report?.outcome === 'team' ? (report.team?.agents.length ?? 0) : 0;
+      setup = 'applied';
+    }
+
+    await this.db.insert(schema.runEvents).values({
+      runId,
+      type: 'jira_action',
+      payload: { setup, ...(agentsCreated !== undefined ? { agents_created: agentsCreated } : {}) },
+    });
+    this.logger.log(
+      `setup run ${runId}: ${setup}` + (agentsCreated !== undefined ? ` (${agentsCreated} agent(s))` : ''),
+    );
   }
 
   private async findEnabledOrchestrator(
@@ -476,9 +546,19 @@ interface LoadedRun {
   report: unknown;
   error: string | null;
   agentId: string;
-  ticketId: string;
+  // Null for ticketless workspace-setup runs (feature 011).
+  ticketId: string | null;
   workspaceId: string;
   triggerEvent: unknown;
+}
+
+/**
+ * The fail-closed error of a setup run that never landed an accepted proposal
+ * carries the last 422 issue list (runs.error) — surface it in the human task.
+ */
+function lastValidationIssues(error: string | null): string | undefined {
+  if (!error) return undefined;
+  return `Last error:\n${error}`;
 }
 
 /** The `agents` fields onRunFinished's helpers read. */
