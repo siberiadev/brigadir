@@ -61,9 +61,34 @@ export class MockExecutor implements AgentExecutor {
           exitStatus: 'completed',
           report: routedReport(triggerEvent.target_agent ?? 'Developer', triggerEvent.task),
         };
+      case 'team':
+        // feature 011 (D15): the mock orchestrator emits a `team` proposal. The
+        // roster rides in the AGENT's behavior (`team_proposal`, mirroring how
+        // `route_target` parameterizes `routed`) so integration tests control it.
+        return { exitStatus: 'completed', report: teamReport(await this.teamProposalOf(ctx.runId)) };
+      case 'team_invalid':
+        // feature 011 (D15): a proposal referencing a status that exists on no
+        // board — the accept path must reject it with `status_absent` and zero
+        // agents created; the mock cannot repair-loop, so the run fail-closes.
+        return {
+          exitStatus: 'completed',
+          report: teamReport([{ ...DEFAULT_TEAM[0], trigger_status: 'No Such Status' }]),
+        };
       default:
         return { exitStatus: 'completed', report: successReport() };
     }
+  }
+
+  /** The test-controlled roster from the orchestrator agent's behavior. */
+  private async teamProposalOf(runId: string): Promise<TeamProposalAgents> {
+    const [row] = await this.db
+      .select({ behavior: schema.agents.behavior })
+      .from(schema.runs)
+      .innerJoin(schema.agents, eq(schema.runs.agentId, schema.agents.id))
+      .where(eq(schema.runs.id, runId))
+      .limit(1);
+    const proposal = (row?.behavior as { team_proposal?: TeamProposalAgents } | null)?.team_proposal;
+    return Array.isArray(proposal) && proposal.length > 0 ? proposal : DEFAULT_TEAM;
   }
 
   private async rateLimited(runId: string): Promise<ExecutorResult> {
@@ -124,6 +149,32 @@ function routedReport(targetAgent: string, task?: string): AgentReport {
       target_agent: targetAgent,
       task: task ?? 'Fix the failing checks from the previous attempt and re-run the suite.',
     },
+  };
+}
+
+type TeamProposalAgents = NonNullable<AgentReport['team']>['agents'];
+
+/** Fallback roster when the test doesn't set `behavior.team_proposal`. */
+const DEFAULT_TEAM: TeamProposalAgents = [
+  {
+    name: 'Developer',
+    description: 'Implements tickets end to end and opens a PR.',
+    instruction: 'Implement the ticket on a branch and open a PR.',
+    trigger_status: 'To Do',
+    status_running: 'In Progress',
+    status_success: 'In Review',
+    status_failure: 'Blocked',
+    executor: 'mock-default',
+  },
+];
+
+function teamReport(agents: TeamProposalAgents): AgentReport {
+  return {
+    schema_version: 1,
+    outcome: 'team',
+    summary: `Mock orchestrator proposed a team of ${agents.length} agent(s).`,
+    checks: [{ name: 'project_studied', status: 'pass' }],
+    team: { agents },
   };
 }
 

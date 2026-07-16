@@ -1,5 +1,7 @@
-import { Body, Controller, Get, HttpCode, Inject, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
-import { eq, sql } from 'drizzle-orm';
+import { Body, Controller, Get, HttpCode, Inject, Param, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { RunTriggerService } from '@brigadir/runs';
+import type { TriggerEvent } from '@brigadir/contracts';
 import {
   DRIZZLE,
   type BrigadirDb,
@@ -26,8 +28,13 @@ import {
   type JiraBoardType,
 } from '@brigadir/contracts';
 import { DashboardTokenGuard } from './dashboard-token.guard';
-import { fieldError, notFoundError, statusesUnavailable, validationError } from './dashboard.errors';
+import { conflictError, fieldError, notFoundError, statusesUnavailable, validationError } from './dashboard.errors';
 import { extractBoardId, deriveCredentialStatus, parsePagination } from './dashboard.helpers';
+
+/** Minimal response shape — avoids an `@types/express` dependency (same as agents.controller). */
+interface DashboardHttpResponse {
+  status(code: number): void;
+}
 
 /**
  * Dashboard workspaces surface (feature 005, US1/US2/US4). All routes behind the
@@ -42,6 +49,7 @@ export class WorkspacesController {
     @Inject(DRIZZLE) private readonly db: BrigadirDb,
     private readonly jiraFactory: JiraClientFactory,
     private readonly statuses: StatusesService,
+    private readonly runTrigger: RunTriggerService,
   ) {}
 
   @Get()
@@ -103,7 +111,10 @@ export class WorkspacesController {
           api_token: req.jira_api_token,
         }),
         jiraCredentialExpiresAt: new Date(req.expires_at),
-        settings: { repositories: req.repositories },
+        // feature 011 (FR-001/D14): a NEW workspace comes into existence PAUSED —
+        // the single gate in front of a (possibly generated) team. The existing
+        // Start switch (PUT :id/settings {enabled:true}) opens it.
+        settings: { repositories: req.repositories, enabled: false },
       })
       .returning({ id: schema.workspaces.id });
 
@@ -116,6 +127,83 @@ export class WorkspacesController {
     await seedOrchestratorAgent(this.db, row.id);
 
     return this.toResponse(row.id);
+  }
+
+  /**
+   * feature 011 (FR-002/003/004, contracts/generate-agents-api.md): start the
+   * ticketless workspace-setup run of the seeded orchestrator. Preconditions
+   * checked in order (first failure wins); a race slipping past them lands on
+   * `runs_one_active_setup` → dedup → the same 409. The workspace's paused
+   * state is NOT modified — the team is generated behind the Start gate.
+   */
+  @Post(':id/generate-agents')
+  async generateAgents(
+    @Param('id') id: string,
+    @Res({ passthrough: true }) res: DashboardHttpResponse,
+  ): Promise<{ run_id: string }> {
+    const [ws] = await this.db
+      .select({ id: schema.workspaces.id })
+      .from(schema.workspaces)
+      .where(eq(schema.workspaces.id, id))
+      .limit(1);
+    if (!ws) throw notFoundError('workspace_not_found', 'Workspace not found.');
+
+    const [worker] = await this.db
+      .select({ id: schema.agents.id })
+      .from(schema.agents)
+      .where(and(eq(schema.agents.workspaceId, id), eq(schema.agents.isOrchestrator, false)))
+      .limit(1);
+    if (worker) {
+      throw conflictError('worker_agents_exist', 'This workspace already has worker agents.');
+    }
+
+    const [orchestrator] = await this.db
+      .select({ id: schema.agents.id, behavior: schema.agents.behavior })
+      .from(schema.agents)
+      .where(
+        and(
+          eq(schema.agents.workspaceId, id),
+          eq(schema.agents.isOrchestrator, true),
+          eq(schema.agents.enabled, true),
+        ),
+      )
+      .limit(1);
+    if (!orchestrator) {
+      throw conflictError('no_orchestrator', 'No enabled orchestrator agent in this workspace.');
+    }
+
+    const [activeSetup] = await this.db
+      .select({ id: schema.runs.id })
+      .from(schema.runs)
+      .where(
+        and(
+          eq(schema.runs.workspaceId, id),
+          isNull(schema.runs.ticketId),
+          inArray(schema.runs.status, ['queued', 'running', 'awaiting_human']),
+        ),
+      )
+      .limit(1);
+    if (activeSetup) {
+      throw conflictError('setup_run_active', 'A workspace-setup run is already active.');
+    }
+
+    // Same mock_scenario threading as triage runs (pipeline.service precedent):
+    // integration tests drive the loop via the orchestrator's behavior blob.
+    const scenario = (orchestrator.behavior as { mock_scenario?: unknown } | null)?.mock_scenario;
+    const result = await this.runTrigger.trigger({
+      ticketId: null,
+      agentId: orchestrator.id,
+      triggerEvent: {
+        source: 'workspace-setup',
+        ...(typeof scenario === 'string' ? { mock_scenario: scenario } : {}),
+      } as TriggerEvent,
+    });
+    if (result.deduplicated) {
+      throw conflictError('setup_run_active', 'A workspace-setup run is already active.');
+    }
+
+    res.status(202);
+    return { run_id: result.runId };
   }
 
   @Get(':id/statuses')

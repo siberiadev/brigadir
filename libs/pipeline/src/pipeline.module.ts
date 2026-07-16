@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { RunsModule } from '@brigadir/runs';
 import { HumanTasksModule } from '@brigadir/human-tasks';
 import { PipelineService } from './pipeline.service';
+import { SetupApplyService } from './setup-apply.service';
 
 /**
  * PipelineModule — the status machine (onStatusChanged + onRunFinished).
@@ -13,7 +14,7 @@ import { PipelineService } from './pipeline.service';
  */
 @Module({
   imports: [RunsModule, HumanTasksModule],
-  providers: [PipelineService],
-  exports: [PipelineService],
+  providers: [PipelineService, SetupApplyService],
+  exports: [PipelineService, SetupApplyService],
 })
 export class PipelineModule {}

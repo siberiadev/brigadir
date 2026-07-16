@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { schema } from '@brigadir/database';
 import type { RunsService } from '@brigadir/runs';
-import type { PipelineService } from '@brigadir/pipeline';
+import type { PipelineService, SetupApplyService } from '@brigadir/pipeline';
 import type { HumanTaskService } from '@brigadir/human-tasks';
 import { CallbackService } from './callback.service';
 
@@ -38,6 +38,7 @@ describe('CallbackService (T100)', () => {
       fakeModuleRef() as never,
       { finalizeWithReport } as unknown as RunsService,
       { onRunFinished } as unknown as PipelineService,
+      { acceptTeamReport: vi.fn() } as unknown as SetupApplyService,
       { createFromRequest } as unknown as HumanTaskService,
     );
 
@@ -60,6 +61,7 @@ describe('CallbackService (T100)', () => {
       fakeModuleRef() as never,
       { finalizeWithReport } as unknown as RunsService,
       {} as unknown as PipelineService,
+      { acceptTeamReport: vi.fn() } as unknown as SetupApplyService,
       {} as unknown as HumanTaskService,
     );
 
@@ -82,6 +84,7 @@ describe('CallbackService (T100)', () => {
       fakeModuleRef() as never,
       { finalizeWithReport } as unknown as RunsService,
       { onRunFinished } as unknown as PipelineService,
+      { acceptTeamReport: vi.fn() } as unknown as SetupApplyService,
       {} as unknown as HumanTaskService,
     );
 
@@ -103,6 +106,7 @@ describe('CallbackService (T100)', () => {
       fakeModuleRef() as never,
       { finalizeWithReport } as unknown as RunsService,
       { onRunFinished: vi.fn() } as unknown as PipelineService,
+      { acceptTeamReport: vi.fn() } as unknown as SetupApplyService,
       {} as unknown as HumanTaskService,
     );
 
@@ -125,6 +129,7 @@ describe('CallbackService (T100)', () => {
       fakeModuleRef() as never,
       { finalizeWithReport } as unknown as RunsService,
       { onRunFinished: vi.fn() } as unknown as PipelineService,
+      { acceptTeamReport: vi.fn() } as unknown as SetupApplyService,
       {} as unknown as HumanTaskService,
     );
 
@@ -150,6 +155,7 @@ describe('CallbackService (T100)', () => {
       fakeModuleRef() as never,
       { finalizeWithReport: vi.fn().mockResolvedValue(true) } as unknown as RunsService,
       { onRunFinished: vi.fn() } as unknown as PipelineService,
+      { acceptTeamReport: vi.fn() } as unknown as SetupApplyService,
       { createFromRequest } as unknown as HumanTaskService,
     );
 
@@ -184,6 +190,7 @@ describe('CallbackService (T100)', () => {
       fakeModuleRef() as never,
       {} as unknown as RunsService,
       {} as unknown as PipelineService,
+      { acceptTeamReport: vi.fn() } as unknown as SetupApplyService,
       {} as unknown as HumanTaskService,
     );
 
@@ -200,6 +207,7 @@ describe('CallbackService (T100)', () => {
       fakeModuleRef() as never,
       {} as unknown as RunsService,
       {} as unknown as PipelineService,
+      { acceptTeamReport: vi.fn() } as unknown as SetupApplyService,
       {} as unknown as HumanTaskService,
     );
 
@@ -215,6 +223,7 @@ describe('CallbackService (T100)', () => {
       fakeModuleRef() as never,
       {} as unknown as RunsService,
       {} as unknown as PipelineService,
+      { acceptTeamReport: vi.fn() } as unknown as SetupApplyService,
       { createFromRequest } as unknown as HumanTaskService,
     );
 
@@ -230,4 +239,84 @@ describe('CallbackService (T100)', () => {
     const [, passedInput] = createFromRequest.mock.calls[0];
     expect(passedInput.details).not.toContain(secret);
   });
+  // --- feature 011: the `team` accept path ---
+
+  it('complete: team outcome routes through SetupApplyService; invalid → 422-shaped validation, no finalize', async () => {
+    const finalizeWithReport = vi.fn();
+    const acceptTeamReport = vi
+      .fn()
+      .mockResolvedValue({ kind: 'invalid', issues: [{ path: ['team'], code: 'status_absent', message: 'x' }] });
+    const onRunFinished = vi.fn();
+    const service = new CallbackService(
+      fakeDb({ agentBehavior: {} }) as never,
+      fakeModuleRef() as never,
+      { finalizeWithReport } as unknown as RunsService,
+      { onRunFinished } as unknown as PipelineService,
+      { acceptTeamReport } as unknown as SetupApplyService,
+      {} as unknown as HumanTaskService,
+    );
+
+    const result = await service.complete('run-1', teamReportBody());
+    expect(result).toMatchObject({ kind: 'validation' });
+    expect(finalizeWithReport).not.toHaveBeenCalled();
+    expect(onRunFinished).not.toHaveBeenCalled();
+  });
+
+  it('complete: team outcome applied → ok/team + onRunFinished (marker branch)', async () => {
+    const acceptTeamReport = vi.fn().mockResolvedValue({ kind: 'applied', agentsCreated: 2 });
+    const onRunFinished = vi.fn().mockResolvedValue(undefined);
+    const service = new CallbackService(
+      fakeDb({ agentBehavior: {} }) as never,
+      fakeModuleRef() as never,
+      { finalizeWithReport: vi.fn() } as unknown as RunsService,
+      { onRunFinished } as unknown as PipelineService,
+      { acceptTeamReport } as unknown as SetupApplyService,
+      {} as unknown as HumanTaskService,
+    );
+
+    const result = await service.complete('run-1', teamReportBody());
+    expect(result).toEqual({ ok: true, outcome: 'team' });
+    expect(onRunFinished).toHaveBeenCalledWith('run-1');
+  });
+
+  it('complete: scrubs team description/instruction before the accept path (FR-018)', async () => {
+    const acceptTeamReport = vi.fn().mockResolvedValue({ kind: 'applied', agentsCreated: 1 });
+    const service = new CallbackService(
+      fakeDb({ agentBehavior: {} }) as never,
+      fakeModuleRef() as never,
+      { finalizeWithReport: vi.fn() } as unknown as RunsService,
+      { onRunFinished: vi.fn() } as unknown as PipelineService,
+      { acceptTeamReport } as unknown as SetupApplyService,
+      {} as unknown as HumanTaskService,
+    );
+
+    const secret = 'sk-ant-' + 'c'.repeat(30);
+    await service.complete('run-1', teamReportBody(`uses ${secret} internally`));
+    const [, scrubbed] = acceptTeamReport.mock.calls[0];
+    expect(JSON.stringify(scrubbed.team)).not.toContain(secret);
+    // Identifier fields untouched.
+    expect(scrubbed.team.agents[0].name).toBe('Developer');
+  });
 });
+
+function teamReportBody(instruction = 'Implement tickets.') {
+  return {
+    schema_version: 1,
+    outcome: 'team',
+    summary: 'Proposed the team.',
+    checks: [],
+    team: {
+      agents: [
+        {
+          name: 'Developer',
+          description: 'Implements tickets.',
+          instruction,
+          trigger_status: 'To Do',
+          status_success: 'In Review',
+          status_failure: 'Blocked',
+          executor: 'mock-default',
+        },
+      ],
+    },
+  };
+}

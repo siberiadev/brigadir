@@ -178,7 +178,9 @@ export class ClaudeCliRunProcessor
     // feature 010 (FR-012/014): prepend the ephemeral handoff section for every
     // handoff source — triage, rework, and human-resume (the last replaces the
     // legacy instructionWithResumeAnswer append). Returns '' otherwise.
-    const handoff = await buildHandoffSection(loaded.triggerEvent as TriggerEvent | null, this.db);
+    const handoff = await buildHandoffSection(loaded.triggerEvent as TriggerEvent | null, this.db, {
+      workspaceId: loaded.workspaceId,
+    });
 
     let result: ExecutorResult;
     try {
