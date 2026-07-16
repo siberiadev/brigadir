@@ -20,7 +20,7 @@ Secrets NEVER appear in a tool input schema or in argv.
 ```
 list_workspaces      GET  /api/workspaces?page_size=100        → { items: [{id,name,project_key,board_type,enabled}] }
 get_workspace        GET  /api/workspaces/:id                  → workspace detail (+ enabled)
-get_board_statuses   GET  /api/workspaces/:id/statuses?refresh=1 → { statuses: [{name,category}] }
+get_board_statuses   GET  /api/workspaces/:id/statuses?refresh=true → { statuses: [{name,category}] }
 list_executors       GET  /api/executors?page_size=100         → { items: [{name,type,model?,enabled}] }
 list_agents          GET  /api/agents?workspace=:id&page_size=100 → { items: [{...,is_orchestrator}] }
 ```

@@ -62,7 +62,9 @@ describe('brigadir-admin tool handlers (feature 012)', () => {
       jsonResponse(200, { statuses: [{ id: 's1', name: 'Ready for Dev', statusCategory: 'new' }] }),
     );
     const res = await handlers.get_board_statuses({ workspace_id: 'w1' });
-    expect(captured.url).toBe('http://backend.test/api/workspaces/w1/statuses?refresh=1');
+    // refresh=true verbatim — the backend treats anything else (e.g. refresh=1)
+    // as false and serves the 5-minute cache instead of the live board.
+    expect(captured.url).toBe('http://backend.test/api/workspaces/w1/statuses?refresh=true');
     expect(res.structuredContent).toEqual({ statuses: [{ name: 'Ready for Dev', category: 'new' }] });
   });
 

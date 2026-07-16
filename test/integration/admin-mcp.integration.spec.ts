@@ -130,12 +130,22 @@ describe('brigadir-admin against the real backend (feature 012)', () => {
     expect(await workerAgents(id)).toHaveLength(0);
   });
 
-  it('get_board_statuses surfaces the live board status names', async () => {
+  it('get_board_statuses surfaces the live board status names, bypassing the cache', async () => {
     const id = await createWorkspace();
     const res = await handlers.get_board_statuses({ workspace_id: id });
     expect(res.isError).toBeUndefined();
     const names = (res.structuredContent!.statuses as { name: string }[]).map((s) => s.name);
     expect(names).toEqual(expect.arrayContaining(['Ready for Dev', 'Code Review', 'Blocked', 'Done']));
+
+    // LIVE means live: a status added to the board after the first fetch must
+    // show up immediately — the tool's refresh=true bypasses the backend's
+    // 5-minute StatusesService cache (a wrong param value, e.g. refresh=1, is
+    // silently treated as false and would serve the stale list).
+    jira.setCategory('QA Review', 'indeterminate');
+    const second = await handlers.get_board_statuses({ workspace_id: id });
+    expect(second.isError).toBeUndefined();
+    const secondNames = (second.structuredContent!.statuses as { name: string }[]).map((s) => s.name);
+    expect(secondNames).toContain('QA Review');
   });
 
   it('create_team spawns the whole roster atomically (enabled worker agents)', async () => {
