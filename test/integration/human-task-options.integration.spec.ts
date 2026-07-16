@@ -152,6 +152,15 @@ describe('human-task answer options end to end (feature 013)', () => {
     expect(JSON.stringify(stored)).not.toContain(canary);
     expect(stored![1]).toEqual({ label: 'Keep backward compat' });
 
+    // The Jira question comment mirrors the options as a plain list (FR-010) —
+    // labels/descriptions only; `value` is machine-facing and never rendered.
+    const comments = mock.commentsFor(seeded.ticketKey);
+    expect(comments.length).toBeGreaterThan(0);
+    const commentText = JSON.stringify(comments[comments.length - 1]);
+    expect(commentText).toContain('Suggested answers:');
+    expect(commentText).toContain('Migrate config format');
+    expect(commentText).toContain('Keep backward compat');
+
     // Served by the global list AND the workspace-scoped tab (FR-006).
     const globalList = await fetch(`${backendUrl}/api/human-tasks?status=open`, { headers: authHeaders }).then((r) => r.json());
     const globalItem = globalList.items.find((i: { id: string }) => i.id === task.id);

@@ -32,7 +32,10 @@ function callbackToolsSection(): string[] {
       'flag a blocker. blocking=true pauses the run until a person answers; blocking=false leaves ' +
       'a note without stopping your work. Write `details` in Markdown (headings, lists, `code`, ' +
       'fenced code blocks, **bold**, links) — a person reads it in a rendered viewer, so structure ' +
-      'it to be scannable; keep `title` a plain-text one-liner.',
+      'it to be scannable; keep `title` a plain-text one-liner. You may attach ' +
+      '`options: [{label, value?, description?}]` (max 5; value defaults to label) — one-click ' +
+      'suggested answers, also accepted on complete_task\'s human_task; offer them whenever the ' +
+      'answer is a choice, not an essay.',
     '- mcp__brigadir__complete_task(schema_version, outcome, summary, checks[, human_task]' +
       '[, artifacts]) — finish the run. This is the single normal way to end a session.',
     'You also have read-only Jira tools — eyes, not voice: ' +

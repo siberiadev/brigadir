@@ -367,7 +367,8 @@ async function buildWorkspaceSetupSection(
     'How to study the project:',
     '- Call get_project_overview FIRST — it returns the board type, the exact workflow status names, issue types, and the active sprint.',
     '- Use search_tickets and get_ticket (descriptions, comments, links) to understand the actual work before deciding roles.',
-    '- If the project is empty or the right team is genuinely ambiguous, ask via request_human instead of guessing.',
+    '- If the project is empty or the right team is genuinely ambiguous, ask via request_human instead of guessing; ' +
+      'attach `options` with the likely answers (e.g. "Minimal team" / "Full team") so the human can answer in one click.',
     '',
     'How to deliver the team:',
     '- Finish with ONE complete_task report with outcome "team": for each agent give name, description (one roster line), instruction (a self-contained role prompt), trigger_status (the status that starts it), optional status_running, status_success, status_failure, and executor (one of the profile NAMES above).',

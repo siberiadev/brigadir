@@ -27,6 +27,18 @@ describe('buildWrapperText (T103, D6)', () => {
     expect(text).not.toContain('return your final answer strictly as JSON');
   });
 
+  // feature 013: agents discover answer options from the wrapper alone —
+  // stored instructions stay untouched. The Phase-0 section keeps its
+  // byte-for-byte contract, so options are never mentioned there.
+  it('callback path mentions request_human options; structured-output path does not', () => {
+    const callbackText = buildWrapperText(ctx, '/tmp/wt', { useCallbackChannel: true });
+    expect(callbackText).toContain('options: [{label, value?, description?}]');
+    expect(callbackText).toContain('a choice, not an essay');
+
+    const phase0Text = buildWrapperText(ctx, '/tmp/wt', { useCallbackChannel: false });
+    expect(phase0Text).not.toContain('options: [{label');
+  });
+
   it('includes the ticket key/summary and instruction in both paths', () => {
     for (const useCallbackChannel of [false, true]) {
       const text = buildWrapperText(ctx, '/tmp/wt', { useCallbackChannel });

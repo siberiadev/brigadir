@@ -49,4 +49,30 @@ describe('buildHumanTaskComment (T101)', () => {
     const doc = buildHumanTaskComment({ kind: 'blocker', title: 'Missing credentials' });
     expect(doc.content).toHaveLength(2);
   });
+
+  // --- feature 013: suggested answer options as a plain list ---
+
+  it('renders answer options as a bullet list (label — description; value never rendered)', () => {
+    const doc = buildHumanTaskComment({
+      kind: 'question',
+      title: 'Which migration strategy?',
+      details: 'The config format change can break older readers.',
+      options: [
+        { label: 'Migrate config format', value: 'migrate', description: 'Breaking, needs a major bump' },
+        { label: 'Keep backward compat' },
+      ],
+    });
+    expect(doc).toMatchSnapshot();
+    const text = JSON.stringify(doc);
+    expect(text).toContain('Suggested answers:');
+    expect(text).toContain('Migrate config format — Breaking, needs a major bump');
+    expect(text).not.toContain('"migrate"'); // value is machine-facing only
+  });
+
+  it('a task without options is byte-identical to the pre-013 document', () => {
+    const doc = buildHumanTaskComment({ kind: 'question', title: 'Which auth flow?', details: 'OAuth or API token?' });
+    // Same shape the pre-013 snapshot pinned: panel + title + details, nothing appended.
+    expect(doc.content).toHaveLength(3);
+    expect(doc).toMatchSnapshot();
+  });
 });
