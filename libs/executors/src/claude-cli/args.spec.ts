@@ -75,7 +75,7 @@ describe('buildArgs (T077)', () => {
 });
 
 describe('buildArgs — useCallbackChannel (T103, D6)', () => {
-  it('drops --json-schema, adds the three mcp__brigadir__* tools, --mcp-config, and --strict-mcp-config', () => {
+  it('drops --json-schema, adds ALL six mcp__brigadir__* tools, --mcp-config, and --strict-mcp-config', () => {
     const args = buildArgs({
       ...input,
       useCallbackChannel: true,
@@ -95,6 +95,11 @@ describe('buildArgs — useCallbackChannel (T103, D6)', () => {
       'mcp__brigadir__report_progress',
       'mcp__brigadir__request_human',
       'mcp__brigadir__complete_task',
+      // feature 011 read-only tools — pre-allowed so a live run never stalls
+      // on a permission prompt for a read (live-smoke finding, 2026-07-16).
+      'mcp__brigadir__get_project_overview',
+      'mcp__brigadir__search_tickets',
+      'mcp__brigadir__get_ticket',
     ]);
 
     const mcpConfigIdx = args.indexOf('--mcp-config');
