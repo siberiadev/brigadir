@@ -271,6 +271,7 @@ CREATE TABLE human_tasks (
   kind            text NOT NULL,               -- question | blocker | review
   title           text NOT NULL,               -- короткая формулировка для человека
   details         text,
+  options         jsonb,                       -- feature 013: предложенные варианты ответа (AnswerOption[] 1–5, см. §5/§6); NULL у системных задач и вопросов без вариантов
   blocking        boolean NOT NULL DEFAULT true, -- true: run ждёт (awaiting_human)
   status          text NOT NULL DEFAULT 'open',  -- open | resolved | dismissed
   resolution      text,                        -- ответ человека (передаётся агенту при resume)
