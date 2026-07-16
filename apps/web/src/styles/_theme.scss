@@ -1,0 +1,110 @@
+// BRIGADIR brand theme (decision 2026-07-16, PR "platform logo ideas").
+//
+// Recolors Element Plus through its OWN theming mechanism: the component
+// styles read every state color from `--el-color-*` custom properties, so
+// overriding those variables at `:root` / `html.dark` re-skins the whole
+// library at runtime — no SCSS rebuild of element-plus needed. This file is
+// imported from main.scss AFTER element-plus/dist/index.css and
+// theme-chalk/dark/css-vars.css, so our declarations win by cascade order.
+//
+// The derived shades follow theme-chalk's exact formulas so hover/disabled
+// states keep their intended contrast:
+//   light theme:  light-N = mix(white,  color, N*10%)   dark-2 = mix(black, color, 20%)
+//   dark theme:   light-N = mix(#141414, color, N*10%)  dark-2 = mix(white, color, 20%)
+// (#141414 is theme-chalk's dark background the dark css-vars derive against.)
+
+@use 'sass:color';
+@use 'variables' as *;
+
+// Brand palette — amber is the foreman's hard-hat yellow from the `>_ BRIGADIR`
+// wordmark; graphite-slate carries the neutral "info" role. `warning` moves to
+// a redder orange so it never reads as the amber primary (running vs
+// awaiting_human tags must stay distinguishable at a glance).
+$brand-colors: (
+  'primary': #f59e0b,
+  'success': #16a34a,
+  'warning': #ea580c,
+  'danger': #dc2626,
+  'error': #dc2626,
+  'info': #64748b,
+);
+
+@function rgb-triplet($c) {
+  @return '#{color.channel($c, 'red', $space: rgb)}, #{color.channel($c, 'green', $space: rgb)}, #{color.channel($c, 'blue', $space: rgb)}';
+}
+
+:root {
+  @each $type, $c in $brand-colors {
+    --el-color-#{$type}: #{$c};
+    // rgb triplet for rgba(var(--el-color-*-rgb), a) consumers (RunStatusTag pulse).
+    --el-color-#{$type}-rgb: #{rgb-triplet($c)};
+    @each $i in (3, 5, 7, 8, 9) {
+      --el-color-#{$type}-light-#{$i}: #{color.mix(#ffffff, $c, $i * 10%)};
+    }
+    --el-color-#{$type}-dark-2: #{color.mix(#000000, $c, 20%)};
+  }
+}
+
+html.dark {
+  @each $type, $c in $brand-colors {
+    --el-color-#{$type}: #{$c};
+    --el-color-#{$type}-rgb: #{rgb-triplet($c)};
+    @each $i in (3, 5, 7, 8, 9) {
+      --el-color-#{$type}-light-#{$i}: #{color.mix(#141414, $c, $i * 10%)};
+    }
+    --el-color-#{$type}-dark-2: #{color.mix(#ffffff, $c, 20%)};
+  }
+}
+
+// --- Branded loader ----------------------------------------------------------
+// v-loading masks show the terminal prompt instead of the stock circle: a
+// static `>` and a blinking `_` — the same `>_` mark as the logo/favicon.
+// Pseudo-elements on .el-loading-spinner, so every existing `v-loading` usage
+// picks it up with no per-callsite changes. An optional `element-loading-text`
+// wraps onto its own line below the glyphs.
+.el-loading-spinner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0 2px;
+  font-family: $font-family-mono;
+
+  .circular {
+    display: none;
+  }
+
+  &::before,
+  &::after {
+    font-size: 26px;
+    font-weight: $font-weight-bold;
+    line-height: 1;
+    color: var(--el-color-primary);
+  }
+  &::before {
+    content: '>';
+  }
+  &::after {
+    content: '_';
+    animation: brigadir-cursor-blink 1.1s steps(2, jump-none) infinite;
+  }
+
+  .el-loading-text {
+    width: 100%;
+    text-align: center;
+    margin-top: $space-sm;
+  }
+}
+
+@keyframes brigadir-cursor-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  // The prompt stays as a static indicator; only the blinking goes.
+  .el-loading-spinner::after {
+    animation: none;
+  }
+}

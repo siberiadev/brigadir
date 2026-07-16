@@ -7,6 +7,8 @@
 
 @use 'variables' as *;
 @use 'normalize';
+// Brand palette: --el-color-* overrides (light + dark) and the >_ loader.
+@use 'theme';
 
 // Apply Ubuntu everywhere, including inside Element Plus components — EP reads
 // its font from the --el-font-family custom property, so overriding it here
