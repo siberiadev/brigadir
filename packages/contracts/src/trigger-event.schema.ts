@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AnswerOptionsSchema } from './answer-option.schema';
 
 /**
  * runs.trigger_event JSONB payload (iteration 1).
@@ -68,6 +69,10 @@ export const TriggerEventSchema = z
     mock_scenario: z.enum(MOCK_SCENARIOS).default('success'),
     rate_limit_ttl_ms: z.number().int().positive().optional(),
     mock_delay_ms: z.number().int().positive().optional(),
+    // feature 013: answer options for the mock `needs_human` scenario — rides
+    // here like mock_delay_ms/target_agent so integration tests can drive the
+    // options loop without live agents. Real executors ignore it.
+    mock_options: AnswerOptionsSchema.optional(),
     // Handoff references (feature 010, D7/D8) — typed for handoff assembly and the
     // mock executor; the schema still .passthrough()es for forward compatibility.
     failing_run_id: z.string().uuid().optional(),

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { AnswerOptionSchema, AnswerOptionsSchema } from './answer-option.schema';
+import { HumanQueueItemSchema } from './human-queue.schema';
 
 describe('AnswerOptionSchema (feature 013)', () => {
   it('accepts a full option and a label-only option', () => {
@@ -63,5 +64,31 @@ describe('AnswerOptionsSchema (feature 013)', () => {
         Array.from({ length: 6 }, (_, i) => ({ label: `option ${i}` })),
       ).success,
     ).toBe(false);
+  });
+});
+
+describe('HumanQueueItemSchema.options (feature 013)', () => {
+  const baseItem = {
+    id: 'ht-1',
+    kind: 'question',
+    title: 'Which strategy?',
+    details: null,
+    blocking: true,
+    ticket: null,
+    agent: null,
+    workspace: { id: 'ws-1', name: 'WS' },
+    run_id: null,
+    created_at: '2026-07-16T00:00:00.000Z',
+  };
+
+  it('requires the options field (nullable, not optional)', () => {
+    expect(HumanQueueItemSchema.safeParse(baseItem).success).toBe(false);
+    expect(HumanQueueItemSchema.safeParse({ ...baseItem, options: null }).success).toBe(true);
+    expect(
+      HumanQueueItemSchema.safeParse({
+        ...baseItem,
+        options: [{ label: 'Minimal team', description: 'Just a developer' }],
+      }).success,
+    ).toBe(true);
   });
 });

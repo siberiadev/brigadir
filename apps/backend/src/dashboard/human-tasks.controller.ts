@@ -2,6 +2,7 @@ import { Controller, Get, Inject, Query, UseGuards } from '@nestjs/common';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import {
+  type AnswerOption,
   type HumanQueueCountResponse,
   type HumanQueueItem,
   type HumanQueueKind,
@@ -54,6 +55,7 @@ export class HumanTasksController {
         kind: schema.humanTasks.kind,
         title: schema.humanTasks.title,
         details: schema.humanTasks.details,
+        options: schema.humanTasks.options,
         blocking: schema.humanTasks.blocking,
         runId: schema.humanTasks.runId,
         createdAt: schema.humanTasks.createdAt,
@@ -97,6 +99,8 @@ export class HumanTasksController {
           kind: r.kind as HumanQueueKind,
           title: r.title,
           details: r.details ?? null,
+          // feature 013: stored pre-validated/pre-scrubbed at intake.
+          options: (r.options as AnswerOption[] | null) ?? null,
           blocking: r.blocking,
           ticket:
             r.ticketKey === null

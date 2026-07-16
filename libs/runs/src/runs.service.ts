@@ -243,6 +243,8 @@ export class RunsService {
       kind: humanTask.kind,
       title: humanTask.title,
       details: humanTask.details ?? null,
+      // feature 013: options arrive pre-scrubbed (CallbackService.scrubReport).
+      options: humanTask.options ?? null,
       blocking: true,
       status: 'open',
     });

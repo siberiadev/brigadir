@@ -10,6 +10,7 @@ import {
   ReportProgressSchema,
   RequestHumanSchema,
   type AgentReport,
+  type AnswerOption,
 } from '@brigadir/contracts';
 import { scrub } from '@brigadir/scrubber';
 import { RunsService } from '@brigadir/runs';
@@ -25,6 +26,18 @@ export interface ConflictFailure {
   kind: 'conflict';
 }
 
+// feature 013 (Constitution V): option texts are free text and reach
+// persistence + the Jira question comment, so every field is scrubbed —
+// the same guarantee as title/details.
+function scrubOptions(options: AnswerOption[] | undefined): AnswerOption[] | undefined {
+  return options?.map((option) => ({
+    ...option,
+    label: scrub(option.label),
+    value: option.value !== undefined ? scrub(option.value) : option.value,
+    description: option.description !== undefined ? scrub(option.description) : option.description,
+  }));
+}
+
 function scrubReport(report: AgentReport): AgentReport {
   return {
     ...report,
@@ -38,6 +51,7 @@ function scrubReport(report: AgentReport): AgentReport {
           ...report.human_task,
           title: scrub(report.human_task.title),
           details: report.human_task.details !== undefined ? scrub(report.human_task.details) : report.human_task.details,
+          options: scrubOptions(report.human_task.options),
         }
       : report.human_task,
     // feature 010 (FR-003, Constitution V): the routing task is free text and
@@ -117,6 +131,7 @@ export class CallbackService {
       title: scrub(input.title),
       details: scrub(input.details),
       blocking: input.blocking,
+      options: scrubOptions(input.options),
     });
 
     return result.blocking

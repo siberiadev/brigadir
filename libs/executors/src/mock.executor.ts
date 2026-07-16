@@ -41,7 +41,9 @@ export class MockExecutor implements AgentExecutor {
       case 'failure':
         return { exitStatus: 'completed', report: failureReport() };
       case 'needs_human':
-        return { exitStatus: 'completed', report: needsHumanReport() };
+        // feature 013: `trigger_event.mock_options` attaches answer options so
+        // the options loop is drivable without live agents.
+        return { exitStatus: 'completed', report: needsHumanReport(triggerEvent.mock_options) };
       case 'timeout':
         return { exitStatus: 'timeout', diagnostics: 'mock: simulated executor timeout' };
       case 'crash':
@@ -178,7 +180,7 @@ function teamReport(agents: TeamProposalAgents): AgentReport {
   };
 }
 
-function needsHumanReport(): AgentReport {
+function needsHumanReport(options?: NonNullable<AgentReport['human_task']>['options']): AgentReport {
   return {
     schema_version: 1,
     outcome: 'needs_human',
@@ -188,6 +190,7 @@ function needsHumanReport(): AgentReport {
       kind: 'question',
       title: 'Clarify expected behavior for edge case',
       details: 'mock: the ticket does not specify the empty-input behavior.',
+      ...(options ? { options } : {}),
     },
   };
 }

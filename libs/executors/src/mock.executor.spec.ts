@@ -92,6 +92,29 @@ describe('MockExecutor (T024)', () => {
     expect((second.report as { outcome: string }).outcome).toBe('success');
   });
 
+  // feature 013: `mock_options` parameterizes the needs_human ask.
+  it('needs_human attaches trigger_event.mock_options to the human_task; none by default', async () => {
+    const options = [
+      { label: 'Return empty list', value: 'empty' },
+      { label: 'Throw an error', description: 'Fail fast' },
+    ];
+    const withOptions = new MockExecutor(
+      fakeDb({ source: 'manual', mock_scenario: 'needs_human', mock_options: options }, []) as never,
+    );
+    const r = await withOptions.run(ctx(), signal);
+    expect(
+      (r.report as { human_task: { options?: unknown } }).human_task.options,
+    ).toEqual(options);
+
+    const withoutOptions = new MockExecutor(
+      fakeDb({ source: 'manual', mock_scenario: 'needs_human' }, []) as never,
+    );
+    const plain = await withoutOptions.run(ctx(), signal);
+    expect(
+      'options' in (plain.report as { human_task: object }).human_task,
+    ).toBe(false);
+  });
+
   it('healthCheck reports ok', async () => {
     const exec = new MockExecutor(fakeDb({}, []) as never);
     expect(await exec.healthCheck()).toEqual({ ok: true });

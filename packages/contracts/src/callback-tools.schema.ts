@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ReportSchema, HUMAN_TASK_KINDS } from './report.schema';
+import { AnswerOptionsSchema } from './answer-option.schema';
 
 /**
  * Callback tool argument schemas — one zod module, four future bindings
@@ -34,6 +35,9 @@ export const RequestHumanSchema = z
           'dense block. Do NOT wrap the whole thing in a single code fence.',
       ),
     blocking: z.boolean().default(true),
+    // feature 013: suggested answers, rendered as one-click buttons in the
+    // human queue. Free text — scrubbed at intake like title/details.
+    options: AnswerOptionsSchema.optional(),
   })
   .strict();
 
