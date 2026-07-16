@@ -3,7 +3,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { ServerResult } from '@modelcontextprotocol/sdk/types.js';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { z } from 'zod';
 import { CallbackTools } from '@brigadir/contracts';
 import { createToolHandlers } from './tools.js';
 
@@ -14,11 +14,6 @@ import { createToolHandlers } from './tools.js';
  * (never argv, never the agent's env — D1). stdout is MCP protocol only; all
  * logs go to stderr.
  */
-
-const zodToJsonSchemaUntyped = zodToJsonSchema as unknown as (
-  schema: unknown,
-  options?: unknown,
-) => Record<string, unknown>;
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -86,7 +81,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: TOOL_DEFS.map((t) => ({
     name: t.name,
     description: t.description,
-    inputSchema: zodToJsonSchemaUntyped(t.schema, { target: 'jsonSchema7' }),
+    // zod 4 native converter (2026-07-16); target stays draft-07 — the same
+    // dialect zod-to-json-schema always emitted for MCP clients here.
+    inputSchema: z.toJSONSchema(t.schema, { target: 'draft-7' }) as Record<string, unknown>,
   })),
 }));
 

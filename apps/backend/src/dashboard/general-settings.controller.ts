@@ -12,7 +12,7 @@ import {
   type GeneralSettings,
 } from '@brigadir/contracts';
 import { DashboardTokenGuard } from './dashboard-token.guard';
-import { validationError } from './dashboard.errors';
+import { validationError, zodIssuePath } from './dashboard.errors';
 
 /**
  * Platform General-settings surface (feature 010, FR-021/022). Backed by the
@@ -38,7 +38,7 @@ export class GeneralSettingsController {
       throw validationError(
         'General settings could not be saved.',
         parsed.error.issues.map((i) => ({
-          path: i.path,
+          path: zodIssuePath(i.path),
           code: i.code,
           message: i.message,
           level: 'error' as const,

@@ -23,7 +23,7 @@ import {
 } from '@brigadir/contracts';
 import { sealExecutorSecrets } from '@brigadir/executors';
 import { DashboardTokenGuard } from './dashboard-token.guard';
-import { conflictError, notFoundError, validationError } from './dashboard.errors';
+import { conflictError, notFoundError, validationError, zodIssuePath } from './dashboard.errors';
 import { parsePagination } from './dashboard.helpers';
 
 type ExecutorRow = typeof schema.executors.$inferSelect;
@@ -152,12 +152,12 @@ export class ExecutorsController {
 
   // --- internals ---
 
-  private parse<T>(body: unknown, schemaDef: { safeParse: (b: unknown) => { success: boolean; data?: T; error?: { issues: { path: (string | number)[]; message: string; code: string }[] } } }): T {
+  private parse<T>(body: unknown, schemaDef: { safeParse: (b: unknown) => { success: boolean; data?: T; error?: { issues: { path: PropertyKey[]; message: string; code: string }[] } } }): T {
     const parsed = schemaDef.safeParse(body);
     if (!parsed.success) {
       throw validationError(
         'Executor could not be saved.',
-        parsed.error!.issues.map((i) => ({ path: i.path, code: i.code, message: i.message, level: 'error' as const })),
+        parsed.error!.issues.map((i) => ({ path: zodIssuePath(i.path), code: i.code, message: i.message, level: 'error' as const })),
       );
     }
     return parsed.data!;
