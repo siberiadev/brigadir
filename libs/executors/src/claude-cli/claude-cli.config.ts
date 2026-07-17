@@ -66,6 +66,76 @@ export interface ClaudeCliRuntimeConfig {
 }
 
 /**
+ * Effective auth mode (feature 018, specs/018-bedrock-auth-mode/contracts/
+ * executor-auth.md). Discriminated result so bedrock's required region is
+ * carried by the type, not re-checked at every consumer.
+ */
+export type EffectiveAuth =
+  | { mode: 'host_subscription' }
+  | { mode: 'api_key' }
+  | { mode: 'bedrock'; awsRegion: string; awsProfile?: string; caBundlePath?: string };
+
+/**
+ * The ONE implementation of the auth defaulting rule (feature 018 FR-002):
+ * stored `auth` wins; absent → `api_key` iff a sealed key blob exists, else
+ * `host_subscription`. Consumed by the runtime (loadRunConfig) AND the
+ * dashboard response mapper — duplicating this conditional is how the two
+ * would drift. Stored rows are never rewritten to materialize the default.
+ *
+ * A bedrock row without awsRegion cannot be written through the validated
+ * API/boot paths; hitting one here means hand-edited jsonb — fail loud
+ * (FR-012), never fall back to another auth mode.
+ */
+export function resolveEffectiveAuth(
+  config: Pick<ClaudeCliExecutorConfigInput, 'auth' | 'awsRegion' | 'awsProfile' | 'caBundlePath'>,
+  hasStoredKey: boolean,
+): EffectiveAuth {
+  const mode = config.auth ?? (hasStoredKey ? 'api_key' : 'host_subscription');
+  if (mode !== 'bedrock') return { mode };
+  if (!config.awsRegion) {
+    throw new Error('executor config has auth "bedrock" but no awsRegion — re-save the profile');
+  }
+  return {
+    mode,
+    awsRegion: config.awsRegion,
+    awsProfile: config.awsProfile,
+    caBundlePath: config.caBundlePath,
+  };
+}
+
+/**
+ * Per-mode child-env injection (feature 018), applied strictly AFTER
+ * `buildChildEnv` — the allowlist floor is unchanged and every value here
+ * comes from the profile row, never from the worker's own process.env:
+ *  - host_subscription → nothing (CLI reads ~/.claude via HOME);
+ *  - api_key → ANTHROPIC_API_KEY (the profile's own decrypted secret —
+ *    the HOST's variable of the same name still cannot leak through);
+ *  - bedrock → CLAUDE_CODE_USE_BEDROCK=1 + AWS_REGION (+ AWS_PROFILE /
+ *    NODE_EXTRA_CA_CERTS iff configured). AWS credentials are NEVER injected:
+ *    the CLI resolves them from ~/.aws via the allowlisted HOME.
+ * Pure (mutates only the passed env object) — unit-tested per mode.
+ */
+export function applyAuthEnv(
+  env: Record<string, string>,
+  auth: EffectiveAuth,
+  apiKey?: string,
+): void {
+  switch (auth.mode) {
+    case 'host_subscription':
+      return;
+    case 'api_key':
+      if (apiKey) env.ANTHROPIC_API_KEY = apiKey;
+      return;
+    case 'bedrock':
+      env.CLAUDE_CODE_USE_BEDROCK = '1';
+      env.AWS_REGION = auth.awsRegion;
+      if (auth.awsProfile) env.AWS_PROFILE = auth.awsProfile;
+      if (auth.caBundlePath) env.NODE_EXTRA_CA_CERTS = auth.caBundlePath;
+      return;
+  }
+}
+
+/**
  * Resolve the boot-validated `claude_cli` config branch into the runtime
  * shape (D9/contracts/executor-config.md). Pure — no I/O; `os.tmpdir()` is a
  * process-metadata read, not a filesystem/network call, and every default

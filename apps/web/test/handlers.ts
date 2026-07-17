@@ -138,6 +138,8 @@ export const sampleExecutors: ExecutorResponse[] = [
       use_callback_channel: true,
       keep_failed_worktrees: false,
       max_turns: 30,
+      // Feature 018: responses always carry the EFFECTIVE auth mode.
+      auth: 'host_subscription',
     },
   },
   {
@@ -165,6 +167,29 @@ export const sampleExecutorWithKey: ExecutorResponse = {
     use_callback_channel: true,
     keep_failed_worktrees: false,
     max_turns: 40,
+    // Feature 018: a stored key defaults the effective mode to api_key.
+    auth: 'api_key',
+  },
+};
+
+/** Feature 018: a bedrock-mode profile — corporate Claude through AWS Bedrock. */
+export const sampleExecutorBedrock: ExecutorResponse = {
+  id: 'ex-bedrock',
+  type: 'claude_cli',
+  name: 'corp-bedrock',
+  enabled: true,
+  max_parallel_runs: 2,
+  has_api_key: false,
+  config: {
+    model: 'eu.anthropic.claude-opus-4-8',
+    cli_path: 'claude',
+    use_callback_channel: true,
+    keep_failed_worktrees: false,
+    max_turns: 30,
+    auth: 'bedrock',
+    aws_region: 'eu-west-1',
+    aws_profile: 'corp-dev',
+    ca_bundle_path: '/etc/ssl/corp/ca-bundle.pem',
   },
 };
 

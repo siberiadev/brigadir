@@ -85,8 +85,27 @@ export const ClaudeCliExecutorConfigSchema = z
     // mcp-config + Stop hook instead; omitted/false keeps the iteration-3
     // structured-output path byte-for-byte unchanged.
     useCallbackChannel: z.boolean().default(false),
+    // Feature 018 — auth mode, camelCase mirror of the API branch
+    // (executor.schema.ts): this is the stored `executors.config` jsonb shape
+    // the runtime consumes. Absent `auth` → resolveEffectiveAuth defaulting
+    // (stored key ⇒ api_key, else host_subscription). Bedrock fields are
+    // configuration, not credentials — AWS credentials stay in ~/.aws on the
+    // worker host, reachable via the allowlisted HOME.
+    auth: z.enum(['host_subscription', 'api_key', 'bedrock']).optional(),
+    awsRegion: z.string().min(1).optional(),
+    awsProfile: z.string().min(1).optional(),
+    caBundlePath: z.string().min(1).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.auth === 'bedrock' && value.awsRegion === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['awsRegion'],
+        message: 'awsRegion is required when auth is "bedrock".',
+      });
+    }
+  });
 
 /** Shape shared by the executor types that have no typed extension yet. */
 function passthroughExecutorConfig<T extends string>(type: T) {
