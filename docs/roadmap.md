@@ -77,6 +77,8 @@
 
 **Цель:** облачная версия для команд при сохранении self-hosted; легальная модель исполнения.
 
+> Детальный дизайн части «Users/orgs/roles» зафиксирован в [auth-multitenancy.md](auth-multitenancy.md) (обсуждение 2026-07-17): tenant-модель, роли двух уровней, внешний auth-провайдер, enforcement, нарезка итераций, открытые вопросы.
+
 Состав:
 
 1. Users/orgs/roles, SSO; Jira **OAuth 2.0 3LO app** (vault refresh-токенов с сериализованной ротацией, cloudId-роутинг, динамические вебхуки: 5/user cap, 30-дневный refresh-крон, `/webhook/failed` sweep) — API-token путь остаётся для self-hosted.
