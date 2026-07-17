@@ -12,7 +12,6 @@ import {
   patchWorkspaceSettings,
   seedOrchestratorAgent,
 } from '@brigadir/database';
-import { buildScopeJql } from '@brigadir/ingest';
 import {
   JiraClientFactory,
   StatusesService,
@@ -20,6 +19,7 @@ import {
   encodeJiraCredentials,
   decodeJiraCredentials,
   jqlEscape,
+  buildScopeJql,
 } from '@brigadir/jira';
 import {
   WorkspaceVerifyRequestSchema,
@@ -123,13 +123,14 @@ export class WorkspacesController {
     const scopeJql = await getScopeJql(this.db, id);
     const jira = await this.jiraFactory.forWorkspace(id);
 
-    // Scrum boards scope to the active sprint (mirrors the poller). No active
-    // sprint → idle: nothing would ingest, so the count is 0 (FR-030 parity).
-    let sprintId: number | null = null;
+    // Scrum boards scope to the active sprint set (mirrors the poller; a board
+    // may run several at once). No active sprint → idle: nothing would ingest,
+    // so the count is 0 (FR-030 parity).
+    let sprintIds: number[] = [];
     if (ws.boardType === 'scrum') {
-      sprintId = ws.boardId != null ? await jira.getActiveSprintId(ws.boardId) : null;
-      if (sprintId == null) {
-        return { count: 0, jql: '', active_sprint: null };
+      sprintIds = ws.boardId != null ? await jira.getActiveSprintIds(ws.boardId) : [];
+      if (sprintIds.length === 0) {
+        return { count: 0, jql: '', active_sprint_ids: [] };
       }
     }
 
@@ -139,7 +140,7 @@ export class WorkspacesController {
     let jql = buildScopeJql({
       boardType: ws.boardType as JiraBoardType,
       projectKey: ws.projectKey,
-      sprintId,
+      sprintIds,
       scopeJql,
     });
     if (parsed.data.status) {
@@ -150,7 +151,7 @@ export class WorkspacesController {
     }
 
     const count = await jira.approximateCount(jql);
-    return { count, jql, active_sprint: sprintId != null ? { id: sprintId } : null };
+    return { count, jql, active_sprint_ids: sprintIds };
   }
 
   @Post()

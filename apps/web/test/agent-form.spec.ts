@@ -113,7 +113,7 @@ describe('AgentForm — statuses + linter mirror', () => {
     server.use(
       http.post('/api/workspaces/:id/ticket-count', async ({ request }) => {
         sentStatus = ((await request.json()) as { status?: string }).status;
-        return HttpResponse.json({ count: 7, jql: 'project = "BRIG"', active_sprint: { id: 100 } });
+        return HttpResponse.json({ count: 7, jql: 'project = "BRIG"', active_sprint_ids: [100] });
       }),
     );
 

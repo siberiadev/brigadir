@@ -218,12 +218,12 @@ export class DependencyReleaseService {
       // trailing ORDER BY stays syntactically last (the `since` clause is
       // deliberately absent — this is a membership probe).
       const scopeJqlSetting = await getScopeJql(this.db, ws.id);
-      const sprintId =
-        ws.boardType === 'scrum' && ws.boardId != null ? await jira.getActiveSprintId(ws.boardId) : null;
+      const sprintIds =
+        ws.boardType === 'scrum' && ws.boardId != null ? await jira.getActiveSprintIds(ws.boardId) : [];
       const probeJql = buildScopeJql({
         boardType: ws.boardType,
         projectKey: ws.projectKey,
-        sprintId,
+        sprintIds,
         scopeJql: scopeJqlSetting ? `(${scopeJqlSetting}) AND key in (${keyList})` : `key in (${keyList})`,
       });
       inScopeBlockers = new Set((await jira.searchUpdated(probeJql, ['status'])).map((b) => b.key));

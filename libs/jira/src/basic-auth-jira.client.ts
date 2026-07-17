@@ -111,12 +111,12 @@ export class BasicAuthJiraClient implements JiraClient {
     };
   }
 
-  async getActiveSprintId(boardId: number): Promise<number | null> {
+  async getActiveSprintIds(boardId: number): Promise<number[]> {
     const res = await this.request<{ values?: Array<{ id: number }> }>(
       'GET',
       `/rest/agile/1.0/board/${boardId}/sprint?state=active`,
     );
-    return res.values?.[0]?.id ?? null;
+    return (res.values ?? []).map((v) => v.id);
   }
 
   async getTransitions(issueKey: string): Promise<JiraTransition[]> {

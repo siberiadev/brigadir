@@ -247,7 +247,7 @@ async function previewTrigger() {
   try {
     const res = await ticketCount.mutateAsync({ status: form.trigger_status });
     triggerPreviewResult.value =
-      res.active_sprint === null && res.count === 0
+      res.active_sprint_ids.length === 0 && res.count === 0
         ? 'No active sprint on this board — nothing would trigger.'
         : `${res.count} ticket(s) in "${form.trigger_status}" would trigger this agent.`;
   } catch (err) {

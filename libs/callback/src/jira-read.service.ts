@@ -73,17 +73,19 @@ export class JiraReadService {
     const statuses = await jira.getProjectStatuses(ws.projectKey);
     // Best-effort extras: types/sprint degrade to empty rather than failing the read.
     const issueTypes = await jira.getProjectIssueTypes(ws.projectKey).catch(() => []);
-    const sprintId =
+    // A scrum board may run several active sprints; the overview surfaces the
+    // first (agent-facing ProjectOverview.active_sprint stays a single id).
+    const sprintIds =
       ws.boardType === 'scrum' && ws.boardId !== null
-        ? await jira.getActiveSprintId(ws.boardId).catch(() => null)
-        : null;
+        ? await jira.getActiveSprintIds(ws.boardId).catch(() => [])
+        : [];
 
     return {
       project_key: ws.projectKey,
       board_type: ws.boardType,
       statuses: statuses.map((s) => ({ name: s.name, category: s.statusCategory })),
       issue_types: issueTypes,
-      active_sprint: sprintId !== null ? { id: sprintId } : null,
+      active_sprint: sprintIds.length > 0 ? { id: sprintIds[0] } : null,
     };
   }
 

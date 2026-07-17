@@ -57,8 +57,8 @@ export class LazyJiraClient implements JiraClient {
   async getBoard(boardId: number): Promise<{ type: JiraBoardType; projectKey: string }> {
     return (await this.client()).getBoard(boardId);
   }
-  async getActiveSprintId(boardId: number): Promise<number | null> {
-    return (await this.client()).getActiveSprintId(boardId);
+  async getActiveSprintIds(boardId: number): Promise<number[]> {
+    return (await this.client()).getActiveSprintIds(boardId);
   }
   async getTransitions(issueKey: string): Promise<JiraTransition[]> {
     return (await this.client()).getTransitions(issueKey);

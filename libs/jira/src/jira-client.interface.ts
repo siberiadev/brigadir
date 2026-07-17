@@ -19,8 +19,12 @@ export interface JiraClient {
   searchUpdated(jql: string, fields: string[]): Promise<JiraIssue[]>;
   /** GET /rest/agile/1.0/board/{id} → board type + project key. */
   getBoard(boardId: number): Promise<{ type: JiraBoardType; projectKey: string }>;
-  /** Head of openSprints() for the board, or null when none is active. */
-  getActiveSprintId(boardId: number): Promise<number | null>;
+  /**
+   * ALL active (open) sprints on the board — a scrum board can run several in
+   * parallel. Empty array when none is active. Callers scope with
+   * `sprint in (…)` over the whole set (mirrors the board's own view).
+   */
+  getActiveSprintIds(boardId: number): Promise<number[]>;
   /** GET /issue/{key}/transitions — raw available transitions. */
   getTransitions(issueKey: string): Promise<JiraTransition[]>;
   /** GET /issue/{key}?fields=parent,issuelinks — epic + linked issues, statuses only (feature 004, FR-026). */

@@ -183,8 +183,11 @@ export const TicketCountResponseSchema = z
     count: z.number().int(),
     /** The composed JQL, echoed for transparency/debugging in the UI. */
     jql: z.string(),
-    /** Scrum: the active sprint the count was scoped to; null (kanban, or no active sprint). */
-    active_sprint: z.object({ id: z.number().int() }).nullable(),
+    /**
+     * Scrum: the active sprint id(s) the count was scoped to (a board may run
+     * several at once). Empty for kanban or when no sprint is active.
+     */
+    active_sprint_ids: z.array(z.number().int()),
   })
   .strict();
 export type TicketCountResponse = z.infer<typeof TicketCountResponseSchema>;

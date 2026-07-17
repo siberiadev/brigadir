@@ -10,6 +10,16 @@ describe('WorkspaceSettingsSchema (T036)', () => {
     expect(res.success).toBe(true);
   });
 
+  it('parses the multi-sprint active set (active_sprint_ids) alongside the legacy single id', () => {
+    expect(
+      WorkspaceSettingsSchema.safeParse({ reconcile: { active_sprint_ids: [4123, 4124] } }).success,
+    ).toBe(true);
+    // legacy single id still parses (read-compat)
+    expect(WorkspaceSettingsSchema.safeParse({ reconcile: { active_sprint_id: 4123 } }).success).toBe(
+      true,
+    );
+  });
+
   it('accepts an empty blob (all defaults)', () => {
     expect(WorkspaceSettingsSchema.safeParse({}).success).toBe(true);
   });

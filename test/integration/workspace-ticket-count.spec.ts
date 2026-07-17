@@ -87,7 +87,7 @@ describe('workspace ticket-count preview', () => {
     expect(all.status).toBe(200);
     const allBody = await all.json();
     expect(allBody.count).toBe(3);
-    expect(allBody.active_sprint).toBeNull();
+    expect(allBody.active_sprint_ids).toEqual([]);
     expect(allBody.jql).not.toMatch(/sprint/i);
 
     const scoped = await count(id, { status: 'Ready for Dev' });
@@ -105,18 +105,33 @@ describe('workspace ticket-count preview', () => {
     const res = await count(id);
     const body = await res.json();
     expect(body.count).toBe(1);
-    expect(body.active_sprint).toEqual({ id: 100 });
+    expect(body.active_sprint_ids).toEqual([100]);
     expect(body.jql).toMatch(/sprint in \(100\)/);
   });
 
-  it('scrum with NO active sprint → idle (count 0, active_sprint null)', async () => {
+  it('scrum with MULTIPLE active sprints → scopes over the whole set', async () => {
+    const id = await seedWorkspace('scrum');
+    jira.seedIssue('BRIG-1', { status: 'Ready for Dev' });
+    jira.seedIssue('BRIG-2', { status: 'Ready for Dev' });
+    jira.seedIssue('BRIG-3', { status: 'Ready for Dev' }); // not in any active sprint
+    jira.startSprint(100, ['BRIG-1']);
+    jira.addActiveSprint(200, ['BRIG-2']);
+
+    const res = await count(id);
+    const body = await res.json();
+    expect(body.count).toBe(2); // BRIG-1 + BRIG-2, not BRIG-3
+    expect(body.active_sprint_ids).toEqual([100, 200]);
+    expect(body.jql).toMatch(/sprint in \(100,200\)/);
+  });
+
+  it('scrum with NO active sprint → idle (count 0, empty active set)', async () => {
     const id = await seedWorkspace('scrum');
     jira.seedIssue('BRIG-1', { status: 'Ready for Dev' });
 
     const res = await count(id);
     const body = await res.json();
     expect(body.count).toBe(0);
-    expect(body.active_sprint).toBeNull();
+    expect(body.active_sprint_ids).toEqual([]);
   });
 
   it('workspaces.settings.scope_jql is ANDed into the scope', async () => {

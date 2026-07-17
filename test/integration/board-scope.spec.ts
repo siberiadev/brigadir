@@ -154,6 +154,30 @@ describe('board scope: scrum sprint semantics (T065)', () => {
   });
 });
 
+describe('board scope: multiple active sprints (FR-032)', () => {
+  let b: Booted;
+
+  beforeAll(async () => {
+    b = await boot('scrum');
+    b.mock.seedIssue('BRIG-1', { status: TRIGGER });
+    b.mock.seedIssue('BRIG-2', { status: TRIGGER });
+  }, 240_000);
+
+  afterAll(async () => teardown(b));
+
+  it('scopes over the whole active set — a ticket in ANY active sprint triggers', async () => {
+    // Two sprints active at once (a board may run several in parallel).
+    b.mock.startSprint(100, ['BRIG-1']);
+    b.mock.addActiveSprint(200, ['BRIG-2']);
+    await b.reconcile.run();
+    expect(await runCount(b)).toBe(2); // both surfaced by `sprint in (100,200)`
+
+    // Repeat pass: set unchanged → dedup + diff cache → no additional run.
+    await b.reconcile.run();
+    expect(await runCount(b)).toBe(2);
+  });
+});
+
 describe('board scope: kanban whole-project unchanged (T065)', () => {
   let b: Booted;
 

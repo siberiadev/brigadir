@@ -63,7 +63,7 @@ async function previewCount() {
   try {
     const res = await ticketCount.mutateAsync({});
     previewResult.value =
-      res.active_sprint === null && res.count === 0
+      res.active_sprint_ids.length === 0 && res.count === 0
         ? 'No active sprint on this board — nothing in scope.'
         : `${res.count} ticket(s) in scope.`;
   } catch (err) {

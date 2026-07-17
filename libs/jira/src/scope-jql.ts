@@ -21,8 +21,12 @@ export const HWM_OVERLAP_MS = 26 * 60 * 60_000;
 export interface BoardScope {
   boardType: JiraBoardType;
   projectKey: string;
-  /** Active sprint id (scrum only); required for scrum scope, ignored for kanban. */
-  sprintId?: number | null;
+  /**
+   * Active sprint ids (scrum only; a board may run several in parallel). The
+   * whole set is scoped with `sprint in (…)`. Empty/omitted ⇒ no sprint clause
+   * (ignored for kanban).
+   */
+  sprintIds?: number[];
 }
 
 export interface ScopeJqlOptions extends BoardScope {
@@ -36,15 +40,15 @@ export interface ScopeJqlOptions extends BoardScope {
  * Build the poller scope JQL (data-model.md "Poller scope JQL"):
  *
  * - kanban: `project = K [AND (scope_jql)] [AND updated >= "since"]`
- * - scrum:  `project = K AND sprint in (id) [AND (scope_jql)] [AND updated >= "since"]`
+ * - scrum:  `project = K AND sprint in (id,…) [AND (scope_jql)] [AND updated >= "since"]`
  * - scrum sprint-switch: same as scrum WITHOUT the `updated` clause (omit `since`)
  *
  * Ordered by `updated ASC` so the high-water mark advances monotonically.
  */
 export function buildScopeJql(opts: ScopeJqlOptions): string {
   const clauses = [`project = "${opts.projectKey}"`];
-  if (opts.boardType === 'scrum' && opts.sprintId != null) {
-    clauses.push(`sprint in (${opts.sprintId})`);
+  if (opts.boardType === 'scrum' && opts.sprintIds && opts.sprintIds.length > 0) {
+    clauses.push(`sprint in (${opts.sprintIds.join(',')})`);
   }
   if (opts.scopeJql) clauses.push(`(${opts.scopeJql})`);
   if (opts.since) clauses.push(`updated >= "${opts.since}"`);

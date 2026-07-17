@@ -47,35 +47,39 @@ export class PollerService {
    */
   async pollAndDiff(ws: WorkspaceContext, jira: JiraClient): Promise<void> {
     const scopeJql = await getScopeJql(this.db, ws.id);
-    const { highWaterMark, activeSprintId } = await getReconcileState(this.db, ws.id);
+    const { highWaterMark, activeSprintIds } = await getReconcileState(this.db, ws.id);
 
     if (ws.boardType === 'scrum') {
-      const currentSprintId = ws.boardId != null ? await jira.getActiveSprintId(ws.boardId) : null;
+      // A scrum board may run several sprints at once; scope over the whole set.
+      const currentSprintIds = ws.boardId != null ? await jira.getActiveSprintIds(ws.boardId) : [];
 
-      if (currentSprintId == null) {
+      if (currentSprintIds.length === 0) {
         // No active sprint → idle no-op (FR-030); remember the absence.
-        if (activeSprintId != null) await setReconcileState(this.db, ws.id, { activeSprintId: null });
+        if (activeSprintIds && activeSprintIds.length > 0) {
+          await setReconcileState(this.db, ws.id, { activeSprintIds: [] });
+        }
         this.logger.log(`workspace ${ws.id}: scrum board has no active sprint — poll idle`);
         return;
       }
 
-      if (currentSprintId !== activeSprintId) {
-        // Sprint switch (FR-032): one-off FULL rescan of the new sprint WITHOUT
-        // the `updated` clause — a sprint start does not touch issues' `updated`.
+      if (!sameSprintSet(currentSprintIds, activeSprintIds)) {
+        // Sprint-set change (FR-032): a sprint added to / removed from the active
+        // set does not touch issues' `updated`, so do a one-off FULL rescan of
+        // the current set WITHOUT the `updated` clause.
         const jql = buildScopeJql({
           boardType: 'scrum',
           projectKey: ws.projectKey,
-          sprintId: currentSprintId,
+          sprintIds: currentSprintIds,
           scopeJql,
         });
         const issues = await jira.searchUpdated(jql, [...POLL_FIELDS]);
         const maxUpdated = await this.processIssues(ws, issues);
         await setReconcileState(this.db, ws.id, {
-          activeSprintId: currentSprintId,
+          activeSprintIds: currentSprintIds,
           highWaterMark: maxUpdated ?? highWaterMark,
         });
         this.logger.log(
-          `workspace ${ws.id}: sprint switch → rescanned ${issues.length} issue(s) of sprint ${currentSprintId}`,
+          `workspace ${ws.id}: sprint set changed → rescanned ${issues.length} issue(s) of sprint(s) ${currentSprintIds.join(',')}`,
         );
         return;
       }
@@ -83,7 +87,7 @@ export class PollerService {
       const jql = buildScopeJql({
         boardType: 'scrum',
         projectKey: ws.projectKey,
-        sprintId: currentSprintId,
+        sprintIds: currentSprintIds,
         scopeJql,
         since: sinceClause(highWaterMark),
       });
@@ -182,4 +186,11 @@ export class PollerService {
       .returning({ id: schema.tickets.id });
     return { ticketId: inserted.id, prevStatus: null };
   }
+}
+
+/** Order-independent set equality for the active-sprint id sets (FR-032 switch detection). */
+function sameSprintSet(current: number[], previous: number[] | undefined): boolean {
+  if (previous === undefined || current.length !== previous.length) return false;
+  const prev = new Set(previous);
+  return current.every((id) => prev.has(id));
 }

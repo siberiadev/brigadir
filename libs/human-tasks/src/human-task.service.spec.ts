@@ -52,7 +52,7 @@ function fakeJira(): JiraClient {
   return {
     searchUpdated: vi.fn(),
     getBoard: vi.fn(),
-    getActiveSprintId: vi.fn(),
+    getActiveSprintIds: vi.fn(),
     getTransitions: vi.fn(),
     transitionTo: vi.fn().mockResolvedValue(undefined),
     addComment: vi.fn().mockResolvedValue(undefined),

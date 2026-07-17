@@ -83,14 +83,20 @@ export async function getRepositories(
 
 export interface ReconcileState {
   highWaterMark?: string;
-  activeSprintId?: number | null;
+  /** The last-seen active sprint set (FR-032). Empty array = none active. */
+  activeSprintIds?: number[];
 }
 
 export async function getReconcileState(db: Db, workspaceId: string): Promise<ReconcileState> {
   const s = await getWorkspaceSettings(db, workspaceId);
+  // Read-compat: prefer the new array; fall back to the legacy single id so a
+  // pre-existing blob keeps its sprint-switch state across the upgrade.
+  const ids =
+    s.reconcile?.active_sprint_ids ??
+    (s.reconcile?.active_sprint_id != null ? [s.reconcile.active_sprint_id] : undefined);
   return {
     highWaterMark: s.reconcile?.high_water_mark,
-    activeSprintId: s.reconcile?.active_sprint_id,
+    activeSprintIds: ids,
   };
 }
 
@@ -121,8 +127,14 @@ export async function setReconcileState(
     high_water_mark: patch.highWaterMark
       ? toUtcIso(patch.highWaterMark)
       : current.reconcile?.high_water_mark,
-    active_sprint_id:
-      patch.activeSprintId !== undefined ? patch.activeSprintId : current.reconcile?.active_sprint_id,
+    // New writes use the array. Preserve the prior set when the patch omits it.
+    // Drop the legacy scalar on any write so the two never diverge (getReconcileState
+    // reads the array first, so a cleared array wins).
+    active_sprint_ids:
+      patch.activeSprintIds !== undefined
+        ? patch.activeSprintIds
+        : (current.reconcile?.active_sprint_ids ??
+          (current.reconcile?.active_sprint_id != null ? [current.reconcile.active_sprint_id] : undefined)),
   };
   await patchWorkspaceSettings(db, workspaceId, { reconcile });
 }

@@ -329,7 +329,7 @@ describe('WorkspaceSettings — scope preview', () => {
   it('previews the ticket count for the saved scope; a dirty scope_jql disables it', async () => {
     server.use(
       http.post('/api/workspaces/:id/ticket-count', () =>
-        HttpResponse.json({ count: 12, jql: 'project = "BRIG"', active_sprint: null }),
+        HttpResponse.json({ count: 12, jql: 'project = "BRIG"', active_sprint_ids: [] }),
       ),
     );
     const wrapper = await mountSettings();

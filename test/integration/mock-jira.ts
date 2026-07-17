@@ -103,7 +103,10 @@ export interface MockJira {
   addLinkedIssue(key: string, linkedKey: string): void;
   /** Move a blocker to a new status (and optionally set that status's category). */
   moveBlocker(blockerKey: string, status: string, category?: StatusCategoryKey): void;
+  /** Set the ONE active sprint and tag the given issues into it (resets the active set). */
   startSprint(sprintId: number, issueKeys: string[]): void;
+  /** Add another active sprint (a board may run several at once) and tag its issues. */
+  addActiveSprint(sprintId: number, issueKeys: string[]): void;
   arm409OnNextTransition(key: string): void;
   arm429(retryAfterSeconds: number): void;
   // asserters
@@ -126,7 +129,7 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
   const appliedTransitions = new Map<string, string[]>();
   const armed409 = new Set<string>();
   let armed429Seconds: number | null = null;
-  let activeSprintId: number | null = null;
+  let activeSprintIds: number[] = [];
   let expectedAuthHeader: string | null = null; // feature 005: /myself auth check
   let botDisplayName = 'BRIGADIR Bot';
   let armed500Statuses = false;
@@ -268,7 +271,7 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
       return HttpResponse.json({ id: boardId, type: boardType, location: { projectKey } });
     }),
     http.get(`${baseUrl}/rest/agile/1.0/board/:id/sprint`, () =>
-      HttpResponse.json({ values: activeSprintId != null ? [{ id: activeSprintId }] : [] }),
+      HttpResponse.json({ values: activeSprintIds.map((id) => ({ id })) }),
     ),
 
     // --- transitions ---
@@ -459,7 +462,14 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
       if (cat) category[status] = cat;
     },
     startSprint(sprintId, issueKeys) {
-      activeSprintId = sprintId;
+      activeSprintIds = [sprintId];
+      for (const k of issueKeys) {
+        const i = issues.get(k);
+        if (i) i.sprintId = sprintId;
+      }
+    },
+    addActiveSprint(sprintId, issueKeys) {
+      if (!activeSprintIds.includes(sprintId)) activeSprintIds.push(sprintId);
       for (const k of issueKeys) {
         const i = issues.get(k);
         if (i) i.sprintId = sprintId;
@@ -483,7 +493,7 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
       appliedTransitions.clear();
       armed409.clear();
       armed429Seconds = null;
-      activeSprintId = null;
+      activeSprintIds = [];
       expectedAuthHeader = null;
       botDisplayName = 'BRIGADIR Bot';
       armed500Statuses = false;

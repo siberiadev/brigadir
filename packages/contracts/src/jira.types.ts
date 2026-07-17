@@ -146,6 +146,11 @@ export const WorkspaceSettingsSchema = z
     reconcile: z
       .object({
         high_water_mark: z.string().datetime().optional(),
+        // A scrum board may run several sprints at once (FR-032). Stored as the
+        // full active set. `active_sprint_id` (single, nullable) is the legacy
+        // field kept for read-compat with pre-existing blobs; new writes use
+        // `active_sprint_ids`.
+        active_sprint_ids: z.array(z.number().int()).optional(),
         active_sprint_id: z.number().int().nullable().optional(),
       })
       .optional(),
