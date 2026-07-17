@@ -77,6 +77,7 @@ describe('claude_cli runner-profile runtime (api key injection + model precedenc
     withProfileKey: boolean;
     behavior?: Record<string, unknown>;
     model?: string;
+    configOverrides?: Record<string, unknown>;
   }): Promise<{ envDump: Record<string, string>; argvDump: string[] }> {
     const dumpDir = await mkdtemp(join(tmpdir(), 'brigadir-profile-dump-'));
     const envDumpPath = join(dumpDir, 'env.json');
@@ -89,7 +90,10 @@ describe('claude_cli runner-profile runtime (api key injection + model precedenc
 
     const p = await seedPipeline(db.db, {
       executorType: 'claude_cli',
-      executorConfig: baseExecutorConfig(env, opts.model ? { model: opts.model } : {}),
+      executorConfig: baseExecutorConfig(env, {
+        ...(opts.model ? { model: opts.model } : {}),
+        ...(opts.configOverrides ?? {}),
+      }),
       behavior: { allowed_tools: ['Read'], ...(opts.behavior ?? {}) },
       ticketKey: `BRIG-${nextTicket++}`,
     });
@@ -123,6 +127,26 @@ describe('claude_cli runner-profile runtime (api key injection + model precedenc
   it('profile WITHOUT a key → no ANTHROPIC_API_KEY in the child env (host subscription)', async () => {
     const { envDump } = await runOnce({ withProfileKey: false });
     expect(envDump.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+
+  it('bedrock profile WITH a sealed key → key stays INERT: bedrock env, no ANTHROPIC_API_KEY (018/T011)', async () => {
+    const { envDump } = await runOnce({
+      withProfileKey: true,
+      configOverrides: { auth: 'bedrock', awsRegion: 'eu-west-1' },
+    });
+    expect(envDump.CLAUDE_CODE_USE_BEDROCK).toBe('1');
+    expect(envDump.AWS_REGION).toBe('eu-west-1');
+    expect(envDump.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+
+  it('explicit host_subscription WITH a sealed key → nothing injected (018/T011)', async () => {
+    const { envDump } = await runOnce({
+      withProfileKey: true,
+      configOverrides: { auth: 'host_subscription' },
+    });
+    expect(envDump.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(envDump.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+    expect(envDump.AWS_REGION).toBeUndefined();
   });
 
   it('the profile model reaches --model; a legacy behavior.model is ignored unconditionally', async () => {

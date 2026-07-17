@@ -165,6 +165,21 @@ CREATE TABLE executors (
   UNIQUE (name)
 );
 
+-- AUTH-РЕЖИМЫ claude_cli-профиля (feature 018, additive-ключи в config jsonb,
+-- DDL не менялся): config.auth = host_subscription | api_key | bedrock.
+-- bedrock несёт awsRegion (обязателен) + awsProfile/caBundlePath (опц.) —
+-- НЕ секреты; AWS-креды в платформе не хранятся никогда (CLI читает ~/.aws
+-- через allowlist'нутый HOME). Инжекция значений ПРОФИЛЯ (не шелла хоста)
+-- строго ПОСЛЕ env-allowlist-прохода: CLAUDE_CODE_USE_BEDROCK=1, AWS_REGION,
+-- AWS_PROFILE?, NODE_EXTRA_CA_CERTS? — сам allowlist не расширялся.
+-- Дефолт для строк без auth (правило — resolveEffectiveAuth, единственная
+-- реализация; ответы API всегда несут ЭФФЕКТИВНЫЙ режим): secrets задан →
+-- api_key, иначе host_subscription — легаси-строки ведут себя байт-в-байт
+-- как раньше. Секрет-блоб расшифровывается ТОЛЬКО в режиме api_key; при
+-- переключении режима прочь от api_key блоб сохраняется инертным (очистка —
+-- только явным api_key: null). Контракт: specs/018-bedrock-auth-mode/
+-- contracts/executor-auth.md.
+
 CREATE TABLE agents (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id    uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,

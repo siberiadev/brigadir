@@ -10,6 +10,12 @@
  * ANTHROPIC_API_KEY injected EXPLICITLY by the executor AFTER this allowlist
  * pass (its own decrypted secret, billed by key) — the HOST's variable of the
  * same name still never passes through here.
+ *
+ * Bedrock auth mode (feature 018) follows the same pattern: applyAuthEnv
+ * injects CLAUDE_CODE_USE_BEDROCK / AWS_REGION / AWS_PROFILE /
+ * NODE_EXTRA_CA_CERTS from the PROFILE row AFTER this pass — the host-shell
+ * variables of those names (and all AWS credentials) still never pass
+ * through here. This list is the floor; do not extend it for auth modes.
  */
 const ALLOWLIST_KEYS = [
   // Needed for `claude` to run at all and read ~/.claude subscription auth.

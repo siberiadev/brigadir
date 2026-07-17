@@ -19,8 +19,11 @@ import type { AgentExecutor, ExecutorResult, RunContext } from '../agent-executo
 import { openExecutorSecrets } from '../executor-secrets';
 import {
   resolveClaudeCliConfig,
+  resolveEffectiveAuth,
+  applyAuthEnv,
   DEFAULT_REPO_RUN_ALLOWED_TOOLS,
   type ClaudeCliExecutorConfigInput,
+  type EffectiveAuth,
 } from './claude-cli.config';
 import { buildArgs } from './args';
 import { buildChildEnv } from './env-allowlist';
@@ -129,7 +132,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
   ) {}
 
   async run(ctx: RunContext, signal: AbortSignal): Promise<ExecutorResult> {
-    const { runtimeConfig, repo, branchPrefix, workspaceId, apiKey, noRepo, setupRun } =
+    const { runtimeConfig, repo, branchPrefix, workspaceId, auth, apiKey, noRepo, setupRun } =
       await this.loadRunConfig(ctx.runId);
 
     let worktree: { worktreeDir: string; branch: string; cacheDir: string };
@@ -221,7 +224,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
       return { exitStatus: 'crashed', diagnostics: err instanceof Error ? err.message : String(err) };
     }
 
-    const result = await this.runProcess(ctx, signal, worktree, runtimeConfig, mcpConfig, apiKey);
+    const result = await this.runProcess(ctx, signal, worktree, runtimeConfig, mcpConfig, auth, apiKey);
 
     try {
       await mcpConfig?.cleanup();
@@ -273,6 +276,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
     worktree: { worktreeDir: string; cacheDir: string },
     runtimeConfig: ReturnType<typeof resolveClaudeCliConfig>,
     mcpConfig: WrittenMcpConfig | undefined,
+    auth: EffectiveAuth,
     apiKey: string | undefined,
   ): Promise<ExecutorResult> {
     const argv = buildArgs({
@@ -286,12 +290,11 @@ export class ClaudeCliExecutor implements AgentExecutor {
       stopHookSettingsJson: mcpConfig?.settingsJson,
     });
     const env = buildChildEnv(process.env);
-    // Named runner profiles (2026-07-14): a profile with a stored API key runs
-    // billed by that key instead of the host's ~/.claude subscription. This is
-    // a DELIBERATE injection of the profile's own decrypted secret — the
-    // allowlist still guarantees the HOST's ANTHROPIC_API_KEY can never leak
-    // through (it is not an allowlisted key).
-    if (apiKey) env.ANTHROPIC_API_KEY = apiKey;
+    // Per-profile auth injection (feature 018; api_key mode since 2026-07-14):
+    // DELIBERATE additions of the profile's own values AFTER the allowlist
+    // pass — the HOST's ANTHROPIC_API_KEY / AWS_* / CLAUDE_CODE_USE_BEDROCK /
+    // NODE_EXTRA_CA_CERTS still can never leak through (none are allowlisted).
+    applyAuthEnv(env, auth, apiKey);
     const group = spawnGroup(runtimeConfig.cliPath, argv, { cwd: worktree.worktreeDir, env });
 
     // D7: `claude -p` REQUIRES a prompt on stdin (never argv — size/secrets).
@@ -473,6 +476,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
     repo: WorktreeRepo | null;
     branchPrefix: string;
     workspaceId: string;
+    auth: EffectiveAuth;
     apiKey: string | undefined;
     noRepo: boolean;
     setupRun: boolean;
@@ -564,11 +568,20 @@ export class ClaudeCliExecutor implements AgentExecutor {
       runtimeConfig.allowedTools = [...DEFAULT_REPO_RUN_ALLOWED_TOOLS];
     }
 
-    // Profile API key (write-only at the API; only the runtime opens it). A
-    // blob that fails to open is a hard error — running billed-by-subscription
-    // when the operator configured a key would be a silent misbill.
+    // Feature 018: effective auth mode — stored `auth` wins, else the legacy
+    // defaulting (stored key → api_key, none → host_subscription). Legacy
+    // rows land exactly where pre-018 behavior did.
+    const auth = resolveEffectiveAuth(rawConfig, executorSecrets != null);
+
+    // Profile API key (write-only at the API; only the runtime opens it) —
+    // decrypted ONLY when the effective mode is api_key. There a blob that
+    // fails to open stays a hard error (running billed-by-subscription when
+    // the operator configured a key would be a silent misbill); in bedrock/
+    // host_subscription mode a stored blob is retained INERT (FR-009) and is
+    // never even materialized — an undecryptable inert blob must not fail an
+    // otherwise-healthy run.
     let apiKey: string | undefined;
-    if (executorSecrets != null) {
+    if (auth.mode === 'api_key' && executorSecrets != null) {
       try {
         apiKey = openExecutorSecrets(executorSecrets).api_key;
       } catch (err) {
@@ -584,6 +597,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
       repo,
       branchPrefix: behavior.branch_prefix ?? 'run',
       workspaceId: row.workspaceId,
+      auth,
       apiKey,
       noRepo,
       setupRun,

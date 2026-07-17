@@ -40,6 +40,14 @@ describe('claude_cli security — env/argv secret isolation (T085/US2)', () => {
     AWS_SECRET_ACCESS_KEY: 'canary-aws-secret-security-test',
     JIRA_API_TOKEN: 'canary-jira-api-token-security-test',
     DATABASE_URL: 'postgres://canary-user:canary-pass@canary-host/canary-db',
+    // Feature 018 (T014): the bedrock-adjacent names the executor now knows
+    // how to INJECT from a profile must still never pass through from the
+    // HOST shell — the allowlist floor is unchanged in every auth mode.
+    AWS_REGION: 'canary-aws-region-security-test',
+    AWS_PROFILE: 'canary-aws-profile-security-test',
+    AWS_SESSION_TOKEN: 'canary-aws-session-security-test',
+    CLAUDE_CODE_USE_BEDROCK: 'canary-bedrock-flag-security-test',
+    NODE_EXTRA_CA_CERTS: '/canary/security/ca.pem',
   };
   let savedEnv: Record<string, string | undefined> = {};
 
