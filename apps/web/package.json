@@ -12,8 +12,10 @@
   },
   "dependencies": {
     "@brigadir/contracts": "workspace:*",
+    "@dagrejs/dagre": "^1.1.4",
     "@fontsource/ubuntu": "^5.2.8",
     "@tanstack/vue-query": "^5.62.0",
+    "@vue-flow/core": "^1.42.1",
     "@vueuse/core": "^14.3.0",
     "element-plus": "^2.9.1",
     "lucide-vue-next": "^1.0.0",

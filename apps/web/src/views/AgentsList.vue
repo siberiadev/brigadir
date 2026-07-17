@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, markRaw, ref } from 'vue';
 import { ElMessage } from 'element-plus';
+import { List as ListIcon, Workflow } from 'lucide-vue-next';
 import type { AgentResponse, ErrorIssue } from '@brigadir/contracts';
 import { MAX_PAGE_SIZE } from '@brigadir/contracts/pagination';
 import { ApiError } from '../api/client';
@@ -8,8 +9,10 @@ import { useAgents, useDeleteAgent } from '../composables/useAgents';
 import { useExecutors } from '../composables/useExecutors';
 import { useGenerateAgents, useWorkspace } from '../composables/useWorkspaces';
 import { useRuns } from '../composables/useRuns';
+import { useStatuses } from '../composables/useStatuses';
 import { usePagination } from '../composables/usePagination';
 import AgentForm from '../components/AgentForm/AgentForm.vue';
+import AgentsDiagram from '../components/AgentsDiagram/AgentsDiagram.vue';
 import FormDialog from '../components/FormDialog.vue';
 import ListPagination from '../components/ListPagination.vue';
 
@@ -19,6 +22,27 @@ const { page, pageSize, params, bindTotal } = usePagination();
 const agentsQuery = useAgents(props.id, params);
 const total = computed(() => agentsQuery.data.value?.total ?? 0);
 bindTotal(total);
+
+// --- feature 018: List/Diagram view mode. Local ref only — the choice is
+// never persisted; every visit starts in List (FR-002). Both modes read
+// queries mounted HERE, so toggling fetches nothing (FR-003).
+const mode = ref<'list' | 'diagram'>('list');
+const modeOptions = [
+  { label: 'List', value: 'list', icon: markRaw(ListIcon) },
+  { label: 'Diagram', value: 'diagram', icon: markRaw(Workflow) },
+];
+
+// Diagram data: the whole-list page (byte-identical params to AgentForm's
+// roster query → same TanStack cache entry, research R2) + the cached board
+// statuses (no refresh — the form still force-refreshes on open).
+const allAgentsQuery = useAgents(props.id, { page: 1, page_size: MAX_PAGE_SIZE });
+const statusesQuery = useStatuses(props.id);
+const diagramAgents = computed(() => allAgentsQuery.data.value?.items ?? []);
+const diagramStatuses = computed(() => statusesQuery.data.value?.statuses ?? []);
+const diagramLoading = computed(
+  () => allAgentsQuery.isLoading.value || statusesQuery.isLoading.value,
+);
+const diagramError = computed(() => allAgentsQuery.isError.value || statusesQuery.isError.value);
 
 // Лукап по id — через detail-эндпоинт, не через пагинированный список.
 const workspaceQuery = useWorkspace(props.id);
@@ -71,7 +95,19 @@ const showForm = ref(false);
 const editing = ref<AgentResponse | null>(null);
 const agentFormRef = ref<InstanceType<typeof AgentForm>>();
 
+// feature 018 (US2): trigger_status seed for a create opened from a diagram
+// status node's "+". Cleared on the next PLAIN "New agent" open (not on dialog
+// close — clearing there would re-key the form mid-close-transition).
+const createTriggerStatus = ref<string | null>(null);
+
 function openCreate() {
+  createTriggerStatus.value = null;
+  editing.value = null;
+  showForm.value = true;
+}
+
+function openCreateFromStatus(statusName: string) {
+  createTriggerStatus.value = statusName;
   editing.value = null;
   showForm.value = true;
 }
@@ -101,6 +137,16 @@ async function onDelete(agent: AgentResponse) {
     <div class="header-row">
       <h2>Agents</h2>
       <div class="header-actions">
+        <!-- feature 018: List/Diagram toggle. Static lucide icons (hover
+             animation is sidebar-only). -->
+        <el-segmented v-model="mode" :options="modeOptions" data-test="view-mode-toggle">
+          <template #default="{ item }">
+            <span class="mode-option">
+              <component :is="item.icon" :size="14" />
+              <span>{{ item.label }}</span>
+            </span>
+          </template>
+        </el-segmented>
         <!-- feature 011: one-click team generation for an empty workspace. -->
         <template v-if="showGenerate">
           <router-link
@@ -128,13 +174,16 @@ async function onDelete(agent: AgentResponse) {
     </div>
 
     <FormDialog v-model="showForm" :title="editing ? 'Edit agent' : 'New agent'">
+      <!-- feature 018: the key carries the prefill so consecutive "+" clicks
+           on different statuses re-seed a fresh form. -->
       <AgentForm
         v-if="showForm"
         ref="agentFormRef"
-        :key="editing?.id ?? 'new'"
+        :key="editing?.id ?? `new:${createTriggerStatus ?? ''}`"
         :workspace-id="id"
         :agent="editing"
         :repositories="repositories"
+        :initial-trigger-status="createTriggerStatus ?? undefined"
         @saved="onSaved"
       />
       <template #footer>
@@ -150,7 +199,20 @@ async function onDelete(agent: AgentResponse) {
       </template>
     </FormDialog>
 
+    <!-- feature 018: Diagram mode — same data layer, different projection.
+         The queries live in this view's setup, so v-if here swaps DOM only. -->
+    <AgentsDiagram
+      v-if="mode === 'diagram'"
+      :agents="diagramAgents"
+      :statuses="diagramStatuses"
+      :loading="diagramLoading"
+      :error="diagramError"
+      @create-agent="openCreateFromStatus"
+      @edit-agent="openEdit"
+    />
+
     <el-table
+      v-if="mode === 'list'"
       v-loading="agentsQuery.isLoading.value"
       :data="agentsQuery.data.value?.items ?? []"
       data-test="agents-table"
@@ -195,7 +257,12 @@ async function onDelete(agent: AgentResponse) {
       </el-table-column>
     </el-table>
 
-    <ListPagination :total="total" v-model:page="page" v-model:page-size="pageSize" />
+    <ListPagination
+      v-if="mode === 'list'"
+      :total="total"
+      v-model:page="page"
+      v-model:page-size="pageSize"
+    />
   </section>
 </template>
 
@@ -216,5 +283,11 @@ async function onDelete(agent: AgentResponse) {
   font-family: var(--el-font-family-mono, ui-monospace, monospace);
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+
+.mode-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 </style>

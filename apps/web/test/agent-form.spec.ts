@@ -277,3 +277,48 @@ describe('AgentForm — orchestrator variant (feature 010)', () => {
     expect(selectByTest(wrapper, 'status-success-select').exists()).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Feature 018 (US2) — `initialTriggerStatus` seeds the CREATE form only; the
+// prop is ignored in edit mode and absent ⇒ today's empty default.
+// ---------------------------------------------------------------------------
+
+describe('AgentForm — initialTriggerStatus prefill (feature 018)', () => {
+  it('seeds trigger_status in create mode', async () => {
+    const wrapper = mountWithProviders(AgentForm, {
+      props: { workspaceId: 'ws-1', agent: null, repositories: [], initialTriggerStatus: 'Done' },
+    });
+    await flush();
+    expect(selectByTest(wrapper, 'trigger-status-select').props('modelValue')).toBe('Done');
+  });
+
+  it('is IGNORED in edit mode — the agent value wins', async () => {
+    const wrapper = mountWithProviders(AgentForm, {
+      props: {
+        workspaceId: 'ws-1',
+        agent: sampleAgent,
+        repositories: [],
+        initialTriggerStatus: 'Done',
+      },
+    });
+    await flush();
+    expect(selectByTest(wrapper, 'trigger-status-select').props('modelValue')).toBe(
+      sampleAgent.trigger_status,
+    );
+  });
+
+  it('is IGNORED when editing a jql-only agent (null trigger stays empty)', async () => {
+    const jqlOnly = { ...sampleAgent, trigger_status: null, trigger_jql: 'labels = ops' };
+    const wrapper = mountWithProviders(AgentForm, {
+      props: { workspaceId: 'ws-1', agent: jqlOnly, repositories: [], initialTriggerStatus: 'Done' },
+    });
+    await flush();
+    expect(selectByTest(wrapper, 'trigger-status-select').props('modelValue')).toBe('');
+  });
+
+  it('omitted ⇒ empty default, exactly as before', async () => {
+    const wrapper = mountForm();
+    await flush();
+    expect(selectByTest(wrapper, 'trigger-status-select').props('modelValue')).toBe('');
+  });
+});
