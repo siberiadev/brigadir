@@ -10,6 +10,7 @@ export * from './resolve-human-task.schema';
 export * from './dashboard.schema';
 export * from './agent-linter';
 export * from './runs.schema';
+export * from './home.schema';
 export * from './human-queue.schema';
 export * from './executor.schema';
 export * from './pagination.schema';

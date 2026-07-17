@@ -66,5 +66,15 @@ export type HumanQueueListResponse = z.infer<typeof HumanQueueListResponseSchema
 export const HumanQueueStatusSchema = z.enum(['open', 'closed']);
 export type HumanQueueStatus = z.infer<typeof HumanQueueStatusSchema>;
 
+/**
+ * Open-list ordering (feature 017). Default `newest` — the queue page's
+ * newest-first order (feature 016's deliberate reversal). `oldest` is the
+ * explicit opt-in used by the Home hero, whose top-5 surfaces the
+ * LONGEST-waiting decisions (017 FR-005). Closed history always stays
+ * `resolved_at DESC` regardless of this param.
+ */
+export const HumanQueueOrderSchema = z.enum(['newest', 'oldest']);
+export type HumanQueueOrder = z.infer<typeof HumanQueueOrderSchema>;
+
 export const HumanQueueCountResponseSchema = z.object({ open: z.number().int() }).strict();
 export type HumanQueueCountResponse = z.infer<typeof HumanQueueCountResponseSchema>;

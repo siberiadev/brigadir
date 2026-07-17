@@ -1,7 +1,8 @@
 import { Controller, Get, Inject, Query, UseGuards } from '@nestjs/common';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import {
+  HumanQueueOrderSchema,
   type AnswerOption,
   type HumanQueueCountResponse,
   type HumanQueueItem,
@@ -27,10 +28,14 @@ export class HumanTasksController {
   async list(
     @Query('status') statusRaw?: string,
     @Query('workspace') workspace?: string,
+    @Query('order') orderRaw?: string,
     @Query('page') pageRaw?: string,
     @Query('page_size') pageSizeRaw?: string,
   ): Promise<HumanQueueListResponse> {
     const closed = statusRaw === 'closed';
+    // Feature 017: explicit open-list ordering. Default keeps 016's
+    // newest-first; `oldest` is the Home hero's opt-in (garbage → default).
+    const order = HumanQueueOrderSchema.catch('newest').parse(orderRaw ?? 'newest');
     const { page, pageSize, limit, offset } = parsePagination(pageRaw, pageSizeRaw);
 
     // The queue is global by default; the workspace tab (feature: workspace
@@ -81,10 +86,12 @@ export class HumanTasksController {
       .leftJoin(schema.runs, eq(schema.humanTasks.runId, schema.runs.id))
       .leftJoin(schema.agents, eq(schema.runs.agentId, schema.agents.id));
 
-    // Feature 016: both tabs newest-first (reverses the feature-006 oldest-first
-    // open ordering). `id` is the unique tie-breaker — paginated endpoints must
-    // order deterministically (same-instant tasks would otherwise shuffle
-    // between pages).
+    // Feature 016: both tabs default newest-first (reverses the feature-006
+    // oldest-first open ordering). `id` is the unique tie-breaker — paginated
+    // endpoints must order deterministically (same-instant tasks would
+    // otherwise shuffle between pages). Feature 017: `?order=oldest` flips the
+    // OPEN list only (Home hero: longest-waiting first); closed history is
+    // always resolved_at DESC.
     const rows = closed
       ? await base
           .where(where)
@@ -93,7 +100,11 @@ export class HumanTasksController {
           .offset(offset)
       : await base
           .where(where)
-          .orderBy(desc(schema.humanTasks.createdAt), desc(schema.humanTasks.id))
+          .orderBy(
+            ...(order === 'oldest'
+              ? [asc(schema.humanTasks.createdAt), asc(schema.humanTasks.id)]
+              : [desc(schema.humanTasks.createdAt), desc(schema.humanTasks.id)]),
+          )
           .limit(limit)
           .offset(offset);
 

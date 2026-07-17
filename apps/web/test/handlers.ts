@@ -8,6 +8,9 @@ import type {
   AgentResponse,
   ExecutorListResponse,
   ExecutorResponse,
+  GlobalRunsResponse,
+  HomeSummaryResponse,
+  HomeWorkspacesResponse,
   HumanQueueListResponse,
   RunCardResponse,
   RunCostResponse,
@@ -390,6 +393,146 @@ export const sampleHumanQueueClosed: HumanQueueListResponse = {
   ],
 };
 
+// --- Home dashboard fixtures (feature 017) ---
+
+export const sampleHomeSummary: HomeSummaryResponse = {
+  running: 2,
+  queued: 1,
+  attention_24h: { failed: 1, timed_out: 1 },
+  human_open: 2,
+  spend: {
+    '24h': { total_cost_usd: '18.4200', run_count: 37 },
+    '7d': { total_cost_usd: '96.1000', run_count: 214 },
+    '30d': { total_cost_usd: '342.7700', run_count: 861 },
+  },
+};
+
+/** Live list: two running (one long-running first) + one queued, server-ordered. */
+export const sampleGlobalRunsLive: GlobalRunsResponse = {
+  items: [
+    {
+      run_id: 'run-live-1',
+      agent: { id: 'ag-1', name: 'Implementer', key: 'implementer', role: null },
+      ticket: { key: 'BRIG-10', summary: 'Split report', jira_url: 'https://acme.atlassian.net/browse/BRIG-10' },
+      workspace: { id: 'ws-1', name: 'Acme' },
+      status: 'running',
+      attempt: 1,
+      duration_ms: null,
+      started_at: '2026-07-12T10:00:00.000Z',
+      finished_at: null,
+      cost_usd: null,
+      created_at: '2026-07-12T09:59:58.000Z',
+    },
+    {
+      run_id: 'run-live-2',
+      agent: { id: 'ag-2', name: 'Hera', key: 'hera-reviewer', role: 'Reviewer' },
+      ticket: { key: 'CHK-4', summary: 'Review cart', jira_url: 'https://acme.atlassian.net/browse/CHK-4' },
+      workspace: { id: 'ws-2', name: 'Checkout' },
+      status: 'running',
+      attempt: 1,
+      duration_ms: null,
+      started_at: '2026-07-12T11:00:00.000Z',
+      finished_at: null,
+      cost_usd: null,
+      created_at: '2026-07-12T10:59:58.000Z',
+    },
+    {
+      run_id: 'run-live-3',
+      agent: { id: 'ag-1', name: 'Implementer', key: 'implementer', role: null },
+      ticket: { key: 'BRIG-11', summary: 'Next up', jira_url: 'https://acme.atlassian.net/browse/BRIG-11' },
+      workspace: { id: 'ws-1', name: 'Acme' },
+      status: 'queued',
+      attempt: 1,
+      duration_ms: null,
+      started_at: null,
+      finished_at: null,
+      cost_usd: null,
+      created_at: '2026-07-12T11:20:00.000Z',
+    },
+  ],
+  total: 3,
+};
+
+/** Needs-attention list: one failed + one timed_out, newest finished first. */
+export const sampleGlobalRunsAttention: GlobalRunsResponse = {
+  items: [
+    {
+      run_id: 'run-att-1',
+      agent: { id: 'ag-1', name: 'Implementer', key: 'implementer', role: null },
+      ticket: { key: 'BRIG-8', summary: 'Broke the build', jira_url: 'https://acme.atlassian.net/browse/BRIG-8' },
+      workspace: { id: 'ws-1', name: 'Acme' },
+      status: 'failed',
+      attempt: 2,
+      duration_ms: 60000,
+      started_at: '2026-07-12T08:00:00.000Z',
+      finished_at: '2026-07-12T08:01:00.000Z',
+      cost_usd: '0.5000',
+      created_at: '2026-07-12T07:59:58.000Z',
+    },
+    {
+      run_id: 'run-att-2',
+      agent: { id: 'ag-2', name: 'Hera', key: 'hera-reviewer', role: 'Reviewer' },
+      ticket: null,
+      workspace: { id: 'ws-2', name: 'Checkout' },
+      status: 'timed_out',
+      attempt: 1,
+      duration_ms: 2700000,
+      started_at: '2026-07-12T06:00:00.000Z',
+      finished_at: '2026-07-12T06:45:00.000Z',
+      cost_usd: null,
+      created_at: '2026-07-12T05:59:58.000Z',
+    },
+  ],
+  total: 2,
+};
+
+export const sampleHomeWorkspaces: HomeWorkspacesResponse = {
+  items: [
+    {
+      id: 'ws-1',
+      name: 'Acme',
+      project_key: 'BRIG',
+      board_type: 'kanban',
+      enabled: true,
+      agent_count: 4,
+      last_run: {
+        run_id: 'run-live-1',
+        status: 'running',
+        started_at: '2026-07-12T10:00:00.000Z',
+        finished_at: null,
+        created_at: '2026-07-12T09:59:58.000Z',
+      },
+      attention_24h: 1,
+    },
+    {
+      id: 'ws-2',
+      name: 'Checkout',
+      project_key: 'CHK',
+      board_type: 'scrum',
+      enabled: false,
+      agent_count: 2,
+      last_run: {
+        run_id: 'run-old-1',
+        status: 'succeeded',
+        started_at: '2026-07-10T10:00:00.000Z',
+        finished_at: '2026-07-10T10:05:00.000Z',
+        created_at: '2026-07-10T09:59:58.000Z',
+      },
+      attention_24h: 0,
+    },
+    {
+      id: 'ws-3',
+      name: 'Fresh',
+      project_key: 'FRS',
+      board_type: null,
+      enabled: true,
+      agent_count: 0,
+      last_run: null,
+      attention_24h: 0,
+    },
+  ],
+};
+
 export const defaultHandlers = [
   http.get('/api/workspaces', () =>
     HttpResponse.json<WorkspaceListResponse>(paginated([sampleWorkspace])),
@@ -413,6 +556,17 @@ export const defaultHandlers = [
   http.post('/api/executors', () => HttpResponse.json(sampleExecutors[0], { status: 201 })),
   http.put('/api/executors/:executorId', () => HttpResponse.json(sampleExecutors[0])),
   http.delete('/api/executors/:executorId', () => new HttpResponse(null, { status: 204 })),
+
+  // Home dashboard (feature 017): atomic summary, workspace cards, and the
+  // bounded global runs list (dispatched on the mandatory `status` filter).
+  http.get('/api/home/summary', () => HttpResponse.json(sampleHomeSummary)),
+  http.get('/api/home/workspaces', () => HttpResponse.json(sampleHomeWorkspaces)),
+  http.get('/api/runs', ({ request }) => {
+    const status = new URL(request.url).searchParams.get('status') ?? '';
+    return HttpResponse.json(
+      status.includes('running') ? sampleGlobalRunsLive : sampleGlobalRunsAttention,
+    );
+  }),
 
   // runs table + cost + card + cancel/retry (US2/US3)
   http.get('/api/workspaces/:id/runs', () => HttpResponse.json(sampleRunList)),

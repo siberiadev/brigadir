@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Component } from 'vue';
 import { useRoute, type RouteLocationRaw } from 'vue-router';
-import { LayoutGrid, Inbox, LogOut, Settings } from 'lucide-vue-next';
+import { House, LayoutGrid, Inbox, LogOut, Settings } from 'lucide-vue-next';
 import AnimatedIcon from './AnimatedIcon.vue';
 
 /**
@@ -16,7 +16,7 @@ const emit = defineEmits<{ (e: 'sign-out'): void }>();
 // Static, two-item nav config (data-model.md NavItem). `LogOut` is imported for
 // the bottom-pinned sign-out control rendered below the nav.
 type NavItem = {
-  key: 'workspaces' | 'human-queue';
+  key: 'home' | 'workspaces' | 'human-queue';
   label: string;
   icon: Component;
   to: RouteLocationRaw;
@@ -25,13 +25,22 @@ type NavItem = {
 
 const navItems: NavItem[] = [
   {
+    // Feature 017: Home is the FIRST item — the landing dashboard. `/` itself
+    // redirects to /home, so the path test never sees a bare root.
+    key: 'home',
+    label: 'Home',
+    icon: House,
+    to: '/home',
+    isActive: (path) => path === '/home',
+  },
+  {
     key: 'workspaces',
     label: 'Workspaces',
     icon: LayoutGrid,
-    to: '/',
-    // Root plus every nested workspace sub-route (agents/runs/settings) — a path
-    // prefix test covers the 007 deep-links without enumerating child names (R3).
-    isActive: (path) => path === '/' || path.startsWith('/workspaces'),
+    to: '/workspaces',
+    // The list page plus every nested workspace sub-route (agents/runs/settings)
+    // — a path prefix test covers the 007 deep-links without enumerating names.
+    isActive: (path) => path === '/workspaces' || path.startsWith('/workspaces/'),
   },
   {
     key: 'human-queue',
@@ -79,6 +88,11 @@ const route = useRoute();
               <component :is="item.icon" class="nav-icon" />
             </AnimatedIcon>
           </el-badge>
+          <!-- Home (feature 017): standard whole-icon AnimatedIcon treatment,
+               like its Inbox/Settings siblings. -->
+          <AnimatedIcon v-else-if="item.key === 'home'" effect="pop">
+            <component :is="item.icon" class="nav-icon" />
+          </AnimatedIcon>
           <!-- Workspaces keeps a bespoke per-part animation (tiles pop in a
                stagger) — see the CSS below and the AnimatedIcon two-tier note. -->
           <component v-else :is="item.icon" class="nav-icon" />

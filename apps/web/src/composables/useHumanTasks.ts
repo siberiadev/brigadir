@@ -1,6 +1,7 @@
 import { computed, toValue, type MaybeRefOrGetter } from 'vue';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query';
 import type {
+  HumanQueueOrder,
   HumanQueueStatus,
   PaginationQuery,
   ResolveHumanTaskInput,
@@ -23,12 +24,14 @@ export function useHumanTasks(
   status: HumanQueueStatus = 'open',
   params: MaybeRefOrGetter<Partial<PaginationQuery>> = {},
   workspaceId: MaybeRefOrGetter<string | undefined> = undefined,
+  // Feature 017: open-list ordering opt-in — the Home hero passes 'oldest'.
+  order?: HumanQueueOrder,
 ) {
   return useQuery({
-    // workspaceId is part of the key so the global queue and a workspace-scoped
-    // tab keep separate caches.
-    queryKey: computed(() => [...humanTasksKey(status), toValue(workspaceId), toValue(params)]),
-    queryFn: () => api.list(status, toValue(params), toValue(workspaceId)),
+    // workspaceId/order are part of the key so the global queue, a
+    // workspace-scoped tab, and the oldest-first hero keep separate caches.
+    queryKey: computed(() => [...humanTasksKey(status), toValue(workspaceId), toValue(params), order]),
+    queryFn: () => api.list(status, toValue(params), toValue(workspaceId), order),
     refetchInterval: status === 'open' ? 4000 : false,
     placeholderData: (prev) => prev,
   });

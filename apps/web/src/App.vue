@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
-import { RouterView, useRoute, useRouter } from 'vue-router';
+import { computed, ref } from 'vue';
+import { RouterView } from 'vue-router';
 import { useAuthStore } from './stores/auth';
 import { useHumanTaskCount } from './composables/useHumanTasks';
 import { useTheme } from './composables/useTheme';
@@ -29,20 +29,9 @@ const authed = computed(() => !!auth.token);
 const countQuery = useHumanTaskCount(authed);
 const openCount = computed(() => countQuery.data.value?.open ?? 0);
 
-// Landing rule (FR-002/FR-005): the FIRST time the count resolves with open > 0
-// while sitting on the workspaces root, jump to the queue. One-shot so it never
-// fights the operator navigating back to workspaces.
-const route = useRoute();
-const router = useRouter();
-let landingApplied = false;
-watch(
-  () => countQuery.data.value?.open,
-  (open) => {
-    if (landingApplied || open == null) return;
-    landingApplied = true;
-    if (open > 0 && route.path === '/') router.replace('/human-queue');
-  },
-);
+// The 006 one-shot `/` → `/human-queue` landing redirect is gone (feature 017):
+// `/` now lands on /home, whose hero widget IS the "does the system need me"
+// answer — bouncing past it would defeat the landing page.
 </script>
 
 <template>

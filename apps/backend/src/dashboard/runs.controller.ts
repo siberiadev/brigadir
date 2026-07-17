@@ -1,9 +1,11 @@
 import { Controller, Get, HttpCode, Inject, Param, Post, Query, UseGuards } from '@nestjs/common';
-import { and, desc, eq, ilike, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, inArray, isNull, sql } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import { RunTriggerService } from '@brigadir/runs';
 import {
+  GlobalRunsQuerySchema,
   RunCostPeriodSchema,
+  type GlobalRunsResponse,
   type RunCardResponse,
   type RunCancelResponse,
   type RunCostResponse,
@@ -12,7 +14,7 @@ import {
   type RunStatus,
 } from '@brigadir/contracts';
 import { DashboardTokenGuard } from './dashboard-token.guard';
-import { conflictError, notFoundError } from './dashboard.errors';
+import { conflictError, notFoundError, validationError, zodIssuePath } from './dashboard.errors';
 import { parsePagination } from './dashboard.helpers';
 
 const PERIOD_HOURS: Record<string, number> = { '24h': 24, '7d': 24 * 7, '30d': 24 * 30 };
@@ -133,6 +135,106 @@ export class RunsController {
       );
 
     return { period, total_cost_usd: row?.total ?? '0', run_count: row?.count ?? 0 };
+  }
+
+  // --- feature 017: bounded cross-workspace listing (contracts/runs-global-api.md) ---
+
+  @Get('api/runs')
+  async globalList(
+    @Query('status') statusRaw?: string,
+    @Query('finished_within') finishedWithinRaw?: string,
+    @Query('limit') limitRaw?: string,
+  ): Promise<GlobalRunsResponse> {
+    // `status` is REQUIRED and `limit` bounded by contract — an unbounded
+    // "all runs everywhere" query is impossible (FR-014).
+    const parsed = GlobalRunsQuerySchema.safeParse({
+      ...(statusRaw !== undefined ? { status: statusRaw } : {}),
+      ...(finishedWithinRaw !== undefined ? { finished_within: finishedWithinRaw } : {}),
+      ...(limitRaw !== undefined ? { limit: limitRaw } : {}),
+    });
+    if (!parsed.success) {
+      throw validationError(
+        'Invalid global runs query.',
+        parsed.error.issues.map((i) => ({
+          path: zodIssuePath(i.path),
+          code: i.code,
+          message: i.message,
+          level: 'error' as const,
+        })),
+      );
+    }
+    const { status, finished_within, limit } = parsed.data;
+
+    const filters = [inArray(schema.runs.status, status)];
+    if (finished_within) {
+      const hours = PERIOD_HOURS[finished_within];
+      filters.push(sql`${schema.runs.finishedAt} >= now() - (${hours} * interval '1 hour')`);
+    }
+    const where = and(...filters);
+
+    // Fixed composite ordering (no `order` param): running (longest-running
+    // first, NULL started_at last) → queued (longest-waiting first) → terminal
+    // (most recently finished first, NULL finished_at last); id tie-break.
+    const statusRank = sql`case ${schema.runs.status} when 'running' then 0 when 'queued' then 1 else 2 end`;
+    const withinRank = sql`case
+      when ${schema.runs.status} = 'running' then extract(epoch from coalesce(${schema.runs.startedAt}, 'infinity'::timestamptz))
+      when ${schema.runs.status} = 'queued' then extract(epoch from ${schema.runs.createdAt})
+      else -extract(epoch from coalesce(${schema.runs.finishedAt}, '-infinity'::timestamptz))
+    end`;
+
+    // Filters touch only runs columns, so the full count needs no joins.
+    const [{ total }] = await this.db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(schema.runs)
+      .where(where);
+
+    const rows = await this.db
+      .select({
+        runId: schema.runs.id,
+        agentId: schema.runs.agentId,
+        agentName: schema.agents.name,
+        agentKey: schema.agents.key,
+        agentRole: schema.agents.role,
+        ticketKey: schema.tickets.jiraKey,
+        ticketSummary: schema.tickets.summary,
+        workspaceId: schema.workspaces.id,
+        workspaceName: schema.workspaces.name,
+        siteUrl: schema.workspaces.jiraSiteUrl,
+        status: schema.runs.status,
+        attempt: schema.runs.attempt,
+        startedAt: schema.runs.startedAt,
+        finishedAt: schema.runs.finishedAt,
+        costUsd: schema.runs.costUsd,
+        createdAt: schema.runs.createdAt,
+      })
+      .from(schema.runs)
+      // Left join: ticketless workspace-setup runs stay listed (feature 011).
+      .leftJoin(schema.tickets, eq(schema.runs.ticketId, schema.tickets.id))
+      .innerJoin(schema.agents, eq(schema.runs.agentId, schema.agents.id))
+      .innerJoin(schema.workspaces, eq(schema.runs.workspaceId, schema.workspaces.id))
+      .where(where)
+      .orderBy(statusRank, withinRank, schema.runs.id)
+      .limit(limit);
+
+    return {
+      items: rows.map((r) => ({
+        run_id: r.runId,
+        agent: { id: r.agentId, name: r.agentName, key: r.agentKey, role: r.agentRole ?? null },
+        ticket:
+          r.ticketKey === null
+            ? null
+            : { key: r.ticketKey, summary: r.ticketSummary, jira_url: deepLink(r.siteUrl, r.ticketKey) },
+        workspace: { id: r.workspaceId, name: r.workspaceName },
+        status: r.status as RunStatus,
+        attempt: r.attempt,
+        duration_ms: durationMs(r.startedAt, r.finishedAt),
+        started_at: r.startedAt ? r.startedAt.toISOString() : null,
+        finished_at: r.finishedAt ? r.finishedAt.toISOString() : null,
+        cost_usd: r.costUsd ?? null,
+        created_at: r.createdAt.toISOString(),
+      })),
+      total,
+    };
   }
 
   // --- US2: run/ticket card ---

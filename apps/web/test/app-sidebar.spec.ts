@@ -9,6 +9,7 @@ import AppSidebar from '../src/components/AppSidebar.vue';
 // Static imports warm the module cache so the router's lazy `() => import(...)`
 // route components resolve from cache (deterministic navigation under jsdom) —
 // the 007 `workspace-tabs.spec.ts` pattern.
+import '../src/views/HomeDashboard.vue';
 import '../src/views/WorkspaceList.vue';
 import '../src/views/WorkspacePage.vue';
 import '../src/views/AgentsList.vue';
@@ -68,14 +69,22 @@ function tooltips(wrapper: ReturnType<typeof mountSidebar>) {
 }
 
 describe('AppSidebar — rendering + tooltips (US1)', () => {
-  it('renders the rail with brand, both nav icons, and sign out — no top header (SC-001)', async () => {
+  it('renders the rail with brand, the nav icons, and sign out — no top header (SC-001)', async () => {
     const { wrapper } = await mountAuthedApp('/');
 
     expect(wrapper.find('[data-test="app-sidebar"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="sidebar-brand"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="nav-home"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="nav-workspaces"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="nav-human-queue"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="sidebar-sign-out"]').exists()).toBe(true);
+
+    // Feature 017: Home is the FIRST nav item in the rail.
+    const navOrder = wrapper
+      .find('.sidebar-nav')
+      .findAll('[data-test^="nav-"]')
+      .map((n) => n.attributes('data-test'));
+    expect(navOrder[0]).toBe('nav-home');
 
     // The old header nav is gone (FR-001/013).
     expect(wrapper.find('.app-nav').exists()).toBe(false);
@@ -88,6 +97,7 @@ describe('AppSidebar — rendering + tooltips (US1)', () => {
     const tips = tooltips(wrapper);
     expect(tips.every((t) => t.placement === 'right')).toBe(true);
     const contents = tips.map((t) => t.content);
+    expect(contents).toContain('Home');
     expect(contents).toContain('Workspaces');
     expect(contents).toContain('Human queue');
     expect(contents).toContain('Sign out');
@@ -98,25 +108,62 @@ describe('AppSidebar — active highlight (US2)', () => {
   const active = (wrapper: ReturnType<typeof mountSidebar>, dt: string) =>
     wrapper.find(`[data-test="${dt}"]`).classes().includes('is-active');
 
-  it.each(['/', '/workspaces/ws-1/agents', '/workspaces/ws-1/settings'])(
-    'marks Workspaces active (not Human queue) at %s (FR-006, deep sub-routes)',
+  it.each(['/workspaces', '/workspaces/ws-1/agents', '/workspaces/ws-1/settings'])(
+    'marks Workspaces active (not Home/Human queue) at %s (FR-006, deep sub-routes)',
     async (path) => {
       const { wrapper } = await mountAuthedApp(path);
       expect(active(wrapper, 'nav-workspaces')).toBe(true);
+      expect(active(wrapper, 'nav-home')).toBe(false);
       expect(active(wrapper, 'nav-human-queue')).toBe(false);
     },
   );
 
-  it('marks Human queue active (not Workspaces) at /human-queue (FR-006)', async () => {
+  it('marks Human queue active (not Home/Workspaces) at /human-queue (FR-006)', async () => {
     const { wrapper } = await mountAuthedApp('/human-queue');
     expect(active(wrapper, 'nav-human-queue')).toBe(true);
+    expect(active(wrapper, 'nav-home')).toBe(false);
     expect(active(wrapper, 'nav-workspaces')).toBe(false);
   });
 
-  it('marks NEITHER active on a run card /runs/:id (FR-007, no matching section)', async () => {
+  it('marks NONE active on a run card /runs/:id (FR-007, no matching section)', async () => {
     const { wrapper } = await mountAuthedApp('/runs/r-1');
+    expect(active(wrapper, 'nav-home')).toBe(false);
     expect(active(wrapper, 'nav-workspaces')).toBe(false);
     expect(active(wrapper, 'nav-human-queue')).toBe(false);
+  });
+});
+
+describe('AppSidebar + routing — Home landing (feature 017)', () => {
+  const active = (wrapper: ReturnType<typeof mountSidebar>, dt: string) =>
+    wrapper.find(`[data-test="${dt}"]`).classes().includes('is-active');
+
+  it('`/` redirects to /home and marks Home active (US1 landing)', async () => {
+    const { wrapper, router } = await mountAuthedApp('/');
+    expect(router.currentRoute.value.path).toBe('/home');
+    expect(router.currentRoute.value.name).toBe('home');
+    expect(active(wrapper as never, 'nav-home')).toBe(true);
+    expect(active(wrapper as never, 'nav-workspaces')).toBe(false);
+  });
+
+  it('does NOT auto-redirect to /human-queue when open tasks exist (017 removed the 006 one-shot)', async () => {
+    setDashboardToken('test-token');
+    server.use(http.get('/api/human-tasks/count', () => HttpResponse.json({ open: 5 })));
+    const wrapper = mountWithProviders(App, { routes, initialPath: '/' });
+    const router = wrapper.vm.$router;
+    await router.isReady();
+    await flush(50);
+    expect(router.currentRoute.value.path).toBe('/home');
+  });
+
+  it('/workspaces serves the workspace list under its preserved route name', async () => {
+    const { router } = await mountAuthedApp('/workspaces');
+    expect(router.currentRoute.value.name).toBe('workspaces');
+    expect(router.currentRoute.value.path).toBe('/workspaces');
+  });
+
+  it('the Home item carries the standard AnimatedIcon treatment (UI convention)', async () => {
+    const { wrapper } = await mountAuthedApp('/');
+    expect(wrapper.find('[data-test="nav-home"] .animated-icon--pop').exists()).toBe(true);
   });
 });
 
