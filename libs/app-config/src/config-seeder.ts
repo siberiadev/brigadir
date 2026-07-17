@@ -165,7 +165,12 @@ export class ConfigSeeder {
 
       // feature 010 (FR-018): ensure the per-workspace "brigadir" orchestrator
       // exists (insert-if-absent, its own cheap no-repo executor profile).
-      await seedOrchestratorAgent(tx, workspaceId);
+      // feature 015: values come from the brigadir agent template; a dangling
+      // template executor falls back to the built-in profile with a warning.
+      const seeded = await seedOrchestratorAgent(tx, workspaceId);
+      if (seeded.warning) {
+        this.logger.warn(`workspace "${workspaceName}": ${seeded.warning}`);
+      }
 
       this.logger.log(
         `${inserted ? 'seeded' : 'reconciled'} workspace "${workspaceName}" (insert-if-absent: ${Object.keys(executorIds).length} executors, ${Object.keys(agentIds).length} agents)`,

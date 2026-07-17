@@ -188,11 +188,30 @@ CREATE TABLE agents (
   UNIQUE (workspace_id, key)                    -- feature 014: identity-constraint переехал name → key (name может повторяться). Один "brigadir" на workspace гарантируется зарезервированным key + is_orchestrator (seed insert-if-absent onConflict (workspace_id, key))
 );
 
--- ============ global_settings (feature 010) ============
--- Платформенный key-value store (без workspace FK) под секцию "General".
--- Первый ключ: default_orchestrator_instruction (JSON-строка), копируется в
--- инструкцию сидируемого оркестратора при СОЗДАНИИ workspace (изменение влияет
--- только на созданные позже — SC-006). Delete-guard оркестратора — в API
+-- ============ global_settings (feature 010; feature 015 — шаблон бригадира) ============
+-- Платформенный key-value store (без workspace FK). Ключи (feature 015,
+-- секция Settings → "Brigadir agent", GET/PUT /api/brigadir-agent-settings;
+-- старый /api/general-settings удалён, General оставил только Theme):
+-- - brigadir_agent_template — ОДИН версионированный JSON-документ
+--   (BrigadirAgentTemplateSchema, contracts): имя/роль/лимиты/enabled +
+--   ДВА execution-профиля: triage (копируется в сидируемого оркестратора при
+--   СОЗДАНИИ workspace — изменения влияют только на созданные позже, SC-006)
+--   и setup (читается ЖИВЬЁМ каждым workspace-setup прогоном: сильная модель,
+--   большой maxTurns, примонтированный дефолтный репозиторий workspace,
+--   setup.timeout_minutes под клоны). Битое значение = built-in defaults.
+-- - default_orchestrator_instruction (JSON-строка) — routing-инструкция,
+--   копируется при СОЗДАНИИ workspace (SC-006);
+-- - workspace_setup_instruction (JSON-строка) — setup-протокол, live-read.
+-- Ключи инструкций НЕ переименовывались при переезде секции (feature 015) —
+-- правки операторов пережили смену эндпоинта без миграции.
+-- Принцип "у оркестратора нет репозитория и git-кредов" (feature 010 FR-018,
+-- Constitution V) СУЖЕН фичей 015 до TRIAGE-прогонов: setup-прогоны получают
+-- read-only-по-поведению репо-доступ (нет push-пути, локальная ветка
+-- setup/<runId8>, протокол предписывает только чтение) на общем ssh-agent
+-- посте всех репо-прогонов; обоснование — plan.md фичи 015, Constitution Check.
+-- Встроенные executor-профили: brigadir-orchestrator (triage, Haiku, no-repo)
+-- и brigadir-setup (setup, Sonnet, 60 turns) — оба insert-if-absent.
+-- Delete-guard оркестратора — в API
 -- (agents.controller → 409), не в БД, чтобы правки instruction/enabled работали.
 CREATE TABLE global_settings (
   key             text PRIMARY KEY,

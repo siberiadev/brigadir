@@ -2,7 +2,7 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Inject, Logger, type OnApplicationBootstrap, type OnModuleDestroy } from '@nestjs/common';
 import { Worker, type Job } from 'bullmq';
 import { desc, eq } from 'drizzle-orm';
-import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
+import { DRIZZLE, type BrigadirDb, schema, getBrigadirAgentTemplate } from '@brigadir/database';
 import { BRIGADIR_JWT_SECRET } from '@brigadir/app-config';
 import { runQueueName, backoffStrategy } from '@brigadir/queues';
 import { RunsService, mapExitStatusToRunStatus } from '@brigadir/runs';
@@ -351,6 +351,16 @@ export class ClaudeCliRunProcessor
 
     if (!row) return undefined;
 
+    // feature 015 (FR-013/019, D9): a workspace-setup run takes its timeout
+    // from the LIVE brigadir template's setup profile (sized to accommodate
+    // repository clones), not the agent's triage timeout. Flowing it through
+    // `timeoutMinutes` covers the abort timer, the run-token TTL, and
+    // ctx.limits.timeoutMs in one place.
+    let timeoutMinutes = row.timeoutMinutes;
+    if ((row.triggerEvent as { source?: string } | null)?.source === 'workspace-setup') {
+      timeoutMinutes = (await getBrigadirAgentTemplate(this.db)).setup.timeout_minutes;
+    }
+
     const executorConfig = row.executorConfig as
       | { cancelPollMs?: number; postFinalizeGraceMs?: number; useCallbackChannel?: boolean }
       | null;
@@ -360,7 +370,7 @@ export class ClaudeCliRunProcessor
       executorType: row.executorType,
       triggerEvent: row.triggerEvent,
       instruction: row.instruction,
-      timeoutMinutes: row.timeoutMinutes,
+      timeoutMinutes,
       maxBudgetUsd: row.maxBudgetUsd,
       ticketKey: row.ticketKey,
       ticketSummary: row.ticketSummary,

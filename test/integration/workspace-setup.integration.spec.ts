@@ -492,4 +492,54 @@ describe('workspace setup by the orchestrator (feature 011)', () => {
       .where(and(eq(schema.agents.workspaceId, ws.id), eq(schema.agents.name, 'Developer')));
     expect(created).toHaveLength(0);
   });
+
+  it('feature 015 (T020/T025): a brigadir-agent-settings PUT is live-read by the very next generate-agents run', async () => {
+    const settingsUrl = `${url}/api/brigadir-agent-settings`;
+    const original = await (await fetch(settingsUrl, { headers: authHeaders })).json();
+
+    try {
+      const ws = await createWorkspace();
+      await armOrchestrator(ws.id, { mock_scenario: 'team', team_proposal: team() });
+
+      // Edit the setup protocol + setup timeout through the NEW endpoint
+      // (feature 015 relocated both out of /api/general-settings; the storage
+      // keys are unchanged, so the handoff's live read picks the edit up).
+      const edited = structuredClone(original);
+      edited.workspace_setup_instruction =
+        'FEATURE-015-MARKER: recon the repositories, then deliver the team.';
+      edited.template.setup.timeout_minutes = 90;
+      const putRes = await fetch(settingsUrl, {
+        method: 'PUT',
+        headers: authHeaders,
+        body: JSON.stringify(edited),
+      });
+      expect(putRes.status).toBe(200);
+
+      const res = await generate(ws.id);
+      expect(res.status).toBe(202);
+      const { run_id } = (await res.json()) as { run_id: string };
+
+      await waitFor(async () => {
+        const [r] = await db.db
+          .select({ status: schema.runs.status })
+          .from(schema.runs)
+          .where(eq(schema.runs.id, run_id));
+        return r?.status === 'succeeded';
+      });
+
+      // The very next setup run's handoff carried the edited protocol text.
+      const call = runSpy.mock.calls.find((c) => (c[0] as { runId: string }).runId === run_id)!;
+      expect((call[0] as { instruction: string }).instruction).toContain('FEATURE-015-MARKER');
+
+      // And the generate→apply loop is unaffected by the template being present.
+      expect((await workerAgents(ws.id)).length).toBe(2);
+    } finally {
+      // Restore for any later cases sharing the suite database.
+      await fetch(settingsUrl, {
+        method: 'PUT',
+        headers: authHeaders,
+        body: JSON.stringify(original),
+      });
+    }
+  });
 });

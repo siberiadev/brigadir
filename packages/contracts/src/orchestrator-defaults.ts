@@ -14,6 +14,36 @@
  *   the stored value affects the very next run in every workspace.
  */
 
+// Type-only import: erased at runtime, so this module stays dep-free.
+import type { BrigadirAgentTemplate } from './orchestrator-template.schema';
+
+/**
+ * Built-in default of the brigadir agent template (feature 015). Copied into
+ * new workspaces' orchestrators at creation; the `setup` profile is read live
+ * by workspace-setup runs. The web app imports it for "Reset to default" /
+ * "Reset all"; `getBrigadirAgentTemplate` falls back to it on a missing or
+ * corrupt stored value (spec FR-011). Executor fields are PROFILE NAMES —
+ * both defaults are seeded insert-if-absent by `@brigadir/database`.
+ */
+export const DEFAULT_BRIGADIR_AGENT_TEMPLATE = {
+  schema_version: 1,
+  name: 'brigadir',
+  role: 'teamlead',
+  timeout_minutes: 45,
+  max_budget_usd: null,
+  max_attempts: 2,
+  enabled: true,
+  triage: {
+    executor: 'brigadir-orchestrator',
+    behavior: { workspace_mode: 'none' },
+  },
+  setup: {
+    executor: 'brigadir-setup',
+    behavior: {},
+    timeout_minutes: 60,
+  },
+} as const satisfies BrigadirAgentTemplate;
+
 /**
  * Routing (triage) instruction: how brigadir reacts to a failed worker run or
  * a human answer on a blocked question. Kept as a short role prompt — the

@@ -25,6 +25,18 @@ export class WorktreePrepareError extends Error {
   }
 }
 
+/**
+ * Branch identity of a TICKETLESS workspace-setup run (feature 015, FR-020):
+ * `setup/<first 8 chars of run id>`. Deterministic and collision-free (run ids
+ * are unique; every resume creates a NEW setup run per feature 011), and
+ * local-only — a setup run never pushes (spec FR-015); cleanup removes the
+ * worktree like any run, and a leftover zero-commit branch falls under the
+ * standard leftover policy in prepare().
+ */
+export function setupRunBranchIdentity(runId: string): { branchPrefix: string; ticketKey: string } {
+  return { branchPrefix: 'setup', ticketKey: runId.slice(0, 8) };
+}
+
 async function branchExists(cacheDir: string, branch: string): Promise<boolean> {
   try {
     await execFileAsync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], {

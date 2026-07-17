@@ -1,9 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { http, HttpResponse } from 'msw';
-import {
-  DEFAULT_ORCHESTRATOR_INSTRUCTION,
-  DEFAULT_WORKSPACE_SETUP_INSTRUCTION,
-} from '@brigadir/contracts/orchestrator-defaults';
 import { server } from './server';
 import { mountWithProviders, flush } from './mount';
 import { routes } from '../src/router';
@@ -42,14 +38,6 @@ describe('PlatformSettings — sub-nav + executors panel', () => {
   it('/settings redirects to /settings/general', async () => {
     setDashboardToken('test-token');
     server.use(http.get('/api/human-tasks/count', () => HttpResponse.json({ open: 0 })));
-    server.use(
-      http.get('/api/general-settings', () =>
-        HttpResponse.json({
-          default_orchestrator_instruction: 'default',
-          workspace_setup_instruction: 'setup default',
-        }),
-      ),
-    );
     const wrapper = mountWithProviders(App, { routes, initialPath: '/settings' });
     await wrapper.vm.$router.isReady();
     await flush();
@@ -79,14 +67,6 @@ describe('PlatformSettings — sub-nav + executors panel', () => {
   it('General renders the Theme switcher; picking Dark flips html.dark instantly (2026-07-16)', async () => {
     setDashboardToken('test-token');
     server.use(http.get('/api/human-tasks/count', () => HttpResponse.json({ open: 0 })));
-    server.use(
-      http.get('/api/general-settings', () =>
-        HttpResponse.json({
-          default_orchestrator_instruction: 'default',
-          workspace_setup_instruction: 'setup default',
-        }),
-      ),
-    );
     const wrapper = mountWithProviders(App, { routes, initialPath: '/settings/general' });
     await wrapper.vm.$router.isReady();
     for (let i = 0; i < 40 && !wrapper.find('[data-test="theme-mode"]').exists(); i++) {
@@ -106,60 +86,20 @@ describe('PlatformSettings — sub-nav + executors panel', () => {
     localStorage.removeItem('brigadir-theme');
   });
 
-  it('General shows both brigadir instruction fields; Reset to default restores the built-ins; Save PUTs both (2026-07-17)', async () => {
+  it('General is theme-only since feature 015 — the instruction fields moved to Brigadir agent', async () => {
     setDashboardToken('test-token');
     server.use(http.get('/api/human-tasks/count', () => HttpResponse.json({ open: 0 })));
-    server.use(
-      http.get('/api/general-settings', () =>
-        HttpResponse.json({
-          default_orchestrator_instruction: 'custom routing text',
-          workspace_setup_instruction: 'custom setup text',
-        }),
-      ),
-    );
-    let putBody: Record<string, string> | undefined;
-    server.use(
-      http.put('/api/general-settings', async ({ request }) => {
-        putBody = (await request.json()) as Record<string, string>;
-        return HttpResponse.json(putBody);
-      }),
-    );
     const wrapper = mountWithProviders(App, { routes, initialPath: '/settings/general' });
     await wrapper.vm.$router.isReady();
-    // Wait until the query resolved and seeded the fields (the textareas exist
-    // empty from the first render; data-test falls through to the native textarea).
-    const setupSelector = 'textarea[data-test="workspace-setup-instruction"]';
-    const setupValue = () => {
-      const w = wrapper.find(setupSelector);
-      return w.exists() ? (w.element as HTMLTextAreaElement).value : undefined;
-    };
-    for (let i = 0; i < 40 && setupValue() !== 'custom setup text'; i++) {
+    for (let i = 0; i < 40 && !wrapper.find('[data-test="theme-mode"]').exists(); i++) {
       await flush(5);
     }
 
-    const routing = wrapper.find('textarea[data-test="default-orchestrator-instruction"]');
-    const setup = wrapper.find(setupSelector);
-    expect((routing.element as HTMLTextAreaElement).value).toBe('custom routing text');
-    expect((setup.element as HTMLTextAreaElement).value).toBe('custom setup text');
-
-    // Reset each field to the built-in default (local, not yet saved).
-    await wrapper.find('[data-test="reset-routing-instruction"]').trigger('click');
-    await wrapper.find('[data-test="reset-setup-instruction"]').trigger('click');
-    await flush();
-    expect((routing.element as HTMLTextAreaElement).value).toBe(
-      DEFAULT_ORCHESTRATOR_INSTRUCTION,
-    );
-    expect((setup.element as HTMLTextAreaElement).value).toBe(
-      DEFAULT_WORKSPACE_SETUP_INSTRUCTION,
-    );
-
-    // Save persists both fields in one PUT.
-    await wrapper.find('[data-test="save-general-settings"]').trigger('click');
-    await flush(10);
-    expect(putBody).toEqual({
-      default_orchestrator_instruction: DEFAULT_ORCHESTRATOR_INSTRUCTION,
-      workspace_setup_instruction: DEFAULT_WORKSPACE_SETUP_INSTRUCTION,
-    });
+    expect(wrapper.find('[data-test="theme-mode"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="default-orchestrator-instruction"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="workspace-setup-instruction"]').exists()).toBe(false);
+    // The relocated fields live under the third sub-nav item.
+    expect(wrapper.find('[data-test="settings-nav-brigadir-agent"]').exists()).toBe(true);
   });
 
   it('profile table column order: Type, Model, Name, Max parallel runs, API key, Enabled (2026-07-14)', async () => {

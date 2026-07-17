@@ -4,7 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { eq } from 'drizzle-orm';
-import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
+import {
+  DRIZZLE,
+  type BrigadirDb,
+  schema,
+  getBrigadirAgentTemplate,
+  ensureSetupExecutor,
+  SETUP_EXECUTOR_NAME,
+} from '@brigadir/database';
 import { AGENTS_CONFIG } from '@brigadir/app-config';
 import { JIRA_CLIENT, type JiraClient } from '@brigadir/jira';
 import { ReportSchema, type AgentsConfig } from '@brigadir/contracts';
@@ -14,7 +21,7 @@ import { resolveClaudeCliConfig, type ClaudeCliExecutorConfigInput } from './cla
 import { buildArgs } from './args';
 import { buildChildEnv } from './env-allowlist';
 import { ClaudeStreamParser, type TerminalResult } from './stream-parser';
-import { prepare, cleanup, type WorktreeRepo } from './worktree';
+import { prepare, cleanup, setupRunBranchIdentity, type WorktreeRepo } from './worktree';
 import { spawnGroup } from './process-group';
 import { buildWrapperText } from './wrapper';
 import { writeMcpConfig, defaultMcpConfigRoot, type WrittenMcpConfig } from './mcp-config';
@@ -118,7 +125,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
   ) {}
 
   async run(ctx: RunContext, signal: AbortSignal): Promise<ExecutorResult> {
-    const { runtimeConfig, repo, branchPrefix, workspaceId, apiKey, noRepo } =
+    const { runtimeConfig, repo, branchPrefix, workspaceId, apiKey, noRepo, setupRun } =
       await this.loadRunConfig(ctx.runId);
 
     let worktree: { worktreeDir: string; branch: string; cacheDir: string };
@@ -134,10 +141,23 @@ export class ClaudeCliExecutor implements AgentExecutor {
       }
       // No `worktree_path` persisted — there is no repository worktree to inspect.
     } else {
-      // A repository worktree is branch-named after the ticket — a ticketless
-      // run on a repo-carrying agent is a config error, not a crash-retry case
-      // (feature 011: setup runs always ride the no-repo orchestrator profile).
-      if (!ctx.ticket) {
+      // A repository worktree is branch-named after the ticket. A ticketless
+      // repo run is a config error EXCEPT for workspace-setup runs (feature
+      // 015, FR-020): those are ticketless by design and get a local-only
+      // `setup/<runId8>` branch instead (never pushed — spec FR-015).
+      let branchIdentity: { ticketKey: string; prefix: string; reuse: boolean };
+      if (ctx.ticket) {
+        branchIdentity = {
+          ticketKey: ctx.ticket.key,
+          prefix: branchPrefix,
+          reuse: ctx.isResumedAttempt === true,
+        };
+      } else if (setupRun) {
+        // A resumed setup question spawns a NEW run (new id, feature 011) —
+        // there is never a prior setup branch to reuse.
+        const identity = setupRunBranchIdentity(ctx.runId);
+        branchIdentity = { ticketKey: identity.ticketKey, prefix: identity.branchPrefix, reuse: false };
+      } else {
         return {
           exitStatus: 'crashed',
           diagnostics: 'ticketless run requires a no-repository agent (workspace_mode: none)',
@@ -147,11 +167,11 @@ export class ClaudeCliExecutor implements AgentExecutor {
         worktree = await prepare(
           repo!,
           ctx.runId,
-          ctx.ticket.key,
-          branchPrefix,
+          branchIdentity.ticketKey,
+          branchIdentity.prefix,
           runtimeConfig.worktreeRoot,
           runtimeConfig.repoCacheRoot,
-          { reuseBranch: ctx.isResumedAttempt === true },
+          { reuseBranch: branchIdentity.reuse },
         );
       } catch (err) {
         return { exitStatus: 'crashed', diagnostics: err instanceof Error ? err.message : String(err) };
@@ -451,6 +471,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
     workspaceId: string;
     apiKey: string | undefined;
     noRepo: boolean;
+    setupRun: boolean;
   }> {
     const [row] = await this.db
       .select({
@@ -459,6 +480,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
         executorSecrets: schema.executors.secrets,
         behavior: schema.agents.behavior,
         workspaceId: schema.runs.workspaceId,
+        triggerEvent: schema.runs.triggerEvent,
       })
       .from(schema.runs)
       .innerJoin(schema.agents, eq(schema.runs.agentId, schema.agents.id))
@@ -470,15 +492,36 @@ export class ClaudeCliExecutor implements AgentExecutor {
       throw new Error(`run ${runId} not found while resolving claude_cli config`);
     }
 
-    const rawConfig = row.executorConfig as ClaudeCliExecutorConfigInput;
-    const behavior = (row.behavior ?? {}) as {
+    // feature 015 (FR-013, D8): a workspace-setup run resolves its environment
+    // from the LIVE brigadir template's `setup` execution profile — capable
+    // model, larger turn budget, repo-mounted — instead of the agent's own
+    // cheap triage profile. Every other source stays byte-identical.
+    const setupRun =
+      (row.triggerEvent as { source?: string } | null)?.source === 'workspace-setup';
+
+    let rawConfig = row.executorConfig as ClaudeCliExecutorConfigInput;
+    let executorName = row.executorName;
+    let executorSecrets = row.executorSecrets;
+    let behavior = (row.behavior ?? {}) as {
       allowed_tools?: string[];
       branch_prefix?: string;
       repository?: string;
       workspace_mode?: string;
     };
-    // feature 010 (FR-018): the orchestrator runs with NO repository workspace.
-    const noRepo = behavior.workspace_mode === 'none';
+
+    if (setupRun) {
+      const template = await getBrigadirAgentTemplate(this.db);
+      const profile = await this.resolveSetupProfile(runId, template.setup.executor);
+      rawConfig = profile.config as ClaudeCliExecutorConfigInput;
+      executorName = profile.name;
+      executorSecrets = profile.secrets;
+      behavior = template.setup.behavior as typeof behavior;
+    }
+
+    // feature 010 (FR-018): the orchestrator's TRIAGE runs have NO repository
+    // workspace; feature 015 narrowed the rule to triage — setup behavior
+    // defaults to repo-mounted (no workspace_mode: 'none').
+    let noRepo = behavior.workspace_mode === 'none';
     // Named runner profiles (2026-07-14): the PROFILE's model is the single
     // source of truth — resolveClaudeCliConfig reads it from the executor
     // config only, so a legacy `behavior.model` on the agent is ignored here
@@ -488,20 +531,35 @@ export class ClaudeCliExecutor implements AgentExecutor {
     // Platform-scoped executors (2026-07-13): the repository is the AGENT's
     // choice (behavior.repository), else the run workspace's default repo. A
     // no-repository run resolves none (skips clone/worktree entirely).
-    const repo = noRepo
-      ? null
-      : await this.resolveRepository(row.workspaceId, resolveRepositoryName(behavior));
+    let repo: WorktreeRepo | null = null;
+    if (!noRepo) {
+      if (setupRun) {
+        // feature 015 (FR-017): a workspace with no repositories degrades to
+        // the repo-less scratch path — the setup protocol's recon branch is
+        // best-effort and bounded; the run must proceed either way.
+        try {
+          repo = await this.resolveRepository(row.workspaceId, resolveRepositoryName(behavior));
+        } catch (err) {
+          this.logger.warn(
+            `setup run ${runId}: no repository available (${String(err)}) — proceeding without one (FR-017)`,
+          );
+          noRepo = true;
+        }
+      } else {
+        repo = await this.resolveRepository(row.workspaceId, resolveRepositoryName(behavior));
+      }
+    }
 
     // Profile API key (write-only at the API; only the runtime opens it). A
     // blob that fails to open is a hard error — running billed-by-subscription
     // when the operator configured a key would be a silent misbill.
     let apiKey: string | undefined;
-    if (row.executorSecrets != null) {
+    if (executorSecrets != null) {
       try {
-        apiKey = openExecutorSecrets(row.executorSecrets).api_key;
+        apiKey = openExecutorSecrets(executorSecrets).api_key;
       } catch (err) {
         throw new Error(
-          `executor profile "${row.executorName}" has secrets that failed to decrypt (rotate BRIGADIR_CREDENTIALS_KEY back or re-enter the API key): ${String(err)}`,
+          `executor profile "${executorName}" has secrets that failed to decrypt (rotate BRIGADIR_CREDENTIALS_KEY back or re-enter the API key): ${String(err)}`,
           { cause: err },
         );
       }
@@ -514,7 +572,43 @@ export class ClaudeCliExecutor implements AgentExecutor {
       workspaceId: row.workspaceId,
       apiKey,
       noRepo,
+      setupRun,
     };
+  }
+
+  /**
+   * Resolve the template's setup executor PROFILE NAME to a live profile row
+   * (feature 015, FR-018). Missing or disabled → fall back to the built-in
+   * `brigadir-setup` profile (insert-if-absent) and record a warning on the
+   * run timeline — a dangling reference degrades, never fails the run.
+   */
+  private async resolveSetupProfile(runId: string, name: string) {
+    const select = () =>
+      this.db
+        .select({
+          id: schema.executors.id,
+          name: schema.executors.name,
+          config: schema.executors.config,
+          secrets: schema.executors.secrets,
+          enabled: schema.executors.enabled,
+        })
+        .from(schema.executors);
+
+    const [profile] = await select().where(eq(schema.executors.name, name)).limit(1);
+    if (profile?.enabled) return profile;
+
+    const fallbackId = await ensureSetupExecutor(this.db);
+    const [fallback] = await select().where(eq(schema.executors.id, fallbackId)).limit(1);
+    // A missing reference to the built-in name itself is just a fresh database
+    // (ensureSetupExecutor created it above) — not a misconfiguration.
+    if (name !== SETUP_EXECUTOR_NAME || profile) {
+      const message = `setup executor profile "${name}" ${profile ? 'is disabled' : 'does not exist'} — falling back to "${SETUP_EXECUTOR_NAME}"`;
+      this.logger.warn(`run ${runId}: ${message}`);
+      await this.db
+        .insert(schema.runEvents)
+        .values({ runId, type: 'log', payload: { message, source: 'setup-profile-fallback' } });
+    }
+    return fallback;
   }
 
   /**

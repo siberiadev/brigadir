@@ -71,8 +71,8 @@ export const routes: RouteRecordRaw[] = [
   { path: '/human-queue', name: 'human-queue', component: () => import('../views/HumanQueue.vue') },
   {
     // Platform Settings (2026-07-13): a shell with its own left sub-navigation;
-    // panels are nested children so future sections (General, Users, Usage) are
-    // one child route each. Bare /settings lands on Executors.
+    // panels are nested children so future sections (Users, Usage) are one
+    // child route each. Bare /settings lands on General.
     path: '/settings',
     component: () => import('../views/settings/PlatformSettings.vue'),
     children: [
@@ -81,6 +81,13 @@ export const routes: RouteRecordRaw[] = [
         path: 'general',
         name: 'platform-settings-general',
         component: () => import('../views/settings/SettingsGeneral.vue'),
+      },
+      {
+        // feature 015: the default-orchestrator template + both brigadir
+        // instruction texts (relocated from General).
+        path: 'brigadir-agent',
+        name: 'platform-settings-brigadir-agent',
+        component: () => import('../views/settings/SettingsBrigadirAgent.vue'),
       },
       {
         path: 'executors',
