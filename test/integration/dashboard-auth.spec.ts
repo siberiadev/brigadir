@@ -62,6 +62,24 @@ describe('dashboard auth matrix (T133)', () => {
     expect(ok.status).toBe(200);
   });
 
+  it('the feature-017 home/global-runs routes sit behind the same guard', async () => {
+    // 401 without a bearer; 200/422-not-401 with the correct one.
+    const routes = ['/api/home/summary', '/api/home/workspaces', '/api/runs?status=running'];
+    for (const route of routes) {
+      expect((await fetch(`${url}${route}`)).status).toBe(401);
+      expect(
+        (await fetch(`${url}${route}`, { headers: { authorization: 'Bearer nope' } })).status,
+      ).toBe(401);
+      expect(
+        (
+          await fetch(`${url}${route}`, {
+            headers: { authorization: `Bearer ${TEST_DASHBOARD_TOKEN}` },
+          })
+        ).status,
+      ).toBe(200);
+    }
+  });
+
   it('a dashboard token does NOT authorize a callback route (RunTokenGuard only)', async () => {
     const p = await seedPipeline(db.db, { executorType: 'mock', ticketKey: 'BRIG-900' });
     const [run] = await db.db

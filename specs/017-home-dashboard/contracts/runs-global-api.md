@@ -18,7 +18,7 @@ Query:
 |---|---|
 | `status` | **REQUIRED.** Comma-separated, each value ∈ `RunStatusSchema` (`queued\|running\|awaiting_human\|succeeded\|failed\|cancelled\|timed_out\|superseded`). Missing, empty, or any unknown token → **422** `validation_error`. |
 | `finished_within` | Optional ∈ `24h\|7d\|30d` (reuses `RunCostPeriodSchema`). Adds `finished_at >= now() - interval`. |
-| `limit` | Optional int. Default **10**, clamped to **1..50** server-side regardless of input. |
+| `limit` | Optional int. Default **10**, bounded to **1..50**; garbage or out-of-range input falls back to the default (the pagination `.catch()` convention — never a 500). |
 
 Home usage: needs-attention → `?status=failed,timed_out&finished_within=24h&limit=10`;
 live runs → `?status=running,queued&limit=10`.
@@ -32,7 +32,7 @@ live runs → `?status=running,queued&limit=10`.
       "status": "running",
       "attempt": 1,
       "agent": { "id": "uuid", "name": "Hera", "key": "hera-reviewer", "role": "Reviewer" }, // role nullable
-      "ticket": { "key": "PAY-151", "summary": "…", "deep_link": "https://…/browse/PAY-151" }, // null for ticketless setup runs
+      "ticket": { "key": "PAY-151", "summary": "…", "jira_url": "https://…/browse/PAY-151" }, // reuses RunTicketRefSchema; null for ticketless setup runs
       "workspace": { "id": "uuid", "name": "Payments Core" },   // the new cross-workspace dimension
       "started_at": "2026-07-17T08:01:00Z",   // nullable — ticker anchor
       "finished_at": null,                     // nullable — needs-attention finish time

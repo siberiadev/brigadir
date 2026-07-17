@@ -1155,3 +1155,42 @@ run (argv `--allowed-tools`), agent/profile overrides win, triage stays empty,
 setup run gets the default (FR-013 test extended), FR-017 degrade stays empty.
 Gates green: typecheck, lint, unit 265 (39 files) + contracts/mcp-server/
 admin-mcp package suites.
+
+## Iteration 23 — Home dashboard landing page (feature 017, 2026-07-17)
+
+`/home` — новая посадочная страница: hero-виджет human queue (top-5 старейших
++ total из ТОГО ЖЕ ответа списка), плитки running/queued/failed-24h/awaiting-
+human, кросс-workspace списки «Needs attention» (failed/timed_out за 24ч) и
+«Live runs» (с посекундным тикером от `started_at`, clamp ≥ 0), карточки
+workspace'ов с агрегатами и платформенный Spend 24h/7d/30d. `/` → redirect
+`/home`; список workspace'ов переехал на `/workspaces` (имя роута `workspaces`
+сохранено — все `router.push({name})` работают без правок); one-shot редирект
+`/`→`/human-queue` из 006 удалён (hero отвечает на тот же вопрос заметнее).
+
+Backend (все — за DashboardTokenGuard, read-only, без изменений схемы БД):
+- `GET /api/home/summary` — счётчики + spend за все три периода одним ответом
+  (switcher чисто клиентский). Spend оконён по `created_at` — как
+  per-workspace cost, поэтому платформенная цифра = Σ workspace-цифр (SC-004,
+  закреплено интеграционным инвариант-тестом). Провалы — по `finished_at`.
+- `GET /api/runs` — ограниченный кросс-workspace список: `status` (CSV)
+  ОБЯЗАТЕЛЕН (422 без него), `limit` ≤ 50 (мусор → дефолт 10, конвенция
+  `.catch()`), фиксированный композитный ORDER BY (running старейшие →
+  queued старейшие → терминальные по finished_at DESC, tie-break id);
+  `{items, total}` — НЕ пагинационный конверт (top-N с "showing N of M").
+- `GET /api/home/workspaces` — карточная проекция: ≤4 батч-запроса
+  (DISTINCT ON для last run — едет по `runs_workspace_created`), paused из
+  `settings.enabled === false`, без fan-out per card.
+
+Контракты — `home.schema.ts` (strict, snake_case, переиспользованы
+RunStatusSchema/RunCostPeriodSchema/RunTicketRefSchema). Отклонение от
+спеки: у «view all» для глобальных списков нет назначения (глобальной
+страницы runs не существует и она вне скоупа) — вместо ссылки overflow-note
+«showing N of M»; hero и грид ссылаются на свои реальные страницы.
+
+Тесты той же итерацией: контрактные (home.schema.spec), интеграционные
+home-summary (нулевое состояние, окно 24ч, Σ-инвариант против
+per-workspace cost, консистентность с /api/runs и /api/human-tasks/count),
+runs-global (422-матрица, ordering, limit, ticketless), home-workspaces
+(агрегаты, paused, runless), dashboard-auth (+3 новых роута), веб —
+home-dashboard.spec (24 сценария: тикер real-timers, spend без refetch,
+per-block degradation) + правки app-sidebar/workspace-tabs под новый роутинг.
