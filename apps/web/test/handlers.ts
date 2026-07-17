@@ -598,6 +598,9 @@ export const defaultHandlers = [
   http.get('/api/workspaces/:id/runs/cost', () => HttpResponse.json(sampleRunCost)),
   http.get('/api/runs/:id', () => HttpResponse.json(sampleRunCard)),
   http.post('/api/runs/:id/cancel', () => HttpResponse.json({ ok: true, cancelled: true })),
+  http.post('/api/workspaces/:id/runs/cancel-all', () =>
+    HttpResponse.json({ ok: true, cancelled_count: 2 }),
+  ),
   http.post('/api/runs/:id/retry', () =>
     HttpResponse.json({ ok: true, run_id: 'run-2', deduplicated: false }),
   ),

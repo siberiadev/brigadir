@@ -1284,3 +1284,31 @@ edit-режим его игнорирует; ключ диалога расши�
 агента, disabling-edit убирает ноду) + 4 кейса префилла в
 agent-form.spec. jsdom-грабля: у радио el-segmented нет value-атрибута —
 выбор по индексу; в test/setup.ts добавлен no-op ResizeObserver.
+
+## Iteration 26 — Bulk stop: кнопка «Stop all runs» на странице Runs (2026-07-17)
+
+Проблема: пауза workspace не трогает уже активные прогоны — они дорабатывают
+до конца. Добавлен bulk stop: `POST /api/workspaces/:id/runs/cancel-all` —
+один guarded UPDATE, флипающий все `queued` + `running` прогоны workspace в
+`cancelled` (`finished_at = now()`), ответ `{ ok, cancelled_count }`
+(контракт `RunsCancelAllResponseSchema`). `awaiting_human` сознательно вне
+скоупа (правило №7 — парковку не затирает никакая bulk-операция); чужие
+workspace не задеваются; повторный вызов — идемпотентный no-op (count 0).
+Механика остановки — существующая: у `running` процессов cancel-poll воркера
+видит неактивную строку и убивает CLI; отменённый `queued` дропается на
+пикапе (`markRunning` → false). Попутно закрыт дрейф от правила №7 в
+mock-`RunProcessor`: он игнорировал результат `markRunning` и исполнил бы
+отменённый queued-прогон — теперь job дропается, как в
+`ClaudeCliRunProcessor`.
+
+UI: кнопка «Stop all runs» (danger plain) в шапке страницы Runs, действие
+только после `ElMessageBox.confirm` (текст явно говорит, что awaiting_human
+не затрагивается); успех — `ElMessage` со счётчиком; мутация
+`useCancelAllRuns` инвалидирует `['runs', wsId]`, чтобы таблица обновилась
+сразу, не дожидаясь 5-секундного полла.
+
+Тесты той же итерацией: `test/integration/runs-cancel-all.spec.ts`
+(queued+running флипаются, awaiting_human/terminal/чужой workspace — нет,
+finished_at проставлен, идемпотентность, 404) + 2 кейса в
+`runs-table.spec.ts` (запрос уходит ТОЛЬКО после подтверждения; dismiss —
+ничего не шлёт).

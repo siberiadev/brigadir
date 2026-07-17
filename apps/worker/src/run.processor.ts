@@ -89,7 +89,14 @@ export class RunProcessor extends WorkerHost implements OnApplicationBootstrap, 
       throw Worker.RateLimitError();
     }
 
-    await this.runs.markRunning(runId, attempt);
+    // markRunning guards status ∈ {queued, running}: false means the run was
+    // cancelled or parked while waiting — drop the job, never execute it
+    // (rule #7; same posture as ClaudeCliRunProcessor).
+    const startable = await this.runs.markRunning(runId, attempt);
+    if (!startable) {
+      this.logger.warn(`run ${runId} is no longer startable (cancelled/parked) — dropping job`);
+      return;
+    }
     // Optional in-progress Jira transition at job start (non-fatal on failure).
     await this.pipeline.onRunStarted(runId);
 

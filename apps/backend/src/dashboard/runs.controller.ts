@@ -8,6 +8,7 @@ import {
   type GlobalRunsResponse,
   type RunCardResponse,
   type RunCancelResponse,
+  type RunsCancelAllResponse,
   type RunCostResponse,
   type RunListResponse,
   type RunRetryResponse,
@@ -380,6 +381,38 @@ export class RunsController {
       .limit(1);
     if (!exists) throw notFoundError('run_not_found', 'Run not found.');
     return { ok: true, cancelled: false, reason: 'not_running' };
+  }
+
+  /**
+   * Bulk stop: cancel every active-but-not-parked run of the workspace in one
+   * guarded UPDATE. Scope is `queued` + `running` — a cancelled `queued` run's
+   * job is dropped at pickup (markRunning guards `IN (queued, running)` and
+   * returns false), a cancelled `running` run's process is killed by the
+   * worker's cancel-poll. `awaiting_human` is deliberately excluded
+   * (constitution rule #7 — the park is never overwritten by a bulk action).
+   */
+  @Post('api/workspaces/:id/runs/cancel-all')
+  @HttpCode(200)
+  async cancelAll(@Param('id') workspaceId: string): Promise<RunsCancelAllResponse> {
+    const [ws] = await this.db
+      .select({ id: schema.workspaces.id })
+      .from(schema.workspaces)
+      .where(eq(schema.workspaces.id, workspaceId))
+      .limit(1);
+    if (!ws) throw notFoundError('workspace_not_found', 'Workspace not found.');
+
+    const flipped = await this.db
+      .update(schema.runs)
+      .set({ status: 'cancelled', finishedAt: sql`now()` })
+      .where(
+        and(
+          eq(schema.runs.workspaceId, workspaceId),
+          inArray(schema.runs.status, ['queued', 'running']),
+        ),
+      )
+      .returning({ id: schema.runs.id });
+
+    return { ok: true, cancelled_count: flipped.length };
   }
 
   @Post('api/runs/:id/retry')

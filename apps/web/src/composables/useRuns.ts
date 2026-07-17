@@ -1,5 +1,5 @@
 import { computed, toValue, type MaybeRefOrGetter } from 'vue';
-import { useQuery } from '@tanstack/vue-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query';
 import type { RunCostPeriod } from '@brigadir/contracts';
 import { runsApi, type RunListParams } from '../api/runs';
 
@@ -17,6 +17,19 @@ export function useRuns(workspaceId: string, params: MaybeRefOrGetter<RunListPar
     queryFn: () => api.list(workspaceId, toValue(params)),
     refetchInterval: 5000,
     placeholderData: (prev) => prev,
+  });
+}
+
+/**
+ * Bulk stop for the workspace (queued + running → cancelled; `awaiting_human`
+ * untouched server-side). Invalidates the runs list so the table reflects the
+ * flip immediately instead of waiting for the next 5 s poll.
+ */
+export function useCancelAllRuns(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.cancelAll(workspaceId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['runs', workspaceId] }),
   });
 }
 
