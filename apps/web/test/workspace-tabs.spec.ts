@@ -180,7 +180,9 @@ describe('WorkspaceList — row-click navigation (US1)', () => {
 
 describe('WorkspaceList — list stays focused on lifecycle actions (US3)', () => {
   async function mountList() {
-    const wrapper = mountWithProviders(WorkspaceList, { routes, initialPath: '/' });
+    // Feature 017: the workspace list moved to /workspaces (`/` now redirects
+    // to /home).
+    const wrapper = mountWithProviders(WorkspaceList, { routes, initialPath: '/workspaces' });
     const router = wrapper.vm.$router;
     await router.isReady();
     await flush();
@@ -208,7 +210,7 @@ describe('WorkspaceList — list stays focused on lifecycle actions (US3)', () =
     await flush();
 
     expect(router.currentRoute.value.name).not.toBe('agents');
-    expect(router.currentRoute.value.path).toBe('/');
+    expect(router.currentRoute.value.path).toBe('/workspaces');
   });
 
   it('clicking Settings navigates to the settings tab, not the agents tab (008)', async () => {

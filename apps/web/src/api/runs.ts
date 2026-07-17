@@ -1,4 +1,5 @@
 import type {
+  GlobalRunsResponse,
   RunCancelResponse,
   RunCardResponse,
   RunCostPeriod,
@@ -19,9 +20,27 @@ export interface RunListParams {
   page_size?: number;
 }
 
+/**
+ * Feature 017: the bounded cross-workspace listing (contracts/runs-global-api.md).
+ * `status` (CSV) is mandatory by contract; `limit` defaults server-side to 10.
+ */
+export interface GlobalRunsParams {
+  status: string;
+  finished_within?: RunCostPeriod;
+  limit?: number;
+}
+
 /** Runs REST resource (contracts/runs-api.md — table, card, cost, cancel, retry). */
 export function runsApi(client: ApiClient = apiClient) {
   return {
+    globalList: (params: GlobalRunsParams) =>
+      client.get<GlobalRunsResponse>(
+        `/api/runs${toQuery({
+          status: params.status,
+          finished_within: params.finished_within,
+          limit: params.limit,
+        })}`,
+      ),
     list: (workspaceId: string, params: RunListParams = {}) =>
       client.get<RunListResponse>(
         `/api/workspaces/${workspaceId}/runs${toQuery({

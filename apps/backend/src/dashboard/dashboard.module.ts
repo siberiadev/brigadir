@@ -5,6 +5,7 @@ import { WorkspacesController } from './workspaces.controller';
 import { AgentsController } from './agents.controller';
 import { ExecutorsController } from './executors.controller';
 import { RunsController } from './runs.controller';
+import { HomeController } from './home.controller';
 import { HumanTasksController } from './human-tasks.controller';
 import { BrigadirAgentSettingsController } from './brigadir-agent-settings.controller';
 import { ExecutorBackfillService } from './executor-backfill.service';
@@ -30,6 +31,7 @@ import { DashboardTokenGuard } from './dashboard-token.guard';
     AgentsController,
     ExecutorsController,
     RunsController,
+    HomeController,
     HumanTasksController,
     BrigadirAgentSettingsController,
   ],

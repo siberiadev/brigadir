@@ -4,7 +4,12 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 // so the whole surface is behind the existing auth flow (FR-032) — no per-route
 // guard needed. Runs are workspace-scoped; the run card is addressed by run id.
 export const routes: RouteRecordRaw[] = [
-  { path: '/', name: 'workspaces', component: () => import('../views/WorkspaceList.vue') },
+  // Feature 017: /home is the landing page; the root redirects so old `/`
+  // bookmarks keep working. The workspace list moved to /workspaces and KEEPS
+  // its route name — every router.push({ name: 'workspaces' }) resolves as-is.
+  { path: '/', redirect: '/home' },
+  { path: '/home', name: 'home', component: () => import('../views/HomeDashboard.vue') },
+  { path: '/workspaces', name: 'workspaces', component: () => import('../views/WorkspaceList.vue') },
   {
     // Workspace page: a shell with three router-driven tabs (Runs | Agents |
     // Settings). The shipped deep-links `/workspaces/:id/agents`,
