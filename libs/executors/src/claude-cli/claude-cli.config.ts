@@ -6,6 +6,38 @@ import type { ExecutorConfig } from '@brigadir/contracts';
 export type ClaudeCliExecutorConfig = Extract<ExecutorConfig, { type: 'claude_cli' }>;
 
 /**
+ * Platform default toolset for a REPO-MOUNTED run when neither the executor
+ * profile (`config.allowedTools`) nor the agent (`behavior.allowed_tools`)
+ * declares any (ST3-768). Under `--permission-mode dontAsk` an empty allowlist
+ * auto-denies every mutating tool — the agent can read the repo but never
+ * write, branch, or push, which no repo-mounted run ever wants. Generated
+ * teams (`behavior: {}`) and the seeded `claude` profile hit exactly this.
+ * Explicit config on either level still wins; no-repo (triage) runs keep the
+ * empty allowlist — they have no workspace to mutate.
+ *
+ * `Bash` is deliberately unrestricted: the real guardrails are the per-run git
+ * worktree, the run timeout, and the budget — tool-level narrowing is the
+ * OPERATOR's per-profile/per-agent override (e.g. a read-only reviewer), not
+ * the default. Read-only tools (Read/Glob/Grep) are listed for explicitness
+ * even though dontAsk auto-allows them.
+ */
+export const DEFAULT_REPO_RUN_ALLOWED_TOOLS: readonly string[] = [
+  'Read',
+  'Glob',
+  'Grep',
+  'Write',
+  'Edit',
+  'MultiEdit',
+  'NotebookEdit',
+  'TodoWrite',
+  'Task',
+  'Skill',
+  'Bash',
+  'WebFetch',
+  'WebSearch',
+];
+
+/**
  * What's actually stored in `executors.config` (the DB jsonb column) at
  * runtime — the discriminant `type` and shared `concurrency` live in their
  * own columns, so the jsonb blob is everything else in the branch.
