@@ -81,16 +81,19 @@ export class HumanTasksController {
       .leftJoin(schema.runs, eq(schema.humanTasks.runId, schema.runs.id))
       .leftJoin(schema.agents, eq(schema.runs.agentId, schema.agents.id));
 
+    // Feature 016: both tabs newest-first (reverses the feature-006 oldest-first
+    // open ordering). `id` is the unique tie-breaker — paginated endpoints must
+    // order deterministically (same-instant tasks would otherwise shuffle
+    // between pages).
     const rows = closed
       ? await base
           .where(where)
-          .orderBy(desc(schema.humanTasks.resolvedAt))
+          .orderBy(desc(schema.humanTasks.resolvedAt), desc(schema.humanTasks.id))
           .limit(limit)
           .offset(offset)
       : await base
           .where(where)
-          // oldest-first: longest-waiting on top.
-          .orderBy(schema.humanTasks.createdAt)
+          .orderBy(desc(schema.humanTasks.createdAt), desc(schema.humanTasks.id))
           .limit(limit)
           .offset(offset);
 

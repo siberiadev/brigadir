@@ -1108,3 +1108,41 @@ failure (`serve-static` SPA fallback) reproduces identically on the pristine
 tree (same environment issue recorded in iteration 19), i.e. pre-existing and
 unrelated. Quickstart Scenario 3 (live-model repo recon quality, SC-003)
 remains a manual check by design.
+
+## Iteration 22 — UI polish: role/executor columns + human-queue newest-first (feature 016, 2026-07-17)
+
+Four small dashboard improvements, one behavioral change. **Решение
+пересмотрено**: OPEN-таб needs-human очереди теперь сортируется
+**newest-first** (`created_at DESC, id DESC`) — сознательный разворот решения
+feature 006 «oldest-first / longest-waiting on top». Одна правка `ORDER BY` в
+`HumanTasksController.list()` покрывает обе поверхности (глобальный
+`/human-queue` и вкладку воркспейса — общий компонент и эндпоинт). History-таб
+остался `resolved_at DESC`, но получил тот же `id DESC` tie-breaker: правило
+детерминированного ORDER BY для пагинированных эндпоинтов теперь выполняется
+на обеих ветках (одинаковые `created_at`/`resolved_at` больше не тасуют строки
+между страницами).
+
+Остальное — read-only отображение, ноль изменений контрактов и БД:
+- **Runs-таб**: новая колонка Role из `run.agent.role` (уже был в ответе);
+  без роли — em dash (идиома колонки Cost).
+- **Agents-таб**: «Name (role)» разделён — Name показывает только персону,
+  роль ушла в отдельную колонку тегом (`el-tag size="small"`, цвета из темы);
+  без роли — пустая ячейка. Key не тронут.
+- **Agents-таб**: новая колонка Executor — ИМЯ профиля исполнителя, резолвится
+  на клиенте через существующий `useExecutors` (whole-list `page_size=100`,
+  `Map<id, name>`); нерезолвящийся id / незагруженный список → пустая ячейка,
+  сырой UUID не показывается никогда.
+
+Tests in the same iteration: integration human-queue переписан на
+newest-first + новый describe про tie-break и пагинированный обход без
+дублей/пропусков (падал до правки контроллера — TDD); web: новый
+`agents-columns.spec.ts` (Name/Role split, тег, пустые ячейки, резолв имени
+executor, fallback при упавшем лукапе), runs-table расширен (Role + em dash),
+human-queue — рендер серверного порядка на обеих поверхностях.
+
+Gates green: typecheck + vue-tsc, lint, unit 261 + contracts 117 + mcp 14 +
+admin 14, web 181 (27 файлов), integration 280/281 — единственный fail
+(`serve-static` SPA fallback) — известный environmental, воспроизводится на
+чистом дереве (записан в итерации 19/21). Визуальный spot-check всех четырёх
+изменений сделан в браузере на dev-сервере ворктри против мок-API (живой
+бэкенд пользователя не трогали).

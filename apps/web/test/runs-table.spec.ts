@@ -27,6 +27,32 @@ describe('Runs — table + filters + cost', () => {
     expect(wrapper.find('[data-test="cost-total"]').text()).not.toContain('1.2345');
   });
 
+  it('shows the agent role per run, em dash when the agent has none (feature 016)', async () => {
+    server.use(
+      http.get('/api/workspaces/:id/runs', () =>
+        HttpResponse.json({
+          ...sampleRunList,
+          // sampleRunningListItem.agent.role = 'developer'; sampleRunListItem's is null.
+          items: [sampleRunningListItem, sampleRunListItem],
+          total: 2,
+        }),
+      ),
+    );
+
+    const wrapper = mountRuns();
+    await flush();
+
+    const headers = wrapper.findAll('[data-test="runs-table"] th').map((th) => th.text());
+    expect(headers).toContain('Role');
+    const roleCol = headers.indexOf('Role');
+
+    const rows = wrapper.findAll('[data-test="runs-table"] .el-table__row');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].findAll('td')[roleCol].text()).toBe('developer');
+    // Role-less agent → em dash (same fallback idiom as Cost).
+    expect(rows[1].findAll('td')[roleCol].text()).toBe('—');
+  });
+
   it('sends the status filter to the runs endpoint and narrows the rows', async () => {
     let lastStatus: string | null = null;
     server.use(
