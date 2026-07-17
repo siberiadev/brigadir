@@ -101,6 +101,24 @@ export const sampleAgent: AgentResponse = {
   enabled: true,
 };
 
+/**
+ * Feature 016: an agent WITH a role and a resolvable executor (`ex-claude` is in
+ * `sampleExecutors`). `sampleAgent` above stays role-less with a dangling
+ * `executor_id` ('ex-1' matches no executor fixture) — together they drive the
+ * Role-tag / Executor-name columns and both empty-cell fallbacks.
+ */
+export const sampleAgentWithRole: AgentResponse = {
+  ...sampleAgent,
+  id: 'ag-2',
+  executor_id: 'ex-claude',
+  name: 'Vera',
+  key: 'reviewer',
+  role: 'reviewer',
+  trigger_status: 'In Review',
+  status_running: 'In Review',
+  status_success: 'Done',
+};
+
 // --- executor fixtures (named runner profiles, 2026-07-14: has_api_key, no repository) ---
 
 export const sampleExecutors: ExecutorResponse[] = [
@@ -175,10 +193,12 @@ export const sampleRunListItem: RunListResponse['items'][number] = {
   created_at: '2026-07-12T10:00:00.000Z',
 };
 
-/** A currently-active run — pulse dot + live-ticking Duration in the table. */
+/** A currently-active run — pulse dot + live-ticking Duration in the table.
+ * Its agent carries a `role` (feature 016) so runs fixtures cover both the
+ * role and the em-dash fallback (sampleRunListItem keeps `role: null`). */
 export const sampleRunningListItem: RunListResponse['items'][number] = {
   run_id: 'run-2',
-  agent: { id: 'ag-1', name: 'Implementer', key: 'implementer', role: null },
+  agent: { id: 'ag-1', name: 'Implementer', key: 'implementer', role: 'developer' },
   ticket: { key: 'BRIG-2', summary: 'Fix logout', jira_url: 'https://acme.atlassian.net/browse/BRIG-2' },
   status: 'running',
   attempt: 1,
