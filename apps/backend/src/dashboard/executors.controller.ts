@@ -21,7 +21,7 @@ import {
   type ExecutorListResponse,
   type ExecutorResponse,
 } from '@brigadir/contracts';
-import { sealExecutorSecrets } from '@brigadir/executors';
+import { sealExecutorSecrets, resolveEffectiveAuth } from '@brigadir/executors';
 import { DashboardTokenGuard } from './dashboard-token.guard';
 import { conflictError, notFoundError, validationError, zodIssuePath } from './dashboard.errors';
 import { parsePagination } from './dashboard.helpers';
@@ -94,9 +94,32 @@ export class ExecutorsController {
   async update(@Param('executorId') executorId: string, @Body() body: unknown): Promise<ExecutorResponse> {
     const req = this.parse(body, ExecutorUpdateRequestSchema);
 
+    // Feature 018 (FR-007): explicit api_key mode must end the save WITH a
+    // key — either provided now or already stored. The schema owns the
+    // create-time variant; this one needs row state, so it lives here.
+    if (req.type === 'claude_cli' && req.auth === 'api_key' && typeof req.api_key !== 'string') {
+      const [existing] = await this.db
+        .select({ secrets: schema.executors.secrets })
+        .from(schema.executors)
+        .where(eq(schema.executors.id, executorId))
+        .limit(1);
+      if (!existing) throw notFoundError('executor_not_found', 'Executor not found.');
+      if (req.api_key === null || existing.secrets == null) {
+        throw validationError('Executor could not be saved.', [
+          {
+            path: ['api_key'],
+            code: 'custom',
+            message: 'auth "api_key" requires a stored or provided key.',
+            level: 'error' as const,
+          },
+        ]);
+      }
+    }
+
     const values = toInsertValues(req);
     // api_key tri-state (write-only): omitted → keep the stored blob;
-    // string → replace; explicit null → clear (host subscription).
+    // string → replace; explicit null → clear. Switching auth mode away from
+    // "api_key" deliberately does NOT clear — the blob stays inert (FR-009).
     const apiKey = req.type === 'claude_cli' ? req.api_key : undefined;
     const secretsPatch =
       apiKey === undefined ? {} : { secrets: apiKey === null ? null : sealExecutorSecrets({ api_key: apiKey }) };
@@ -174,6 +197,12 @@ function toInsertValues(req: ExecutorCreateRequest) {
           useCallbackChannel: req.use_callback_channel,
           keepFailedWorktrees: req.keep_failed_worktrees,
           maxTurns: req.max_turns,
+          // Feature 018: auth block, written only when present — a legacy
+          // payload without `auth` never materializes the default into jsonb.
+          ...(req.auth !== undefined ? { auth: req.auth } : {}),
+          ...(req.aws_region !== undefined ? { awsRegion: req.aws_region } : {}),
+          ...(req.aws_profile !== undefined ? { awsProfile: req.aws_profile } : {}),
+          ...(req.ca_bundle_path !== undefined ? { caBundlePath: req.ca_bundle_path } : {}),
         }
       : {};
   return {
@@ -201,6 +230,21 @@ function toExecutorResponse(row: ExecutorRow): ExecutorResponse {
           use_callback_channel: stored.useCallbackChannel,
           keep_failed_worktrees: stored.keepFailedWorktrees,
           max_turns: stored.maxTurns,
+          // Feature 018: `auth` is always the EFFECTIVE mode (legacy rows
+          // included) — clients and the form never re-derive the defaulting
+          // rule. Bedrock fields are config, not secrets; safe to echo.
+          auth: resolveEffectiveAuth(
+            {
+              auth: stored.auth as 'host_subscription' | 'api_key' | 'bedrock' | undefined,
+              awsRegion: stored.awsRegion as string | undefined,
+              awsProfile: stored.awsProfile as string | undefined,
+              caBundlePath: stored.caBundlePath as string | undefined,
+            },
+            row.secrets != null,
+          ).mode,
+          ...(stored.awsRegion !== undefined ? { aws_region: stored.awsRegion } : {}),
+          ...(stored.awsProfile !== undefined ? { aws_profile: stored.awsProfile } : {}),
+          ...(stored.caBundlePath !== undefined ? { ca_bundle_path: stored.caBundlePath } : {}),
         }
       : {};
   return {

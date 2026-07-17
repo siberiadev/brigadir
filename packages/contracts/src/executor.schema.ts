@@ -13,7 +13,16 @@ import { makePaginatedResponseSchema } from './pagination.schema';
  *  - `mock`       → max_parallel_runs only.
  *  - `claude_cli` → model, cli_path, use_callback_channel,
  *                   keep_failed_worktrees, max_turns, max_parallel_runs
- *                   (+ write-only api_key on create/update).
+ *                   (+ write-only api_key on create/update)
+ *                   (+ auth mode, feature 018: host_subscription | api_key |
+ *                   bedrock, with aws_region/aws_profile/ca_bundle_path for
+ *                   bedrock).
+ *
+ * Auth defaulting (feature 018, additive — stored rows are never rewritten):
+ * a row without `auth` behaves as `api_key` when it has a sealed api_key blob,
+ * else as `host_subscription`. The single implementation is
+ * `resolveEffectiveAuth` (libs/executors); responses always carry the
+ * EFFECTIVE mode in `config.auth` so clients never re-derive it.
  *
  * `repository` is NOT an executor field: an executor is platform capacity and
  * has no workspace to resolve a repo against. A run's repository comes from
@@ -42,6 +51,62 @@ export const MockExecutorConfigSchema = z
   })
   .strict();
 
+/** Feature 018: how the spawned CLI authenticates (see header for defaulting). */
+export const ClaudeCliAuthModeSchema = z.enum(['host_subscription', 'api_key', 'bedrock']);
+export type ClaudeCliAuthMode = z.infer<typeof ClaudeCliAuthModeSchema>;
+
+/**
+ * Per-mode cross-field rules (feature 018, flat fields — a nested union would
+ * break the additive wire shape and the form's flat error paths):
+ *  - bedrock ⇒ aws_region required; the three bedrock fields are foreign to
+ *    every other mode;
+ *  - api_key as a STRING is only legal for auth "api_key" (or a legacy payload
+ *    without `auth`); `null` (clear a stored key) stays legal in any mode.
+ * The create-only rule (api_key mode requires a key) lives on the create
+ * schema; the update-side variant needs stored state and lives in the
+ * controller.
+ */
+function refineClaudeCliAuth(
+  value: {
+    auth?: ClaudeCliAuthMode;
+    aws_region?: string;
+    aws_profile?: string;
+    ca_bundle_path?: string;
+    api_key?: string | null;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.auth === 'bedrock') {
+    if (value.aws_region === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['aws_region'],
+        message: 'aws_region is required when auth is "bedrock".',
+      });
+    }
+  } else {
+    for (const field of ['aws_region', 'aws_profile', 'ca_bundle_path'] as const) {
+      if (value[field] !== undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [field],
+          message: `${field} is only allowed when auth is "bedrock".`,
+        });
+      }
+    }
+  }
+  if (
+    (value.auth === 'bedrock' || value.auth === 'host_subscription') &&
+    typeof value.api_key === 'string'
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['api_key'],
+      message: `api_key can only be provided when auth is "api_key" (null still clears a stored key).`,
+    });
+  }
+}
+
 export const ClaudeCliExecutorApiConfigSchema = z
   .object({
     type: z.literal('claude_cli'),
@@ -54,8 +119,16 @@ export const ClaudeCliExecutorApiConfigSchema = z
     // WRITE-ONLY: omitted → keep the stored key as-is; string → replace;
     // null → clear (run on the host subscription). Never echoed in responses.
     api_key: z.string().min(1).nullable().optional(),
+    // Feature 018 — auth mode (optional on the wire for legacy payloads;
+    // responses always carry the effective mode). Bedrock settings are
+    // config, not credentials: AWS credentials stay in ~/.aws on the worker.
+    auth: ClaudeCliAuthModeSchema.optional(),
+    aws_region: z.string().min(1).optional(),
+    aws_profile: z.string().min(1).optional(),
+    ca_bundle_path: z.string().min(1).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine(refineClaudeCliAuth);
 
 /**
  * The typed-config authority (discriminated union). Consumed by the backend
@@ -73,14 +146,34 @@ export type ExecutorApiConfig = z.infer<typeof ExecutorApiConfigSchema>;
  * record is gone: a runner profile's secret surface is typed like the rest of
  * its config.
  */
+const MockCreateBranch = MockExecutorConfigSchema.extend({ name: z.string().min(1) });
+const ClaudeCliCreateBranch = ClaudeCliExecutorApiConfigSchema.extend({ name: z.string().min(1) });
+
 export const ExecutorCreateRequestSchema = z.discriminatedUnion('type', [
-  MockExecutorConfigSchema.extend({ name: z.string().min(1) }),
-  ClaudeCliExecutorApiConfigSchema.extend({ name: z.string().min(1) }),
+  MockCreateBranch,
+  // Create-only (feature 018): explicit api_key mode has no stored key to
+  // fall back on, so the key must arrive in the same request. The update
+  // variant of this rule (provided-OR-stored) lives in the controller.
+  ClaudeCliCreateBranch.superRefine((value, ctx) => {
+    if (value.auth === 'api_key' && typeof value.api_key !== 'string') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['api_key'],
+        message: 'auth "api_key" requires an api_key on create.',
+      });
+    }
+  }),
 ]);
 export type ExecutorCreateRequest = z.infer<typeof ExecutorCreateRequestSchema>;
 
-/** PUT /api/executors/:executorId — full update (same body shape). */
-export const ExecutorUpdateRequestSchema = ExecutorCreateRequestSchema;
+/**
+ * PUT /api/executors/:executorId — full update (same body shape, minus the
+ * create-only api_key rule: an omitted key keeps the stored blob).
+ */
+export const ExecutorUpdateRequestSchema = z.discriminatedUnion('type', [
+  MockCreateBranch,
+  ClaudeCliCreateBranch,
+]);
 export type ExecutorUpdateRequest = z.infer<typeof ExecutorUpdateRequestSchema>;
 
 /**

@@ -3,7 +3,7 @@ import { http, HttpResponse } from 'msw';
 import { ElMessage } from 'element-plus';
 import { server } from './server';
 import { mountWithProviders, flush } from './mount';
-import { sampleExecutors, sampleExecutorWithKey } from './handlers';
+import { sampleExecutors, sampleExecutorWithKey, sampleExecutorBedrock } from './handlers';
 import ExecutorForm from '../src/components/ExecutorForm/ExecutorForm.vue';
 import SettingsExecutors from '../src/views/settings/SettingsExecutors.vue';
 
@@ -22,7 +22,7 @@ function mountForm(executor: (typeof sampleExecutors)[number] | null = null) {
 }
 
 describe('ExecutorForm — typed per-type fields', () => {
-  it('claude_cli shows Model + CLI fields + API key; NO repository field', async () => {
+  it('claude_cli shows Model + CLI fields + auth selector; NO repository field', async () => {
     const wrapper = mountForm();
     await flush();
 
@@ -31,7 +31,11 @@ describe('ExecutorForm — typed per-type fields', () => {
     expect(wrapper.find('[data-test="executor-max-turns"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="executor-max-parallel"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="executor-callback"]').exists()).toBe(true);
-    expect(wrapper.find('[data-test="executor-api-key"]').exists()).toBe(true);
+    // Feature 018: auth-mode selector; per-mode fields are gated — a fresh
+    // profile defaults to host_subscription, so no key/bedrock fields yet.
+    expect(wrapper.find('[data-test="executor-auth"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="executor-api-key"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="executor-aws-region"]').exists()).toBe(false);
     // repository moved to the agent (behavior.repository) — never rendered here.
     expect(wrapper.find('[data-test="executor-repository"]').exists()).toBe(false);
   });
@@ -93,7 +97,7 @@ describe('ExecutorForm — typed per-type fields', () => {
     expect(posted).not.toHaveProperty('api_key');
   });
 
-  it('an entered API key is POSTed as api_key (password input, "host subscription" placeholder)', async () => {
+  it('auth "api_key" reveals the key input; an entered key is POSTed as api_key', async () => {
     let posted: Record<string, unknown> | undefined;
     server.use(
       http.post('/api/executors', async ({ request }) => {
@@ -104,9 +108,15 @@ describe('ExecutorForm — typed per-type fields', () => {
 
     const wrapper = mountForm();
     await flush();
+    await wrapper
+      .findAllComponents({ name: 'ElSelect' })
+      .find((s) => s.attributes('data-test') === 'executor-auth')!
+      .setValue('api_key');
+    await flush();
+
     const keyInput = wrapper.find('[data-test="executor-api-key"]');
     expect(keyInput.attributes('type')).toBe('password');
-    expect(keyInput.attributes('placeholder')).toBe('host subscription');
+    expect(keyInput.attributes('placeholder')).toBe('sk-ant-...');
 
     await wrapper.find('[data-test="executor-name"]').setValue('keyed');
     await keyInput.setValue('sk-ant-test-123');
@@ -114,6 +124,7 @@ describe('ExecutorForm — typed per-type fields', () => {
     await flush();
 
     expect(posted!.api_key).toBe('sk-ant-test-123');
+    expect(posted!.auth).toBe('api_key');
   });
 
   it('has_api_key → "configured" + Replace/Clear actions; Replace reveals the input and PUTs the new key', async () => {
@@ -214,6 +225,164 @@ describe('ExecutorForm — typed per-type fields', () => {
     await flush();
 
     expect(wrapper.find('[data-test="executor-error"]').text()).toContain('already exists');
+  });
+});
+
+/**
+ * Feature 018 (T016, US4) — auth-mode selector, per-mode conditional fields,
+ * bedrock model hint, and the request bodies the contract pins
+ * (specs/018-bedrock-auth-mode/contracts/executor-auth.md).
+ */
+describe('ExecutorForm — auth modes (feature 018)', () => {
+  const setAuth = async (wrapper: ReturnType<typeof mountForm>, mode: string) => {
+    await wrapper
+      .findAllComponents({ name: 'ElSelect' })
+      .find((s) => s.attributes('data-test') === 'executor-auth')!
+      .setValue(mode);
+    await flush();
+  };
+
+  it('selector defaults to the response effective auth: api_key for a keyed profile, bedrock for bedrock', async () => {
+    const keyed = mountForm(sampleExecutorWithKey);
+    await flush();
+    expect(
+      keyed
+        .findAllComponents({ name: 'ElSelect' })
+        .find((s) => s.attributes('data-test') === 'executor-auth')!
+        .props('modelValue'),
+    ).toBe('api_key');
+    expect(keyed.find('[data-test="api-key-configured"]').exists()).toBe(true);
+
+    const bedrock = mountForm(sampleExecutorBedrock);
+    await flush();
+    expect(
+      bedrock
+        .findAllComponents({ name: 'ElSelect' })
+        .find((s) => s.attributes('data-test') === 'executor-auth')!
+        .props('modelValue'),
+    ).toBe('bedrock');
+  });
+
+  it('bedrock mode shows region/profile/CA-bundle fields and the full-model-id hint; hides the key block', async () => {
+    const wrapper = mountForm();
+    await flush();
+    await setAuth(wrapper, 'bedrock');
+
+    expect(wrapper.find('[data-test="executor-aws-region"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="executor-aws-profile"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="executor-ca-bundle"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="executor-api-key"]').exists()).toBe(false);
+    const hint = wrapper.find('[data-test="bedrock-model-hint"]');
+    expect(hint.exists()).toBe(true);
+    expect(hint.text()).toContain('eu.anthropic.claude-opus-4-8');
+
+    await setAuth(wrapper, 'host_subscription');
+    expect(wrapper.find('[data-test="executor-aws-region"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="bedrock-model-hint"]').exists()).toBe(false);
+  });
+
+  it('bedrock create POSTs auth + region (+ optional fields only when filled), never api_key', async () => {
+    let posted: Record<string, unknown> | undefined;
+    server.use(
+      http.post('/api/executors', async ({ request }) => {
+        posted = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(sampleExecutorBedrock, { status: 201 });
+      }),
+    );
+
+    const wrapper = mountForm();
+    await flush();
+    await setAuth(wrapper, 'bedrock');
+    await wrapper.find('[data-test="executor-name"]').setValue('corp');
+    await wrapper.find('[data-test="executor-aws-region"]').setValue('eu-west-1');
+    await (wrapper.vm as unknown as { submit: () => Promise<void> }).submit();
+    await flush();
+
+    expect(posted).toMatchObject({ auth: 'bedrock', aws_region: 'eu-west-1' });
+    expect(posted).not.toHaveProperty('aws_profile');
+    expect(posted).not.toHaveProperty('ca_bundle_path');
+    expect(posted).not.toHaveProperty('api_key');
+  });
+
+  it('editing a bedrock profile prefills its fields and PUTs them back', async () => {
+    let put: Record<string, unknown> | undefined;
+    server.use(
+      http.put('/api/executors/:executorId', async ({ request }) => {
+        put = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(sampleExecutorBedrock);
+      }),
+    );
+
+    const wrapper = mountForm(sampleExecutorBedrock);
+    await flush();
+    expect(
+      (wrapper.find('[data-test="executor-aws-region"]').element as HTMLInputElement).value,
+    ).toBe('eu-west-1');
+    await (wrapper.vm as unknown as { submit: () => Promise<void> }).submit();
+    await flush();
+
+    expect(put).toMatchObject({
+      auth: 'bedrock',
+      aws_region: 'eu-west-1',
+      aws_profile: 'corp-dev',
+      ca_bundle_path: '/etc/ssl/corp/ca-bundle.pem',
+    });
+  });
+
+  it('switching a keyed profile to bedrock sends NO api_key (stored key stays inert, FR-009)', async () => {
+    let put: Record<string, unknown> | undefined;
+    server.use(
+      http.put('/api/executors/:executorId', async ({ request }) => {
+        put = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ ...sampleExecutorWithKey, config: { ...sampleExecutorWithKey.config, auth: 'bedrock' } });
+      }),
+    );
+
+    const wrapper = mountForm(sampleExecutorWithKey);
+    await flush();
+    await setAuth(wrapper, 'bedrock');
+    await wrapper.find('[data-test="executor-aws-region"]').setValue('us-east-1');
+    await (wrapper.vm as unknown as { submit: () => Promise<void> }).submit();
+    await flush();
+
+    expect(put!.auth).toBe('bedrock');
+    expect(put).not.toHaveProperty('api_key');
+  });
+
+  it('a 422 issue at aws_region renders under the region field', async () => {
+    server.use(
+      http.post('/api/executors', () =>
+        HttpResponse.json(
+          {
+            error: {
+              code: 'validation_failed',
+              message: 'Executor could not be saved.',
+              issues: [
+                { path: ['aws_region'], code: 'custom', message: 'aws_region is required when auth is "bedrock".', level: 'error' },
+              ],
+            },
+          },
+          { status: 422 },
+        ),
+      ),
+    );
+
+    const wrapper = mountForm();
+    await flush();
+    await setAuth(wrapper, 'bedrock');
+    await wrapper.find('[data-test="executor-name"]').setValue('corp');
+    await (wrapper.vm as unknown as { submit: () => Promise<void> }).submit();
+    await flush();
+
+    // jsdom + ElFormItem never renders the error node (verified empirically —
+    // even a static `error` prop yields no .el-form-item__error), so the
+    // assertion pins the wiring seam: the 422 issue landed on the REGION
+    // form-item's error prop, not on the general alert.
+    const regionItem = wrapper
+      .findAllComponents({ name: 'ElFormItem' })
+      .find((i) => i.find('[data-test="executor-aws-region"]').exists());
+    expect(regionItem!.props('error')).toContain('aws_region is required');
+    expect(wrapper.find('[data-test="executor-error"]').exists()).toBe(false);
   });
 });
 
