@@ -148,6 +148,12 @@ function buildRequest(): AgentWriteRequest {
     success: statusById.value.get(form.status_success),
     failure: statusById.value.get(form.status_failure),
   };
+  // feature 010 (FR-019): the orchestrator is never poll-triggered, so its
+  // trigger/status fields carry no board mapping and the form leaves them
+  // empty. The write schema still requires non-empty strings (min(1)); the
+  // update handler discards these fields for an orchestrator, so send inert
+  // placeholders to satisfy validation rather than an empty string that 422s.
+  const orchestratorStatusStub = isOrchestrator.value ? 'n/a' : '';
   return {
     workspace_id: props.workspaceId,
     name: form.name,
@@ -157,11 +163,11 @@ function buildRequest(): AgentWriteRequest {
     description: form.description || null,
     instruction: form.instruction,
     executor_id: form.executor_id,
-    trigger_status: form.trigger_status,
+    trigger_status: form.trigger_status || orchestratorStatusStub,
     trigger_jql: form.trigger_jql || null,
     status_running: form.status_running || null,
-    status_success: form.status_success,
-    status_failure: form.status_failure,
+    status_success: form.status_success || orchestratorStatusStub,
+    status_failure: form.status_failure || orchestratorStatusStub,
     status_ids,
     timeout_minutes: form.timeout_minutes,
     max_budget_usd: form.max_budget_usd,

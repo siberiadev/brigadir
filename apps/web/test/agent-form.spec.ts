@@ -268,6 +268,32 @@ describe('AgentForm — orchestrator variant (feature 010)', () => {
     expect(wrapper.find('[data-test="instruction-input"]').exists()).toBe(true);
   });
 
+  it('saves without a board mapping — empty trigger/status fields go out as non-empty stubs (schema min(1))', async () => {
+    // The orchestrator has no board-mapped statuses (trigger_status: null), so
+    // the form fields are empty. The write schema requires min(1); the update
+    // handler discards these fields for an orchestrator, so the form sends inert
+    // stubs rather than an empty string that would 422 before that branch runs.
+    let body: Record<string, unknown> | undefined;
+    server.use(
+      http.put('/api/agents/ag-orch', async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(orchestrator, { status: 200 });
+      }),
+    );
+
+    const wrapper = mountWithProviders(AgentForm, {
+      props: { workspaceId: 'ws-1', agent: orchestrator, repositories: [] },
+    });
+    await flush();
+    await (wrapper.vm as unknown as { submit: () => Promise<void> }).submit();
+    await flush();
+
+    expect(body).toBeDefined();
+    expect((body!.trigger_status as string).length).toBeGreaterThan(0);
+    expect((body!.status_success as string).length).toBeGreaterThan(0);
+    expect((body!.status_failure as string).length).toBeGreaterThan(0);
+  });
+
   it('a worker agent still shows the full status mapping (regression)', async () => {
     const wrapper = mountWithProviders(AgentForm, {
       props: { workspaceId: 'ws-1', agent: sampleAgent, repositories: [] },
