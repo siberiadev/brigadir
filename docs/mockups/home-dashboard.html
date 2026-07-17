@@ -1,0 +1,594 @@
+<title>BRIGADIR — /home dashboard mock</title>
+<style>
+  /* ---- BRIGADIR brand tokens (mirrors apps/web/src/styles/_theme.scss) ---- */
+  :root {
+    --bg-page: #f2f3f5;
+    --bg-card: #ffffff;
+    --border: #e4e7ed;
+    --border-strong: #dcdfe6;
+    --text: #303133;
+    --text-2: #606266;
+    --text-3: #909399;
+
+    --primary: #f59e0b;      --primary-rgb: 245, 158, 11;
+    --primary-l9: #fef5e7;   --primary-l8: #fdecce;   --primary-ink: #c47e09;
+    --success: #16a34a;      --success-l9: #e8f6ed;   --success-l8: #d0eddb;  --success-ink: #16a34a;
+    --warning: #ea580c;      --warning-l9: #fdeee7;   --warning-l8: #fbdece;  --warning-ink: #ea580c;
+    --danger: #dc2626;       --danger-l9: #fce9e9;    --danger-l8: #f8d4d4;   --danger-ink: #dc2626;
+    --info: #64748b;         --info-l9: #f0f1f3;      --info-l8: #e0e3e8;     --info-ink: #64748b;
+
+    --shadow: 0 1px 2px rgba(16, 16, 16, 0.04), 0 1px 6px rgba(16, 16, 16, 0.05);
+    --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg-page: #0a0a0a;
+      --bg-card: #141414;
+      --border: #363637;
+      --border-strong: #4c4d4f;
+      --text: #e5eaf3;
+      --text-2: #cfd3dc;
+      --text-3: #a3a6ad;
+
+      --primary-l9: #2a2213;  --primary-l8: #413012;  --primary-ink: #f7b13c;
+      --success-l9: #142219;  --success-l8: #14311f;  --success-ink: #45b56e;
+      --warning-l9: #291b13;  --warning-l8: #3f2212;  --warning-ink: #ee793d;
+      --danger-l9:  #281616;  --danger-l8:  #3c1818;  --danger-ink:  #e35151;
+      --info-l9:    #1c1e20;  --info-l8:    #24272c;  --info-ink:    #8390a2;
+
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    }
+  }
+  /* Viewer's explicit toggle wins over the OS preference, both directions. */
+  :root[data-theme="dark"] {
+    --bg-page: #0a0a0a; --bg-card: #141414; --border: #363637; --border-strong: #4c4d4f;
+    --text: #e5eaf3; --text-2: #cfd3dc; --text-3: #a3a6ad;
+    --primary-l9: #2a2213; --primary-l8: #413012; --primary-ink: #f7b13c;
+    --success-l9: #142219; --success-l8: #14311f; --success-ink: #45b56e;
+    --warning-l9: #291b13; --warning-l8: #3f2212; --warning-ink: #ee793d;
+    --danger-l9: #281616; --danger-l8: #3c1818; --danger-ink: #e35151;
+    --info-l9: #1c1e20; --info-l8: #24272c; --info-ink: #8390a2;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  }
+  :root[data-theme="light"] {
+    --bg-page: #f2f3f5; --bg-card: #ffffff; --border: #e4e7ed; --border-strong: #dcdfe6;
+    --text: #303133; --text-2: #606266; --text-3: #909399;
+    --primary-l9: #fef5e7; --primary-l8: #fdecce; --primary-ink: #c47e09;
+    --success-l9: #e8f6ed; --success-l8: #d0eddb; --success-ink: #16a34a;
+    --warning-l9: #fdeee7; --warning-l8: #fbdece; --warning-ink: #ea580c;
+    --danger-l9: #fce9e9; --danger-l8: #f8d4d4; --danger-ink: #dc2626;
+    --info-l9: #f0f1f3; --info-l8: #e0e3e8; --info-ink: #64748b;
+    --shadow: 0 1px 2px rgba(16, 16, 16, 0.04), 0 1px 6px rgba(16, 16, 16, 0.05);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg-page);
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  a { color: inherit; }
+
+  /* ---------------- App shell ---------------- */
+  .app { display: flex; min-height: 100vh; }
+
+  .sidebar {
+    width: 216px;
+    flex: 0 0 216px;
+    border-right: 1px solid var(--border);
+    background: var(--bg-card);
+    display: flex;
+    flex-direction: column;
+    padding: 16px 10px;
+    gap: 4px;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 10px;
+    padding: 4px 8px 16px;
+  }
+  .brand-mark {
+    width: 30px; height: 30px; border-radius: 7px;
+    background: var(--primary);
+    color: #1c1917;
+    font-family: var(--font-mono); font-weight: 700; font-size: 13px;
+    display: grid; place-items: center;
+    flex: none;
+  }
+  .brand-name { font-family: var(--font-mono); font-weight: 700; letter-spacing: 0.04em; font-size: 14px; }
+
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 10px; border-radius: 8px;
+    color: var(--text-2); text-decoration: none;
+    font-weight: 500;
+  }
+  .nav-item svg { width: 17px; height: 17px; flex: none; }
+  .nav-item:hover { background: var(--info-l9); color: var(--text); }
+  .nav-item.active { background: var(--primary-l9); color: var(--primary-ink); }
+  .nav-badge {
+    margin-left: auto;
+    background: var(--primary);
+    color: #1c1917;
+    font-family: var(--font-mono); font-size: 11px; font-weight: 700;
+    border-radius: 99px; padding: 0 7px; line-height: 18px;
+  }
+  .sidebar-foot {
+    margin-top: auto; padding: 10px 10px 2px;
+    font-size: 11px; color: var(--text-3);
+    border-top: 1px solid var(--border);
+  }
+
+  main {
+    flex: 1; min-width: 0;
+    padding: 24px 28px 48px;
+    max-width: 1240px;
+  }
+
+  .page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+  .page-head h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+  .mock-chip {
+    font-size: 11px; color: var(--text-3);
+    border: 1px dashed var(--border-strong); border-radius: 99px;
+    padding: 2px 10px;
+  }
+  .head-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .theme-toggle {
+    font: inherit; font-size: 12px; color: var(--text-2);
+    background: var(--bg-card); border: 1px solid var(--border-strong);
+    border-radius: 8px; padding: 5px 12px; cursor: pointer;
+  }
+  .theme-toggle:hover { color: var(--primary-ink); border-color: var(--primary-l8); }
+  .theme-toggle:focus-visible, .seg button:focus-visible, .btn:focus-visible, .link:focus-visible {
+    outline: 2px solid var(--primary); outline-offset: 2px;
+  }
+
+  /* ---------------- Cards ---------------- */
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+  }
+  .card-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 13px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .card-head h2 { font-size: 14px; font-weight: 600; margin: 0; }
+  .card-head .count-chip {
+    font-family: var(--font-mono); font-size: 12px; font-weight: 700;
+    padding: 0 8px; line-height: 20px; border-radius: 99px;
+  }
+  .link {
+    margin-left: auto; font-size: 12.5px; text-decoration: none;
+    color: var(--primary-ink); font-weight: 500; white-space: nowrap;
+  }
+  .link:hover { text-decoration: underline; }
+
+  /* ---------------- Stat tiles ---------------- */
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+    margin-bottom: 16px;
+  }
+  .tile { padding: 14px 16px 12px; }
+  .tile .label {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--text-3); display: flex; align-items: center; gap: 7px;
+  }
+  .tile .value {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    font-size: 30px; font-weight: 700; line-height: 1.15; margin-top: 6px;
+  }
+  .tile .sub { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+  .tile.attention { border-color: var(--primary-l8); background: linear-gradient(180deg, var(--primary-l9), var(--bg-card) 85%); }
+  .tile.attention .value { color: var(--primary-ink); }
+  .tile .value.is-danger { color: var(--danger-ink); }
+
+  /* ---------------- Columns ---------------- */
+  .cols {
+    display: grid;
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    gap: 16px;
+    align-items: start;
+    margin-bottom: 24px;
+  }
+  .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+  /* ---------------- Row lists ---------------- */
+  .rows { list-style: none; margin: 0; padding: 0; }
+  .rows li {
+    display: flex; align-items: center; gap: 12px;
+    padding: 11px 16px;
+  }
+  .rows li + li { border-top: 1px solid var(--border); }
+  .rows .body { min-width: 0; flex: 1; }
+  .rows .title-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .ticket {
+    font-family: var(--font-mono); font-size: 12.5px; font-weight: 700;
+    color: var(--primary-ink); text-decoration: none; white-space: nowrap;
+  }
+  .ticket:hover { text-decoration: underline; }
+  .summary { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta { font-size: 12px; color: var(--text-3); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta .sep { margin: 0 5px; opacity: 0.6; }
+  .wait { color: var(--warning-ink); font-weight: 600; }
+
+  .btn {
+    font: inherit; font-size: 12.5px; font-weight: 600;
+    border-radius: 8px; padding: 5px 13px; cursor: pointer; white-space: nowrap;
+    border: 1px solid var(--primary-l8);
+    background: var(--primary-l9); color: var(--primary-ink);
+  }
+  .btn:hover { background: var(--primary-l8); }
+
+  .ticker, .num {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    font-size: 13px; color: var(--text-2); white-space: nowrap;
+  }
+
+  /* ---------------- Tags (el-tag lookalike) ---------------- */
+  .tag {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11.5px; font-weight: 500; line-height: 1;
+    padding: 4px 8px; border-radius: 5px;
+    border: 1px solid; white-space: nowrap; flex: none;
+  }
+  .tag-primary { background: var(--primary-l9); border-color: var(--primary-l8); color: var(--primary-ink); }
+  .tag-success { background: var(--success-l9); border-color: var(--success-l8); color: var(--success-ink); }
+  .tag-warning { background: var(--warning-l9); border-color: var(--warning-l8); color: var(--warning-ink); }
+  .tag-danger  { background: var(--danger-l9);  border-color: var(--danger-l8);  color: var(--danger-ink); }
+  .tag-info    { background: var(--info-l9);    border-color: var(--info-l8);    color: var(--info-ink); }
+
+  .pulse-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--primary);
+    animation: pulse-ring 1.4s cubic-bezier(0.2, 0, 0.4, 1) infinite;
+  }
+  @keyframes pulse-ring {
+    0%   { box-shadow: 0 0 0 0 rgba(var(--primary-rgb), 0.5); }
+    100% { box-shadow: 0 0 0 5px rgba(var(--primary-rgb), 0); }
+  }
+  @media (prefers-reduced-motion: reduce) { .pulse-dot { animation: none; } }
+
+  /* ---------------- Spend card ---------------- */
+  .seg { display: flex; gap: 0; border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; margin-left: auto; }
+  .seg button {
+    font: inherit; font-size: 12px; font-weight: 600;
+    background: var(--bg-card); color: var(--text-3);
+    border: none; padding: 4px 11px; cursor: pointer;
+  }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button.active { background: var(--primary-l9); color: var(--primary-ink); }
+  .spend-body { padding: 16px; }
+  .spend-total {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    font-size: 34px; font-weight: 700; line-height: 1.1;
+  }
+  .spend-meta { font-size: 12.5px; color: var(--text-3); margin-top: 4px; }
+
+  /* ---------------- Workspaces grid ---------------- */
+  .section-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 12px; }
+  .section-head h2 { font-size: 15px; margin: 0; }
+  .ws-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+  .ws-card { padding: 15px 16px 13px; display: flex; flex-direction: column; gap: 9px; text-decoration: none; }
+  .ws-card:hover { border-color: var(--primary-l8); }
+  .ws-top { display: flex; align-items: center; gap: 9px; min-width: 0; }
+  .ws-name { font-weight: 600; font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ws-board { font-family: var(--font-mono); font-size: 12px; color: var(--text-3); }
+  .ws-meta { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-2); flex-wrap: wrap; }
+  .ws-alert { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--danger-ink); }
+  .ws-alert .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); flex: none; }
+  .ws-ok { font-size: 12px; color: var(--text-3); }
+  .paused { opacity: 0.75; }
+
+  /* ---------------- Responsive ---------------- */
+  @media (max-width: 1080px) {
+    .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cols { grid-template-columns: 1fr; }
+    .ws-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 760px) {
+    .app { flex-direction: column; }
+    .sidebar { width: 100%; flex: none; flex-direction: row; align-items: center; padding: 10px 12px; overflow-x: auto; }
+    .brand { padding: 0 8px 0 0; }
+    .sidebar-foot { display: none; }
+    main { padding: 18px 14px 40px; }
+    .ws-grid { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div class="app">
+  <!-- ============ Sidebar (AppSidebar.vue) ============ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark">&gt;_</span>
+      <span class="brand-name">BRIGADIR</span>
+    </div>
+    <a class="nav-item active" href="#" aria-current="page">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>
+      Home
+    </a>
+    <a class="nav-item" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+      Workspaces
+    </a>
+    <a class="nav-item" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+      Human queue
+      <span class="nav-badge">3</span>
+    </a>
+    <a class="nav-item" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+      Settings
+    </a>
+    <div class="sidebar-foot">internal tool · non-commercial</div>
+  </aside>
+
+  <!-- ============ /home ============ -->
+  <main>
+    <div class="page-head">
+      <h1>Home</h1>
+      <span class="mock-chip">static mock · fake data</span>
+      <div class="head-right">
+        <button class="theme-toggle" id="themeToggle" type="button">Toggle theme</button>
+      </div>
+    </div>
+
+    <!-- Stat tiles — GET /api/home/summary -->
+    <section class="tiles" aria-label="Summary">
+      <div class="card tile">
+        <div class="label"><span class="pulse-dot" aria-hidden="true"></span> Running</div>
+        <div class="value">3</div>
+        <div class="sub">across 2 workspaces</div>
+      </div>
+      <div class="card tile">
+        <div class="label">Queued</div>
+        <div class="value">2</div>
+        <div class="sub">next: PAY-152</div>
+      </div>
+      <div class="card tile">
+        <div class="label">Failed · last 24h</div>
+        <div class="value is-danger">2</div>
+        <div class="sub">1 failed · 1 timed out</div>
+      </div>
+      <div class="card tile attention">
+        <div class="label">Awaiting human</div>
+        <div class="value">3</div>
+        <div class="sub">oldest waiting 3h 12m</div>
+      </div>
+    </section>
+
+    <div class="cols">
+      <!-- ===== Left column ===== -->
+      <div class="col">
+        <!-- Human queue hero -->
+        <section class="card" aria-label="Needs your decision">
+          <div class="card-head" style="background: var(--primary-l9); border-radius: 10px 10px 0 0;">
+            <h2>Needs your decision</h2>
+            <span class="count-chip" style="background: var(--primary); color: #1c1917;">3</span>
+            <a class="link" href="#">Open queue →</a>
+          </div>
+          <ul class="rows">
+            <li>
+              <div class="body">
+                <div class="title-line">
+                  <a class="ticket" href="#">PAY-142</a>
+                  <span class="summary">Approve implementation plan</span>
+                </div>
+                <div class="meta">Refund flow: double-charge guard<span class="sep">·</span>reviewer<span class="sep">·</span>Payments Core<span class="sep">·</span><span class="wait">waiting 42m</span></div>
+              </div>
+              <button class="btn" type="button">Review</button>
+            </li>
+            <li>
+              <div class="body">
+                <div class="title-line">
+                  <a class="ticket" href="#">CHK-88</a>
+                  <span class="summary">Breaking API change needs a decision</span>
+                </div>
+                <div class="meta">Migrate cart to server actions<span class="sep">·</span>implementer<span class="sep">·</span>Checkout Web<span class="sep">·</span><span class="wait">waiting 2h 10m</span></div>
+              </div>
+              <button class="btn" type="button">Review</button>
+            </li>
+            <li>
+              <div class="body">
+                <div class="title-line">
+                  <a class="ticket" href="#">PAY-137</a>
+                  <span class="summary">Pick merge-conflict resolution</span>
+                </div>
+                <div class="meta">Idempotency keys for webhooks<span class="sep">·</span>implementer<span class="sep">·</span>Payments Core<span class="sep">·</span><span class="wait">waiting 3h 12m</span></div>
+              </div>
+              <button class="btn" type="button">Review</button>
+            </li>
+          </ul>
+        </section>
+
+        <!-- Failed in last 24h -->
+        <section class="card" aria-label="Needs attention">
+          <div class="card-head">
+            <h2>Needs attention</h2>
+            <span class="count-chip" style="background: var(--danger-l9); color: var(--danger-ink); border: 1px solid var(--danger-l8);">2 in 24h</span>
+            <a class="link" href="#">All runs →</a>
+          </div>
+          <ul class="rows">
+            <li>
+              <span class="tag tag-danger">failed</span>
+              <div class="body">
+                <div class="title-line">
+                  <a class="ticket" href="#">PAY-148</a>
+                  <span class="summary">Split settlement report by region</span>
+                </div>
+                <div class="meta">implementer<span class="sep">·</span>Payments Core<span class="sep">·</span>attempt 2<span class="sep">·</span>lint gate failed</div>
+              </div>
+              <span class="num">1h ago</span>
+            </li>
+            <li>
+              <span class="tag tag-danger">timed_out</span>
+              <div class="body">
+                <div class="title-line">
+                  <a class="ticket" href="#">CHK-86</a>
+                  <span class="summary">Flaky e2e: checkout smoke suite</span>
+                </div>
+                <div class="meta">test-writer<span class="sep">·</span>Checkout Web<span class="sep">·</span>attempt 1<span class="sep">·</span>hit 45m limit</div>
+              </div>
+              <span class="num">5h ago</span>
+            </li>
+          </ul>
+        </section>
+      </div>
+
+      <!-- ===== Right column ===== -->
+      <div class="col">
+        <!-- Live runs -->
+        <section class="card" aria-label="Live runs">
+          <div class="card-head">
+            <h2>Live runs</h2>
+            <a class="link" href="#">All runs →</a>
+          </div>
+          <ul class="rows">
+            <li>
+              <span class="tag tag-primary"><span class="pulse-dot" aria-hidden="true"></span>running</span>
+              <div class="body">
+                <div class="title-line"><a class="ticket" href="#">PAY-151</a></div>
+                <div class="meta">implementer<span class="sep">·</span>Payments Core</div>
+              </div>
+              <span class="ticker js-ticker" data-elapsed="754">12:34</span>
+            </li>
+            <li>
+              <span class="tag tag-primary"><span class="pulse-dot" aria-hidden="true"></span>running</span>
+              <div class="body">
+                <div class="title-line"><a class="ticket" href="#">CHK-90</a></div>
+                <div class="meta">test-writer<span class="sep">·</span>Checkout Web</div>
+              </div>
+              <span class="ticker js-ticker" data-elapsed="192">03:12</span>
+            </li>
+            <li>
+              <span class="tag tag-primary"><span class="pulse-dot" aria-hidden="true"></span>running</span>
+              <div class="body">
+                <div class="title-line"><a class="ticket" href="#">PAY-149</a></div>
+                <div class="meta">reviewer<span class="sep">·</span>Payments Core</div>
+              </div>
+              <span class="ticker js-ticker" data-elapsed="2467">41:07</span>
+            </li>
+            <li>
+              <span class="tag tag-info">queued</span>
+              <div class="body">
+                <div class="title-line"><a class="ticket" href="#">PAY-152</a></div>
+                <div class="meta">implementer<span class="sep">·</span>Payments Core</div>
+              </div>
+              <span class="num">in queue 2m</span>
+            </li>
+            <li>
+              <span class="tag tag-info">queued</span>
+              <div class="body">
+                <div class="title-line"><a class="ticket" href="#">CHK-91</a></div>
+                <div class="meta">test-writer<span class="sep">·</span>Checkout Web</div>
+              </div>
+              <span class="num">in queue 8m</span>
+            </li>
+          </ul>
+        </section>
+
+        <!-- Spend -->
+        <section class="card" aria-label="Spend">
+          <div class="card-head">
+            <h2>Spend</h2>
+            <div class="seg" role="tablist" aria-label="Period">
+              <button type="button" class="active" data-period="24h" role="tab" aria-selected="true">24h</button>
+              <button type="button" data-period="7d" role="tab" aria-selected="false">7d</button>
+              <button type="button" data-period="30d" role="tab" aria-selected="false">30d</button>
+            </div>
+          </div>
+          <div class="spend-body">
+            <div class="spend-total" id="spendTotal">$18.42</div>
+            <div class="spend-meta" id="spendMeta">37 runs · avg $0.50 per run · all workspaces</div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- Workspaces -->
+    <section aria-label="Workspaces">
+      <div class="section-head">
+        <h2>Workspaces</h2>
+        <a class="link" href="#">All workspaces →</a>
+      </div>
+      <div class="ws-grid">
+        <a class="card ws-card" href="#">
+          <div class="ws-top">
+            <span class="ws-name">Payments Core</span>
+            <span class="ws-board">PAY</span>
+            <span class="tag tag-success" style="margin-left:auto;">active</span>
+          </div>
+          <div class="ws-meta">4 agents<span class="sep">·</span>last run <span class="tag tag-primary"><span class="pulse-dot" aria-hidden="true"></span>running</span> 2m&nbsp;ago</div>
+          <span class="ws-alert"><span class="dot" aria-hidden="true"></span>1 failed in last 24h</span>
+        </a>
+        <a class="card ws-card" href="#">
+          <div class="ws-top">
+            <span class="ws-name">Checkout Web</span>
+            <span class="ws-board">CHK</span>
+            <span class="tag tag-success" style="margin-left:auto;">active</span>
+          </div>
+          <div class="ws-meta">3 agents<span class="sep">·</span>last run <span class="tag tag-success">succeeded</span> 38m&nbsp;ago</div>
+          <span class="ws-alert"><span class="dot" aria-hidden="true"></span>1 timed out in last 24h</span>
+        </a>
+        <a class="card ws-card paused" href="#">
+          <div class="ws-top">
+            <span class="ws-name">Infra Tooling</span>
+            <span class="ws-board">INF</span>
+            <span class="tag tag-info" style="margin-left:auto;">paused</span>
+          </div>
+          <div class="ws-meta">2 agents<span class="sep">·</span>last run <span class="tag tag-success">succeeded</span> 3d&nbsp;ago</div>
+          <span class="ws-ok">no failures in last 24h</span>
+        </a>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+  // Theme toggle — stamps data-theme on <html>, overriding the OS preference.
+  const root = document.documentElement;
+  document.getElementById('themeToggle').addEventListener('click', () => {
+    const dark = root.dataset.theme
+      ? root.dataset.theme === 'dark'
+      : matchMedia('(prefers-color-scheme: dark)').matches;
+    root.dataset.theme = dark ? 'light' : 'dark';
+  });
+
+  // Live duration tickers on running rows (mirrors the started_at anchor
+  // pattern from Runs.vue — server value goes stale between polls, the
+  // client ticks it forward).
+  const fmt = (s) => {
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    const mm = String(m).padStart(2, '0'), ss = String(sec).padStart(2, '0');
+    return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+  };
+  const tickers = [...document.querySelectorAll('.js-ticker')].map((el) => ({
+    el, s: parseInt(el.dataset.elapsed, 10) || 0,
+  }));
+  setInterval(() => tickers.forEach((t) => { t.s += 1; t.el.textContent = fmt(t.s); }), 1000);
+
+  // Spend period switcher — the three figures GET /api/home/summary would return.
+  const SPEND = {
+    '24h': { total: '$18.42',  meta: '37 runs · avg $0.50 per run · all workspaces' },
+    '7d':  { total: '$96.10',  meta: '214 runs · avg $0.45 per run · all workspaces' },
+    '30d': { total: '$342.77', meta: '861 runs · avg $0.40 per run · all workspaces' },
+  };
+  document.querySelectorAll('.seg button').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.seg button').forEach((b) => {
+        b.classList.toggle('active', b === btn);
+        b.setAttribute('aria-selected', String(b === btn));
+      });
+      const d = SPEND[btn.dataset.period];
+      document.getElementById('spendTotal').textContent = d.total;
+      document.getElementById('spendMeta').textContent = d.meta;
+    });
+  });
+</script>

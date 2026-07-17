@@ -22,6 +22,7 @@ vi.mock('./process-group', () => ({
 import { prepare, cleanup } from './worktree';
 import { spawnGroup } from './process-group';
 import { ClaudeCliExecutor } from './claude-cli.executor';
+import { DEFAULT_REPO_RUN_ALLOWED_TOOLS } from './claude-cli.config';
 
 const prepareMock = prepare as unknown as ReturnType<typeof vi.fn>;
 const cleanupMock = cleanup as unknown as ReturnType<typeof vi.fn>;
@@ -375,6 +376,82 @@ describe('ClaudeCliExecutor.run (T082)', () => {
  * other source keeps the agent's own profile byte-identically. Fallback on a
  * disabled setup executor records a run-timeline warning.
  */
+describe('ClaudeCliExecutor — default allowed tools (ST3-768)', () => {
+  let worktreeDir: string;
+
+  beforeEach(async () => {
+    worktreeDir = await mkdtemp(join(tmpdir(), 'brigadir-tools-test-'));
+    prepareMock.mockReset().mockResolvedValue({
+      worktreeDir,
+      branch: 'feat/BRIG-1',
+      cacheDir: join(worktreeDir, '..', 'cache'),
+    });
+    cleanupMock.mockReset().mockResolvedValue(undefined);
+    spawnGroupMock.mockReset();
+  });
+
+  afterEach(async () => {
+    await rm(worktreeDir, { recursive: true, force: true });
+  });
+
+  /** Drive one full fake run and return the --allowed-tools argv value. */
+  async function driveForAllowedTools(
+    config: Record<string, unknown>,
+    behavior: Record<string, unknown>,
+  ): Promise<string> {
+    const db = fakeDb(config, behavior);
+    const fakeJira = { getFeatureContext: vi.fn().mockResolvedValue({ linked: [] }) };
+    const executor = new ClaudeCliExecutor(db as never, agentsConfig, fakeJira as never);
+
+    const group = makeGroup();
+    spawnGroupMock.mockReturnValue(group);
+    const runPromise = executor.run(makeCtx(), new AbortController().signal);
+    await waitForSpawn(spawnGroupMock);
+    for (const line of readFixtureLines('stream-success')) group.child.stdout.write(line + '\n');
+    await flush();
+    group.child.emit('close', 0, null);
+    await runPromise;
+
+    const argv = spawnGroupMock.mock.calls[0][1] as string[];
+    const idx = argv.indexOf('--allowed-tools');
+    expect(idx).toBeGreaterThan(-1);
+    return argv[idx + 1];
+  }
+
+  const noToolsConfig = {
+    cliPath: 'claude',
+    model: 'claude-sonnet-5',
+    keepFailedWorktrees: false,
+    killGraceMs: 50,
+    cancelPollMs: 50,
+  };
+
+  it('a repo-mounted run with no configured tools gets the platform default toolset', async () => {
+    const tools = await driveForAllowedTools(noToolsConfig, {});
+    expect(tools).toBe(DEFAULT_REPO_RUN_ALLOWED_TOOLS.join(','));
+    // The write/git capability the incident was about must actually be there.
+    expect(tools).toContain('Write');
+    expect(tools).toContain('Edit');
+    expect(tools).toContain('Bash');
+  });
+
+  it('an explicit agent behavior.allowed_tools wins over the platform default', async () => {
+    const tools = await driveForAllowedTools(noToolsConfig, { allowed_tools: ['Read', 'Grep'] });
+    expect(tools).toBe('Read,Grep');
+  });
+
+  it('an explicit executor profile allowedTools wins over the platform default', async () => {
+    const tools = await driveForAllowedTools({ ...noToolsConfig, allowedTools: ['Read'] }, {});
+    expect(tools).toBe('Read');
+  });
+
+  it('a no-repo (triage) run keeps the empty allowlist — nothing to mutate', async () => {
+    const tools = await driveForAllowedTools(noToolsConfig, { workspace_mode: 'none' });
+    expect(tools).toBe('');
+    expect(prepareMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('ClaudeCliExecutor — workspace-setup environment (feature 015)', () => {
   const triageProfileConfig = {
     cliPath: 'claude',
@@ -521,6 +598,11 @@ describe('ClaudeCliExecutor — workspace-setup environment (feature 015)', () =
     // The setup profile's config won, not the agent's cheap triage profile.
     expect(argv.join(' ')).toContain('--model claude-sonnet-5');
     expect(argv.join(' ')).toContain('--max-turns 60');
+    // ST3-768: repo-mounted setup run with no configured tools → platform
+    // default toolset (the recon protocol clones repos — it needs git/Bash).
+    expect(argv[argv.indexOf('--allowed-tools') + 1]).toBe(
+      DEFAULT_REPO_RUN_ALLOWED_TOOLS.join(','),
+    );
     // Ticketless worktree: branch identity setup/<first 8 chars of run id>.
     expect(prepareMock).toHaveBeenCalledTimes(1);
     const [repoArg, runIdArg, ticketKeyArg, prefixArg] = prepareMock.mock.calls[0];
@@ -574,10 +656,13 @@ describe('ClaudeCliExecutor — workspace-setup environment (feature 015)', () =
     // No yaml fallback either (agentsConfig null).
     const executor = makeSetupExecutor(db, null);
 
-    const { result } = await drive(executor, makeCtx({ runId: 'run-norepo-1', ticket: null }));
+    const { result, argv } = await drive(executor, makeCtx({ runId: 'run-norepo-1', ticket: null }));
 
     expect(result.exitStatus).toBe('completed');
     expect(prepareMock).not.toHaveBeenCalled(); // scratch dir, no worktree
+    // ST3-768: the default toolset is applied AFTER the FR-017 degrade — a
+    // setup run without a repository stays as locked-down as a triage run.
+    expect(argv[argv.indexOf('--allowed-tools') + 1]).toBe('');
   });
 
   it('a triage run is byte-identical to before: agent profile, no repository (SC-004/FR-016)', async () => {

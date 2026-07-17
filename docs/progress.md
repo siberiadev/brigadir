@@ -1109,7 +1109,54 @@ tree (same environment issue recorded in iteration 19), i.e. pre-existing and
 unrelated. Quickstart Scenario 3 (live-model repo recon quality, SC-003)
 remains a manual check by design.
 
-## Iteration 22 — UI polish: role/executor columns + human-queue newest-first (feature 016, 2026-07-17)
+## Iteration 22 — Default toolset for repo-mounted runs (ST3-768, 2026-07-17)
+
+Live incident (ST3 SPR31): a generated worker ("Fogg") could not produce the
+ST3-768 spec branch — every `Write`/`Edit`/git-write call was auto-denied, the
+run parked on `request_human`, and even after the human answered "enable
+write + git permissions and resume" the rework run failed on byte-for-byte
+the same denials. Root cause chain: `claude_cli` runs always spawn with
+`--permission-mode dontAsk` (allowlist-only, by design), the allowlist
+resolves `executors.config.allowedTools` → `agents.behavior.allowed_tools` →
+**empty**, generated teams are inserted with `behavior: {}`
+(setup-apply), and the seeded `claude` profile declares no `allowedTools` —
+so every generated worker ran with just the 6 `mcp__brigadir__*` callback
+tools. The "resume" answer could not help by construction: permissions are
+argv, fixed at spawn; the human answer only rides the handoff prompt text,
+and brigadir's rework task falsely promised "permissions are now enabled".
+
+Decision: **the platform default, not brigadir, decides tools.** Runtime
+permission granting is impossible (argv) and undesirable (LLM as permission
+authority); per-agent narrowing stays an OPERATOR override via the existing
+`executors.config.allowedTools` / `agents.behavior.allowed_tools` fields.
+
+- `DEFAULT_REPO_RUN_ALLOWED_TOOLS` (claude-cli.config.ts): full coding
+  toolset (Read/Glob/Grep, Write/Edit/MultiEdit/NotebookEdit,
+  TodoWrite/Task/Skill, unrestricted Bash, WebFetch/WebSearch). Guardrails
+  are the per-run worktree, timeout, and budget — not tool granularity.
+- Applied in `loadRunConfig` ONLY when the resolved allowlist is empty AND
+  the run is repo-mounted, AFTER repo resolution — a setup run degraded to
+  the scratch no-repo path (FR-017) and triage runs (workspace_mode 'none')
+  keep the empty allowlist. Explicit config on either level always wins.
+- `DEFAULT_ORCHESTRATOR_INSTRUCTION`: brigadir is told tool permissions are
+  fixed at spawn and it must never promise they "have been enabled" — a
+  permission-denial failure routes to `needs_human` naming the config field
+  a human must edit. (Copied-at-creation: existing workspaces need "Reset to
+  default" or a manual edit to pick this up.)
+
+Deliberately NOT done: seeding `allowedTools` on the `claude` profile (empty
+now means "track the platform default"); `allowed_tools` in the team-proposal
+schema (brigadir doesn't pick permissions, v1); relaxing the legacy YAML
+`agents-config` refinement that requires explicit tools (that path stays
+strict).
+
+Tests in the same iteration: executor spec — default applied on a repo-mounted
+run (argv `--allowed-tools`), agent/profile overrides win, triage stays empty,
+setup run gets the default (FR-013 test extended), FR-017 degrade stays empty.
+Gates green: typecheck, lint, unit 265 (39 files) + contracts/mcp-server/
+admin-mcp package suites.
+
+## Iteration 23 — UI polish: role/executor columns + human-queue newest-first (feature 016, 2026-07-17)
 
 Four small dashboard improvements, one behavioral change. **Решение
 пересмотрено**: OPEN-таб needs-human очереди теперь сортируется

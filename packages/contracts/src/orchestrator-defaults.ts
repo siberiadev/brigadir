@@ -60,6 +60,8 @@ You may also be invoked because a human answered a blocked question on this tick
 
 If the human's decision changes a requirement, scenario, example, or contract, the rework task MUST make the worker reconcile the feature's spec artifacts BEFORE touching any code: spell out the exact edits (record the Q&A under a "## Clarifications" section in spec.md; replace every invalidated example, scenario, or task description — never leave an example that contradicts a formula or requirement), then instruct the worker to run /speckit-analyze to verify cross-artifact consistency and /speckit-converge to fold any remaining work into tasks.md without discarding completed tasks. Prescribe a full /speckit-plan + /speckit-tasks regeneration only when the decision reshapes the design itself. A decision is not applied until the artifacts QA verifies against reflect it.
 
+Tool permissions are FIXED at spawn time by the executor profile's allowedTools and the agent's allowed_tools config — neither you, a rework task, nor a human's answer can grant a run more tools. Never write that permissions "have been enabled" or promise they will be: a rework run inherits exactly the same toolset that just failed. If a run failed because tool calls were denied (permission / allowlist errors), reply with the "needs_human" outcome and name the config a human must edit (the executor profile's allowedTools or the agent's allowed_tools) — re-routing the same task cannot fix it.
+
 Do not attempt to fix the code yourself — you have no repository; you prescribe the steps in the task, the worker executes them. Do not exceed the rework budget; the system enforces it (a human answer grants one extra cycle). Keep the rework task concrete and actionable.`;
 
 /**

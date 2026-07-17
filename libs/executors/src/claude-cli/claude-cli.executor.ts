@@ -17,7 +17,11 @@ import { JIRA_CLIENT, type JiraClient } from '@brigadir/jira';
 import { ReportSchema, type AgentsConfig } from '@brigadir/contracts';
 import type { AgentExecutor, ExecutorResult, RunContext } from '../agent-executor.interface';
 import { openExecutorSecrets } from '../executor-secrets';
-import { resolveClaudeCliConfig, type ClaudeCliExecutorConfigInput } from './claude-cli.config';
+import {
+  resolveClaudeCliConfig,
+  DEFAULT_REPO_RUN_ALLOWED_TOOLS,
+  type ClaudeCliExecutorConfigInput,
+} from './claude-cli.config';
 import { buildArgs } from './args';
 import { buildChildEnv } from './env-allowlist';
 import { ClaudeStreamParser, type TerminalResult } from './stream-parser';
@@ -548,6 +552,16 @@ export class ClaudeCliExecutor implements AgentExecutor {
       } else {
         repo = await this.resolveRepository(row.workspaceId, resolveRepositoryName(behavior));
       }
+    }
+
+    // ST3-768: an empty allowlist on a repo-mounted run is a config gap, never
+    // an intent — dontAsk auto-denies every mutating tool, so the run could
+    // read the repo but never write/commit/push (generated teams carry
+    // `behavior: {}` and the seeded `claude` profile declares no allowedTools).
+    // Applied AFTER repo resolution so a setup run degraded to the scratch
+    // no-repo path (FR-017) stays as locked-down as a triage run.
+    if (!noRepo && runtimeConfig.allowedTools.length === 0) {
+      runtimeConfig.allowedTools = [...DEFAULT_REPO_RUN_ALLOWED_TOOLS];
     }
 
     // Profile API key (write-only at the API; only the runtime opens it). A
