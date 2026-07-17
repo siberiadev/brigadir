@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Agent Role & Executor Visibility in Dashboard Lists
+# Specification Quality Checklist: UI polish — agent role & executor visibility, human queue ordering
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2026-07-17
@@ -31,6 +31,5 @@
 
 ## Notes
 
-- The one scope ambiguity in the original request (the fourth item, "human queue ordering", named in the title but never described) was resolved with the requester on 2026-07-17: dropped — the feature covers only the three column improvements. Recorded in the spec's Scope note and Assumptions.
-- FR-010 references established project UI conventions (theme variables, shared pagination, static icons) by intent rather than by naming specific technologies; the concrete conventions live in the project's CLAUDE.md / UI-conventions section and will bind at planning time.
-- Items marked incomplete require spec updates before `/speckit-clarify` or `/speckit-plan`
+- FR-008 references dashboard conventions (theme variables, shared pagination, static icons) by intent rather than by concrete file/component names; the concrete conventions are catalogued in CLAUDE.md and are a planning-phase concern.
+- All validation items pass; spec is ready for `/speckit-plan` (or `/speckit-clarify`, though no open questions remain).

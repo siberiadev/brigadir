@@ -8,9 +8,10 @@ import { BackendAppModule } from '../../apps/backend/src/app.module';
 import { startDatabase, startRedis, seedPipeline, TEST_DASHBOARD_TOKEN, DbHarness, RedisHarness } from './harness';
 
 /**
- * T030 (US1, FR-001..FR-006/SC-004): GET the queue open (oldest-first) & closed
- * (resolved_at desc); GET count; resolve (now GUARDED — T035) with `resume` on a
- * blocking task creates a new attempt and closes the task.
+ * T030 (US1, FR-001..FR-006/SC-004): GET the queue open & closed (both
+ * newest-first: created_at desc / resolved_at desc — feature 016 reversed the
+ * original oldest-first open ordering); GET count; resolve (now GUARDED — T035)
+ * with `resume` on a blocking task creates a new attempt and closes the task.
  */
 describe('human queue list/count/resolve (T030)', () => {
   let db: DbHarness;
@@ -75,15 +76,16 @@ describe('human queue list/count/resolve (T030)', () => {
     await redis?.stop();
   });
 
-  it('GET list open → oldest-first, with ticket + agent derived from the blocked run', async () => {
+  it('GET list open → newest-first, with ticket + agent derived from the blocked run', async () => {
     const body = await fetch(`${url}/api/human-tasks?status=open`, { headers: authHeaders }).then((r) => r.json());
-    expect(body.items.map((t: { title: string }) => t.title)).toEqual(['Which DB?', 'Newer']);
-    const first = body.items[0];
-    expect(first.blocking).toBe(true);
-    expect(first.ticket.jira_url).toContain('/browse/');
-    expect(first.agent?.name).toBe('implementer'); // via the parked run
-    expect(first.run_id).toBe(parkedRunId);
-    expect(first.status).toBeUndefined(); // open list omits closed-only fields
+    // Feature 016: most recently created on top (reverses the oldest-first decision).
+    expect(body.items.map((t: { title: string }) => t.title)).toEqual(['Newer', 'Which DB?']);
+    const blocker = body.items[1]; // 'Which DB?' — the task parked on a run
+    expect(blocker.blocking).toBe(true);
+    expect(blocker.ticket.jira_url).toContain('/browse/');
+    expect(blocker.agent?.name).toBe('implementer'); // via the parked run
+    expect(blocker.run_id).toBe(parkedRunId);
+    expect(blocker.status).toBeUndefined(); // open list omits closed-only fields
   });
 
   it('GET list closed → resolved_at desc, with resolution + resolver', async () => {
@@ -207,5 +209,80 @@ describe('human queue workspace filter', () => {
     const body = await fetch(`${url}/api/human-tasks?status=open`, { headers: authHeaders }).then((r) => r.json());
     expect(body.items.map((t: { title: string }) => t.title).sort()).toEqual(['A open', 'B open']);
     expect(body.total).toBe(2);
+  });
+});
+
+/**
+ * Feature 016 (FR-002/FR-003): the open list is newest-first and DETERMINISTIC —
+ * tasks sharing the same `created_at` are tie-broken by `id` desc, so a
+ * paginated walk never duplicates or skips a row. Isolated seed: three open
+ * tasks, two of them created at the same instant.
+ */
+describe('human queue open ordering — newest-first, deterministic under pagination', () => {
+  let db: DbHarness;
+  let redis: RedisHarness;
+  let app: INestApplication;
+  let url: string;
+  let topId: string;
+  let tieIdsDesc: string[];
+
+  const authHeaders = { 'content-type': 'application/json', authorization: `Bearer ${TEST_DASHBOARD_TOKEN}` };
+
+  beforeAll(async () => {
+    db = await startDatabase();
+    redis = await startRedis();
+    process.env.DATABASE_URL = db.url;
+    process.env.REDIS_URL = redis.url;
+    process.env.AGENTS_CONFIG_PATH = join(process.cwd(), 'test', 'fixtures', 'does-not-exist.yaml');
+
+    const p = await seedPipeline(db.db);
+
+    const sameInstant = new Date('2026-07-12T08:00:00.000Z');
+    const ties = await db.db
+      .insert(schema.humanTasks)
+      .values([
+        { workspaceId: p.workspaceId, ticketId: p.ticketId, kind: 'question', title: 'Tie A', blocking: false, status: 'open', createdAt: sameInstant },
+        { workspaceId: p.workspaceId, ticketId: p.ticketId, kind: 'question', title: 'Tie B', blocking: false, status: 'open', createdAt: sameInstant },
+      ])
+      .returning({ id: schema.humanTasks.id });
+    // uuid v4 as lowercase hex: lexicographic string order == Postgres byte order.
+    tieIdsDesc = ties.map((t) => t.id).sort((a, b) => (a < b ? 1 : -1));
+
+    const [top] = await db.db
+      .insert(schema.humanTasks)
+      .values({
+        workspaceId: p.workspaceId, ticketId: p.ticketId, kind: 'question',
+        title: 'Top', blocking: false, status: 'open', createdAt: new Date('2026-07-12T09:00:00.000Z'),
+      })
+      .returning({ id: schema.humanTasks.id });
+    topId = top.id;
+
+    const moduleRef: TestingModule = await Test.createTestingModule({ imports: [BackendAppModule] }).compile();
+    app = moduleRef.createNestApplication();
+    await app.init();
+    await app.listen(0);
+    url = await app.getUrl();
+  }, 240_000);
+
+  afterAll(async () => {
+    await app?.close();
+    await db?.stop();
+    await redis?.stop();
+  });
+
+  it('same-instant tasks come back in stable id-desc order after the newest task', async () => {
+    const body = await fetch(`${url}/api/human-tasks?status=open`, { headers: authHeaders }).then((r) => r.json());
+    expect(body.items.map((t: { id: string }) => t.id)).toEqual([topId, ...tieIdsDesc]);
+  });
+
+  it('a paginated walk covers every task exactly once (no dup, no skip)', async () => {
+    const page1 = await fetch(`${url}/api/human-tasks?status=open&page=1&page_size=2`, { headers: authHeaders }).then((r) => r.json());
+    const page2 = await fetch(`${url}/api/human-tasks?status=open&page=2&page_size=2`, { headers: authHeaders }).then((r) => r.json());
+    expect(page1.items).toHaveLength(2);
+    expect(page2.items).toHaveLength(1);
+    const walked = [...page1.items, ...page2.items].map((t: { id: string }) => t.id);
+    expect(walked).toEqual([topId, ...tieIdsDesc]);
+    expect(new Set(walked).size).toBe(3);
+    expect(page1.total).toBe(3);
   });
 });

@@ -134,6 +134,10 @@ function openRun(row: RunListItem) {
       <el-table-column label="Agent">
         <template #default="{ row }">{{ row.agent.name }}</template>
       </el-table-column>
+      <el-table-column label="Role">
+        <!-- feature 016: the agent's function per run; em dash when the agent has none. -->
+        <template #default="{ row }">{{ row.agent?.role || '—' }}</template>
+      </el-table-column>
       <el-table-column label="Ticket">
         <template #default="{ row }">
           <!-- feature 011: ticketless workspace-setup runs get a label, no link. -->

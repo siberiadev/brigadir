@@ -37,6 +37,38 @@ describe('HumanQueue — open list + resolution', () => {
     );
   });
 
+  it('renders open tasks in server order (newest-first) — global and workspace-scoped alike', async () => {
+    // Feature 016: the server sends the open list newest-first; the component
+    // must not reorder. Fixture reversed so any client-side sort would show.
+    const newestFirst = [...sampleHumanQueueOpen.items].sort(
+      (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at),
+    );
+    let lastWorkspaceParam: string | null = null;
+    server.use(
+      http.get('/api/human-tasks', ({ request }) => {
+        const params = new URL(request.url).searchParams;
+        if (params.get('status') !== 'closed') {
+          lastWorkspaceParam = params.get('workspace');
+          return HttpResponse.json(paginated(newestFirst));
+        }
+        return HttpResponse.json(sampleHumanQueueClosed);
+      }),
+    );
+
+    const globalQueue = mountWithProviders(HumanQueue);
+    await flush();
+    const domOrder = (w: ReturnType<typeof mountWithProviders>) =>
+      w.findAll('li[data-test^="task-"]').map((li) => li.attributes('data-test'));
+    expect(domOrder(globalQueue)).toEqual(['task-ht-2', 'task-ht-1']);
+    expect(lastWorkspaceParam).toBeNull();
+
+    // Workspace tab: same component + endpoint, scoped by ?workspace= — same order.
+    const workspaceQueue = mountWithProviders(HumanQueue, { props: { workspaceId: 'ws-1' } });
+    await flush();
+    expect(domOrder(workspaceQueue)).toEqual(['task-ht-2', 'task-ht-1']);
+    expect(lastWorkspaceParam).toBe('ws-1');
+  });
+
   it('row click opens the drawer with markdown details and the resolve form', async () => {
     const wrapper = mountWithProviders(HumanQueue);
     await flush();

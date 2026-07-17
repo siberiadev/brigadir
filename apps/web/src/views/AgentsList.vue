@@ -2,8 +2,10 @@
 import { computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { AgentResponse, ErrorIssue } from '@brigadir/contracts';
+import { MAX_PAGE_SIZE } from '@brigadir/contracts/pagination';
 import { ApiError } from '../api/client';
 import { useAgents, useDeleteAgent } from '../composables/useAgents';
+import { useExecutors } from '../composables/useExecutors';
 import { useGenerateAgents, useWorkspace } from '../composables/useWorkspaces';
 import { useRuns } from '../composables/useRuns';
 import { usePagination } from '../composables/usePagination';
@@ -21,6 +23,14 @@ bindTotal(total);
 // Лукап по id — через detail-эндпоинт, не через пагинированный список.
 const workspaceQuery = useWorkspace(props.id);
 const repositories = computed(() => workspaceQuery.data.value?.repositories ?? []);
+
+// feature 016: executor_id → profile NAME. Потребитель всего списка — не листает
+// (конвенция 2026-07-15); executors платформенные и немногочисленные. Пока список
+// не загружен (или упал) — мапа пуста, ячейки Executor просто пустые.
+const executorsQuery = useExecutors({ page: 1, page_size: MAX_PAGE_SIZE });
+const executorNames = computed(
+  () => new Map((executorsQuery.data.value?.items ?? []).map((e) => [e.id, e.name])),
+);
 
 const deleteAgent = useDeleteAgent(props.id);
 
@@ -148,13 +158,25 @@ async function onDelete(agent: AgentResponse) {
       <el-table-column label="Name" min-width="140">
         <template #default="{ row }">
           <span>{{ row.name }}</span>
-          <!-- feature 014: persona name + function; "teamlead" for the orchestrator. -->
-          <span v-if="row.role" class="agent-role"> ({{ row.role }})</span>
+        </template>
+      </el-table-column>
+      <!-- feature 016: role as its own tagged column; "teamlead" for the orchestrator. -->
+      <el-table-column label="Role" min-width="110">
+        <template #default="{ row }">
+          <el-tag v-if="row.role" size="small" data-test="agent-role-tag">{{ row.role }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="Key" min-width="130">
         <template #default="{ row }">
           <code class="agent-key" data-test="agent-key">{{ row.key }}</code>
+        </template>
+      </el-table-column>
+      <!-- feature 016: executor profile name; empty when the id resolves to nothing. -->
+      <el-table-column label="Executor" min-width="110">
+        <template #default="{ row }">
+          <span v-if="executorNames.get(row.executor_id)" data-test="agent-executor">
+            {{ executorNames.get(row.executor_id) }}
+          </span>
         </template>
       </el-table-column>
       <el-table-column prop="trigger_status" label="Trigger" />
@@ -188,10 +210,6 @@ async function onDelete(agent: AgentResponse) {
   display: flex;
   gap: 8px;
   align-items: center;
-}
-
-.agent-role {
-  color: var(--el-text-color-secondary);
 }
 
 .agent-key {
