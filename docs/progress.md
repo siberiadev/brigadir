@@ -1241,3 +1241,46 @@ GET /api/human-tasks (дефолт — newest-first 016-й, страница о�
 меняется; мусор → дефолт через `.catch()`); hero опрашивает `order=oldest`
 (зеркальный tie-break id ASC). Тесты: интеграционные кейсы flip/garbage в
 ordering-сьюте 016, веб-кейс «hero шлёт order=oldest».
+
+## Iteration 25 — Diagram view mode на странице Agents (feature 018, 2026-07-17)
+
+Тумблер List/Diagram на `/workspaces/:id/agents` (List — дефолт, выбор
+нигде не персистится) и интерактивный граф эмерджентного пайплайна:
+статус-ноды живой борды + ноды видимых worker-агентов; рёбра
+trigger (primary, status→agent), success (сплошное, success) и failure
+(пунктир, danger) — оба agent→status. Оркестратор и disabled-агенты
+скрыты; статусы без единого видимого агента — muted (dashed, кандидаты
+под новых агентов); статус, на который ссылается агент, но которого нет
+на борде — missing-нода с danger-обводкой (дрейф конфига виден, ребро
+сохраняется). `status_running` сознательно НЕ ребро и не считается
+referenced (транзитная парковка). JQL-бейдж на ноде агента (tooltip —
+сырой JQL); jql-only агент — нода без входящего ребра.
+
+Архитектура: чистая производная от двух живых запросов — НИКАКОГО нового
+бэкенда/схемы/персиста. `buildGraph.ts` (pure, детерминированный порядок)
++ `layoutGraph` (dagre LR, циклы/self-loops ок) → Vue Flow
+(`@vue-flow/core` 1.48, слот-ноды `StatusNode`/`AgentNode` на Element
+Plus). Ключ whole-list запроса агентов побайтово равен ключу AgentForm
+(`{page:1,page_size:100}`) — один кэш-энтри TanStack, консистентность
+list↔diagram и авто-перерисовка после save бесплатно от существующей
+инвалидации `['agents', wsId]`. Переключение режима не фетчит ничего
+(запросы живут в setup вьюхи); плата — eager-загрузка whole-list+statuses
+при заходе на вкладку.
+
+Интеракции: «+» на КАЖДОЙ статус-ноде → существующий AgentForm с
+префиллом trigger_status (новый seed-only проп `initialTriggerStatus`,
+edit-режим его игнорирует; ключ диалога расширен префиллом — повторные
+«+» пере-сидят форму); карандаш на ноде агента → тот же Edit-диалог, что
+в таблице. Цвета только через `--el-color-*`, иконки lucide статичные,
+`prefers-reduced-motion` гасит переходы; позиции нод и режим не
+сохраняются (каждый рендер — свежий dagre-layout).
+
+Тесты той же итерацией: agents-diagram-graph.spec (18 кейсов чистой
+деривации: видимость, рёбра, muted/missing, циклы/self-loop, детерминизм,
+пустые statuses → все referenced missing) + agents-diagram-view.spec
+(12 интеракционных, VueFlow застаблен с прокидкой слотов: дефолт List,
+тумблер без единого нового запроса (счётчик msw), «+»-префилл и
+пере-сид, save→закрытие→новая нода, cancel-неизменность, edit точного
+агента, disabling-edit убирает ноду) + 4 кейса префилла в
+agent-form.spec. jsdom-грабля: у радио el-segmented нет value-атрибута —
+выбор по индексу; в test/setup.ts добавлен no-op ResizeObserver.

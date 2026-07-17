@@ -21,6 +21,8 @@ const props = defineProps<{
   workspaceId: string;
   agent?: AgentResponse | null;
   repositories: WorkspaceRepository[];
+  /** Feature 018: create-mode seed for trigger_status (diagram "+"); ignored when `agent` is set. */
+  initialTriggerStatus?: string;
 }>();
 const emit = defineEmits<{ saved: [warnings: ErrorIssue[]] }>();
 
@@ -61,7 +63,10 @@ const form = reactive({
   description: a?.description ?? '',
   instruction: a?.instruction ?? '',
   executor_id: a?.executor_id ?? '',
-  trigger_status: a?.trigger_status ?? '',
+  // Seed-only prefill (feature 018): edit mode always mirrors the agent row —
+  // including a jql-only agent's null trigger — create mode may arrive pre-aimed
+  // at a status from the diagram's "+".
+  trigger_status: a ? (a.trigger_status ?? '') : (props.initialTriggerStatus ?? ''),
   trigger_jql: a?.trigger_jql ?? '',
   status_running: a?.status_running ?? '',
   status_success: a?.status_success ?? '',
