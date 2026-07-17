@@ -42,9 +42,9 @@ describe('config → DB seeder (T017)', () => {
     expect(workspaces[0].jiraProjectKey).toBe('BRIG');
     expect(workspaces[0].jiraBoardId).toBe(42); // T040: board_id → column
     expect(workspaces[0].jiraBoardType).toBeNull(); // populated later by introspection (T049)
-    // The yaml executor/agent, plus the feature-010 orchestrator + its own cheap
-    // no-repo executor profile.
-    expect(executors).toHaveLength(2);
+    // The yaml executor/agent, plus the feature-010 orchestrator's cheap no-repo
+    // profile and the feature-015 repo-mounted setup profile.
+    expect(executors).toHaveLength(3);
     const mockExec = executors.find((e) => e.name === 'mock-exec');
     expect(mockExec?.type).toBe('mock');
     expect(executors.some((e) => e.name === ORCHESTRATOR_EXECUTOR_NAME)).toBe(true);
@@ -61,10 +61,10 @@ describe('config → DB seeder (T017)', () => {
     const executors = await h.db.select().from(schema.executors);
     const agents = await h.db.select().from(schema.agents);
 
-    // Idempotent: the yaml rows + the orchestrator rows, and a second boot adds
-    // nothing (2, not 4).
+    // Idempotent: the yaml rows + the orchestrator/setup rows, and a second
+    // boot adds nothing.
     expect(workspaces).toHaveLength(1);
-    expect(executors).toHaveLength(2);
+    expect(executors).toHaveLength(3);
     expect(agents).toHaveLength(2);
 
     // still correctly linked

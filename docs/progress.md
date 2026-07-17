@@ -1048,3 +1048,63 @@ strict), web settings-page spec (both fields seeded, Reset restores built-ins,
 Save PUTs both). Gates green: typecheck (all packages + vue-tsc), lint, unit
 254 (39 files), web 166 (25), affected integration suites 11/11
 (global-settings, workspace-setup).
+
+## Iteration 21 — Configurable brigadir template + repo-mounted setup runs (feature 015, 2026-07-17)
+
+Two blocks (specs/015-brigadir-agent-repo-setup). **Block 1**: a new Settings →
+"Brigadir agent" section holds the editable TEMPLATE of the default
+orchestrator — persona name, role, triage executor profile (by NAME), triage
+workspace mode, limits (timeout/budget/attempts), enabled — plus BOTH brigadir
+instruction texts relocated from General (General keeps only Theme).
+`seedOrchestratorAgent` now copies the template into every NEW workspace
+(copy-at-creation; existing workspaces untouched — feature 010 SC-006). Storage:
+ONE versioned JSON document under `global_settings['brigadir_agent_template']`
+(`BrigadirAgentTemplateSchema`, contracts) — no migration; the two instruction
+texts kept their existing keys, so operator edits survived the endpoint move
+(`GET/PUT /api/general-settings` → **removed**, replaced by
+`GET/PUT /api/brigadir-agent-settings` which composes template + both texts;
+PUT validates bounds and that referenced executors exist AND are enabled, 422
+field-level). A template executor deleted AFTER save falls back to the built-in
+profile at seed time + `warnings[]` in the create response (toasted by the web
+create flow); a corrupt stored template reads as built-in defaults (never 5xx).
+Reset UX: per-field for both instruction texts + a confirmed "Reset all to
+defaults" (unsaved until Save).
+
+**Block 2 — fat setup, thin triage**: runs with trigger source
+`workspace-setup` now resolve their environment from the template's `setup`
+execution profile, read LIVE at run start (matches the setup instruction's
+lifecycle): new built-in `brigadir-setup` profile (claude_cli, Sonnet 5,
+maxTurns 60, maxParallelRuns 1, repo-mounted), dedicated
+`setup.timeout_minutes` (default 60, applied by the claude-cli processor —
+sized for clones), workspace default repo mounted as the working dir with a
+ticketless local-only branch `setup/<runId8>` (`setupRunBranchIdentity`; the
+"ticketless run requires no-repo agent" guard narrowed to non-setup sources).
+Degradations never fail the run: no default repo → scratch no-repo path
+(FR-017); setup executor missing/disabled → `ensureSetupExecutor` fallback + a
+`run_events` warning (FR-018). Triage runs byte-identical (cheap Haiku
+profile, no repo, no git). **Principle narrowing recorded** (plan.md
+Constitution Check + Complexity Tracking): feature-010's "orchestrator has no
+repository/git credentials" now applies to TRIAGE runs only; setup-run
+read-only-ness is behavioral (no push path, no push instruction, local-only
+branch) over the same host ssh-agent posture all repo runs share.
+
+Tests in the same iteration: contracts schema spec; executor unit spec
+(profile swap incl. `--model`/`--max-turns` args, ticketless `setup/<runId8>`
+prepare, disabled-executor fallback event, no-repo degradation, guard
+narrowing, triage unchanged); worktree identity spec; NEW
+brigadir-agent-settings integration suite (defaults, round-trip, 422s,
+legacy-key continuity, live-read continuity, corrupt template, last-write
+wins); orchestrator-lifecycle extended (template-driven seeding, SC-002,
+fallback warning, corrupt template, enabled=false); workspace-setup extended
+(template PUT live-read by the very next generate run); executor-seeding /
+config-seed updated for the second built-in profile; web specs for the new
+section (resets, reset-all, issue pinning, behavior round-trip) and theme-only
+General.
+
+Gates green locally: typecheck (root tsc + contracts + mcp-server + admin-mcp)
++ web vue-tsc, lint, unit 261 (39 files) + contracts 117 (13), web 173 (26,
+incl. the new settings-brigadir-agent spec), integration 278/279 — the one
+failure (`serve-static` SPA fallback) reproduces identically on the pristine
+tree (same environment issue recorded in iteration 19), i.e. pre-existing and
+unrelated. Quickstart Scenario 3 (live-model repo recon quality, SC-003)
+remains a manual check by design.

@@ -11,6 +11,7 @@ type SettingsNavItem = { key: string; label: string; to: string };
 
 const navItems: SettingsNavItem[] = [
   { key: 'general', label: 'General', to: '/settings/general' },
+  { key: 'brigadir-agent', label: 'Brigadir agent', to: '/settings/brigadir-agent' },
   { key: 'executors', label: 'Executors', to: '/settings/executors' },
   // Future: Users, Usage…
 ];

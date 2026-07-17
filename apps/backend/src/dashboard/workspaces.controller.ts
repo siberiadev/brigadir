@@ -2,7 +2,7 @@ import { Body, Controller, Get, HttpCode, Inject, Param, Post, Put, Query, Res, 
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { RunTriggerService } from '@brigadir/runs';
 import { SetupApplyService } from '@brigadir/pipeline';
-import type { TriggerEvent } from '@brigadir/contracts';
+import type { ErrorIssue, TriggerEvent } from '@brigadir/contracts';
 import {
   DRIZZLE,
   type BrigadirDb,
@@ -89,7 +89,7 @@ export class WorkspacesController {
   }
 
   @Post()
-  async create(@Body() body: unknown): Promise<WorkspaceResponse> {
+  async create(@Body() body: unknown): Promise<WorkspaceResponse & { warnings?: ErrorIssue[] }> {
     const parsed = WorkspaceCreateRequestSchema.safeParse(body);
     if (!parsed.success) throw zodToValidationError(parsed.error);
     const req = parsed.data;
@@ -128,9 +128,24 @@ export class WorkspacesController {
 
     // feature 010 (FR-018): every workspace gets a "brigadir" orchestrator,
     // with the current default instruction copied in (FR-022, D9/D10).
-    await seedOrchestratorAgent(this.db, row.id);
+    // feature 015 (FR-010): the rest of the seed comes from the brigadir agent
+    // template; a dangling template executor falls back to the built-in profile,
+    // surfaced via the same warnings[] convention as agent create/update.
+    const seeded = await seedOrchestratorAgent(this.db, row.id);
 
-    return this.toResponse(row.id);
+    const response = await this.toResponse(row.id);
+    if (!seeded.warning) return response;
+    return {
+      ...response,
+      warnings: [
+        {
+          path: ['template', 'triage', 'executor'],
+          code: 'fallback',
+          message: seeded.warning,
+          level: 'warning' as const,
+        },
+      ],
+    };
   }
 
   /**

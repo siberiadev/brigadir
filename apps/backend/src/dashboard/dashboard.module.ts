@@ -6,7 +6,7 @@ import { AgentsController } from './agents.controller';
 import { ExecutorsController } from './executors.controller';
 import { RunsController } from './runs.controller';
 import { HumanTasksController } from './human-tasks.controller';
-import { GeneralSettingsController } from './general-settings.controller';
+import { BrigadirAgentSettingsController } from './brigadir-agent-settings.controller';
 import { ExecutorBackfillService } from './executor-backfill.service';
 import { OrchestratorBackfillService } from './orchestrator-backfill.service';
 import { dashboardTokenProvider } from './dashboard-token.provider';
@@ -31,7 +31,7 @@ import { DashboardTokenGuard } from './dashboard-token.guard';
     ExecutorsController,
     RunsController,
     HumanTasksController,
-    GeneralSettingsController,
+    BrigadirAgentSettingsController,
   ],
   providers: [
     dashboardTokenProvider,

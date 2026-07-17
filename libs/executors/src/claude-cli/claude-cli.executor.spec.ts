@@ -8,7 +8,10 @@ import { join } from 'node:path';
 import type { AgentsConfig } from '@brigadir/contracts';
 import type { RunContext } from '../agent-executor.interface';
 
-vi.mock('./worktree', () => ({
+vi.mock('./worktree', async (importOriginal) => ({
+  // Keep the real setupRunBranchIdentity (pure) — only the git-touching
+  // functions are faked.
+  ...(await importOriginal<typeof import('./worktree')>()),
   prepare: vi.fn(),
   cleanup: vi.fn(),
 }));
@@ -361,6 +364,247 @@ describe('ClaudeCliExecutor.run (T082)', () => {
     const result = await executor.run(makeCtx(), new AbortController().signal);
     expect(result.exitStatus).toBe('crashed');
     expect(result.diagnostics).toContain('branch already exists');
+    expect(spawnGroupMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Feature 015 (T019): workspace-setup runs resolve a "fat" environment from
+ * the live brigadir template's setup profile — capable model, larger turn
+ * budget, repo-mounted with a ticketless `setup/<runId8>` branch — while every
+ * other source keeps the agent's own profile byte-identically. Fallback on a
+ * disabled setup executor records a run-timeline warning.
+ */
+describe('ClaudeCliExecutor — workspace-setup environment (feature 015)', () => {
+  const triageProfileConfig = {
+    cliPath: 'claude',
+    model: 'claude-haiku-4-5-20251001',
+    maxTurns: 15,
+    killGraceMs: 50,
+    cancelPollMs: 50,
+  };
+  const setupProfileRow = {
+    id: 'setup-exec-1',
+    name: 'brigadir-setup',
+    config: { cliPath: 'claude', model: 'claude-sonnet-5', maxTurns: 60, killGraceMs: 50, cancelPollMs: 50 },
+    secrets: null,
+    enabled: true,
+  };
+  const wsRepo = { name: 'api', git_url: 'git@acme:api.git', default_branch: 'main' };
+
+  /**
+   * Shape-dispatching fake: the joined run-config load returns the agent's
+   * (triage) profile + trigger source; plain `where().limit()` selects are
+   * dispatched by the requested fields — `value` → global_settings (template),
+   * `secrets`/`enabled` → executors (setup profile lookup), else →
+   * workspaces.settings. run_events inserts are captured for assertions.
+   */
+  function fakeSetupDb(opts: {
+    source: string | null;
+    behavior?: Record<string, unknown>;
+    template?: unknown;
+    setupProfile?: typeof setupProfileRow | null;
+    repositories?: unknown[];
+  }) {
+    const runEventInserts: Record<string, unknown>[] = [];
+    const db = {
+      runEventInserts,
+      select: (fields: Record<string, unknown> = {}) => ({
+        from: () => ({
+          innerJoin: () => ({
+            innerJoin: () => ({
+              where: () => ({
+                limit: () =>
+                  Promise.resolve([
+                    {
+                      executorConfig: triageProfileConfig,
+                      executorName: 'brigadir-orchestrator',
+                      executorSecrets: null,
+                      behavior: opts.behavior ?? { workspace_mode: 'none' },
+                      workspaceId: 'ws-1',
+                      triggerEvent: opts.source ? { source: opts.source } : null,
+                    },
+                  ]),
+              }),
+            }),
+          }),
+          where: () => ({
+            limit: () => {
+              const keys = Object.keys(fields);
+              if (keys.includes('value')) {
+                return Promise.resolve(opts.template === undefined ? [] : [{ value: opts.template }]);
+              }
+              if (keys.includes('secrets') || keys.includes('enabled')) {
+                return Promise.resolve(opts.setupProfile ? [opts.setupProfile] : []);
+              }
+              return Promise.resolve([{ settings: { repositories: opts.repositories ?? [] } }]);
+            },
+          }),
+        }),
+      }),
+      insert: () => ({
+        values: (v: Record<string, unknown>) => {
+          if (v && 'payload' in v) runEventInserts.push(v);
+          // Promise-like enough for both callers: bare-await / .catch()
+          // (run_events persists) AND the ensureSetupExecutor chain.
+          const settled = Promise.resolve(undefined);
+          return {
+            then: settled.then.bind(settled),
+            catch: settled.catch.bind(settled),
+            finally: settled.finally.bind(settled),
+            onConflictDoNothing: () => ({
+              returning: () => Promise.resolve([{ id: setupProfileRow.id }]),
+            }),
+          };
+        },
+      }),
+      update: () => ({ set: () => ({ where: () => Promise.resolve() }) }),
+    };
+    return db;
+  }
+
+  /** Only the FR-018 fallback warnings — stream events persist here too. */
+  function fallbackEvents(db: { runEventInserts: Record<string, unknown>[] }) {
+    return db.runEventInserts.filter(
+      (e) => (e.payload as { source?: string } | undefined)?.source === 'setup-profile-fallback',
+    );
+  }
+
+  function makeSetupExecutor(db: unknown, config: AgentsConfig | null = null) {
+    const fakeJira = { getFeatureContext: vi.fn().mockResolvedValue({ linked: [] }) };
+    return new ClaudeCliExecutor(db as never, config, fakeJira as never);
+  }
+
+  /** Drive one full fake run to completion and return {result, argv}. */
+  async function drive(executor: ClaudeCliExecutor, ctx: RunContext) {
+    const group = makeGroup();
+    spawnGroupMock.mockReturnValue(group);
+    const runPromise = executor.run(ctx, new AbortController().signal);
+    await waitForSpawn(spawnGroupMock);
+    for (const line of readFixtureLines('stream-success')) group.child.stdout.write(line + '\n');
+    await flush();
+    group.child.emit('close', 0, null);
+    const result = await runPromise;
+    const argv = spawnGroupMock.mock.calls[0][1] as string[];
+    return { result, argv };
+  }
+
+  let worktreeDir: string;
+  beforeEach(async () => {
+    worktreeDir = await mkdtemp(join(tmpdir(), 'brigadir-setup-exec-test-'));
+    prepareMock.mockReset().mockResolvedValue({
+      worktreeDir,
+      branch: 'setup/a1b2c3d4',
+      cacheDir: join(worktreeDir, '..', 'cache'),
+    });
+    cleanupMock.mockReset().mockResolvedValue(undefined);
+    spawnGroupMock.mockReset();
+  });
+  afterEach(async () => {
+    await rm(worktreeDir, { recursive: true, force: true });
+  });
+
+  it('a workspace-setup run swaps in the setup profile (model, maxTurns) and mounts the default repo on setup/<runId8> (FR-013/020)', async () => {
+    const db = fakeSetupDb({
+      source: 'workspace-setup',
+      setupProfile: setupProfileRow,
+      repositories: [wsRepo],
+    });
+    const executor = makeSetupExecutor(db);
+
+    const { result, argv } = await drive(
+      executor,
+      makeCtx({ runId: 'a1b2c3d4-e5f6-7890', ticket: null }),
+    );
+
+    expect(result.exitStatus).toBe('completed');
+    // The setup profile's config won, not the agent's cheap triage profile.
+    expect(argv.join(' ')).toContain('--model claude-sonnet-5');
+    expect(argv.join(' ')).toContain('--max-turns 60');
+    // Ticketless worktree: branch identity setup/<first 8 chars of run id>.
+    expect(prepareMock).toHaveBeenCalledTimes(1);
+    const [repoArg, runIdArg, ticketKeyArg, prefixArg] = prepareMock.mock.calls[0];
+    expect(repoArg).toMatchObject({ name: 'api' });
+    expect(runIdArg).toBe('a1b2c3d4-e5f6-7890');
+    expect(ticketKeyArg).toBe('a1b2c3d4');
+    expect(prefixArg).toBe('setup');
+    // Cleanup rides the standard worktree path (keep flag falsy — success run).
+    expect(cleanupMock).toHaveBeenCalledTimes(1);
+    expect(cleanupMock.mock.calls[0][1]).toBe(worktreeDir);
+    expect(cleanupMock.mock.calls[0][2].keep).toBeFalsy();
+    expect(fallbackEvents(db)).toHaveLength(0); // no fallback warning
+  });
+
+  it('a disabled setup executor falls back to the built-in profile and records a run-timeline warning (FR-018)', async () => {
+    const db = fakeSetupDb({
+      source: 'workspace-setup',
+      setupProfile: { ...setupProfileRow, name: 'custom-setup', enabled: false },
+      // Template points at the (now disabled) custom profile.
+      template: {
+        schema_version: 1,
+        name: 'brigadir',
+        role: 'teamlead',
+        timeout_minutes: 45,
+        max_budget_usd: null,
+        max_attempts: 2,
+        enabled: true,
+        triage: { executor: 'brigadir-orchestrator', behavior: { workspace_mode: 'none' } },
+        setup: { executor: 'custom-setup', behavior: {}, timeout_minutes: 60 },
+      },
+      repositories: [wsRepo],
+    });
+    const executor = makeSetupExecutor(db);
+
+    const { result } = await drive(executor, makeCtx({ runId: 'run-fallback-1', ticket: null }));
+
+    expect(result.exitStatus).toBe('completed');
+    const events = fallbackEvents(db);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('log');
+    expect(JSON.stringify(events[0].payload)).toContain('custom-setup');
+    expect(JSON.stringify(events[0].payload)).toContain('is disabled');
+  });
+
+  it('a workspace with no repositories degrades the setup run to the scratch no-repo path (FR-017)', async () => {
+    const db = fakeSetupDb({
+      source: 'workspace-setup',
+      setupProfile: setupProfileRow,
+      repositories: [],
+    });
+    // No yaml fallback either (agentsConfig null).
+    const executor = makeSetupExecutor(db, null);
+
+    const { result } = await drive(executor, makeCtx({ runId: 'run-norepo-1', ticket: null }));
+
+    expect(result.exitStatus).toBe('completed');
+    expect(prepareMock).not.toHaveBeenCalled(); // scratch dir, no worktree
+  });
+
+  it('a triage run is byte-identical to before: agent profile, no repository (SC-004/FR-016)', async () => {
+    const db = fakeSetupDb({ source: 'triage', behavior: { workspace_mode: 'none' } });
+    const executor = makeSetupExecutor(db);
+
+    const { result, argv } = await drive(executor, makeCtx({ runId: 'run-triage-1', ticket: null }));
+
+    expect(result.exitStatus).toBe('completed');
+    expect(argv.join(' ')).toContain('--model claude-haiku-4-5-20251001');
+    expect(argv.join(' ')).toContain('--max-turns 15');
+    expect(prepareMock).not.toHaveBeenCalled();
+    expect(fallbackEvents(db)).toHaveLength(0);
+  });
+
+  it('a NON-setup ticketless run on a repo-carrying agent is still a config error (guard narrowed, not removed)', async () => {
+    const db = fakeSetupDb({ source: 'manual', behavior: {}, repositories: [wsRepo] });
+    const executor = makeSetupExecutor(db);
+
+    const result = await executor.run(
+      makeCtx({ runId: 'run-guard-1', ticket: null }),
+      new AbortController().signal,
+    );
+
+    expect(result.exitStatus).toBe('crashed');
+    expect(result.diagnostics).toContain('ticketless run requires a no-repository agent');
+    expect(prepareMock).not.toHaveBeenCalled();
     expect(spawnGroupMock).not.toHaveBeenCalled();
   });
 });

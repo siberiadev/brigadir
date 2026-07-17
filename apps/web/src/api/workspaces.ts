@@ -1,4 +1,5 @@
 import type {
+  ErrorIssue,
   PaginationQuery,
   WorkspaceListResponse,
   WorkspaceResponse,
@@ -18,8 +19,11 @@ export function workspacesApi(client: ApiClient = apiClient) {
     get: (id: string) => client.get<WorkspaceResponse>(`/api/workspaces/${id}`),
     verify: (body: WorkspaceVerifyRequest) =>
       client.post<VerifyResponse>('/api/workspaces/verify', body),
+    // feature 015 (FR-010): the response may carry warnings[] — e.g. the
+    // brigadir template's triage executor was deleted and seeding fell back
+    // to the built-in profile (same convention as agent create/update).
     create: (body: WorkspaceCreateRequest) =>
-      client.post<WorkspaceResponse>('/api/workspaces', body),
+      client.post<WorkspaceResponse & { warnings?: ErrorIssue[] }>('/api/workspaces', body),
     rotate: (id: string, body: WorkspaceRotateRequest) =>
       client.put<WorkspaceResponse>(`/api/workspaces/${id}/jira-connection`, body),
     updateSettings: (id: string, body: WorkspaceSettingsRequest) =>

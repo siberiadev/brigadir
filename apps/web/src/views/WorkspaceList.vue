@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import type { WorkspaceResponse } from '@brigadir/contracts';
+import type { ErrorIssue, WorkspaceResponse } from '@brigadir/contracts';
 import { useWorkspaces, useSetWorkspaceEnabled } from '../composables/useWorkspaces';
 import { usePagination } from '../composables/usePagination';
 import CredentialBadge from '../components/CredentialBadge.vue';
@@ -19,12 +19,15 @@ const router = useRouter();
 // --- create workspace (flat form in a modal) ---
 const showCreate = ref(false);
 const workspaceFormRef = ref<InstanceType<typeof WorkspaceForm>>();
-function onCreated(id: string) {
+function onCreated(id: string, warnings?: ErrorIssue[]) {
   showCreate.value = false;
   // feature 011 (D14): a new workspace starts PAUSED — the create flow lands
   // on Agents where "Generate agents" (or manual creation) builds the team;
   // the Start switch in the list opens the gate when the human is ready.
   ElMessage.info('Workspace created paused — assemble the team, then press Start.');
+  // feature 015 (FR-010): seeding fell back to the built-in executor profile —
+  // toast it, same warnings[] convention as agent saves (AgentsList.onSaved).
+  for (const w of warnings ?? []) ElMessage.warning(w.message);
   router.push(`/workspaces/${id}/agents`);
 }
 

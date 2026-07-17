@@ -27,6 +27,8 @@ export class OrchestratorBackfillService implements OnApplicationBootstrap {
       for (const ws of workspaces) {
         const result = await seedOrchestratorAgent(this.db, ws.id);
         if (result.created) created += 1;
+        // feature 015 (FR-010): template executor fallback is non-fatal but loud.
+        if (result.warning) this.logger.warn(`workspace ${ws.id}: ${result.warning}`);
       }
       if (created > 0) {
         this.logger.log(`orchestrator backfill: seeded ${created} workspace(s)`);

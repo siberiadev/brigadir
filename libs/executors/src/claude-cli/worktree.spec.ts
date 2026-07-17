@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { prepare, cleanup, WorktreePrepareError, type WorktreeRepo } from './worktree';
+import { prepare, cleanup, setupRunBranchIdentity, WorktreePrepareError, type WorktreeRepo } from './worktree';
 
 const execFileAsync = promisify(execFile);
 
@@ -124,5 +124,27 @@ describe('worktree prepare/cleanup (T080)', () => {
     expect(resumed.branch).toBe('feat/BRIG-7');
     const { stdout } = await execFileAsync('git', ['-C', resumed.worktreeDir, 'log', '--oneline', '-1']);
     expect(stdout).toContain('wip'); // continues the same branch, prior commit intact
+  });
+});
+
+/**
+ * Feature 015 (FR-020): a ticketless workspace-setup run gets the branch
+ * identity `setup/<first 8 chars of run id>` — fed into prepare() through the
+ * standard (branchPrefix, ticketKey) parameters, so the leftover policy and
+ * cleanup behave exactly like ticket branches.
+ */
+describe('setupRunBranchIdentity (feature 015)', () => {
+  it('derives setup/<runId8> from the run id', () => {
+    const id = setupRunBranchIdentity('a1b2c3d4-e5f6-7890-abcd-ef0123456789');
+    expect(id).toEqual({ branchPrefix: 'setup', ticketKey: 'a1b2c3d4' });
+    // prepare() composes them the same way it composes ticket branches.
+    expect(`${id.branchPrefix}/${id.ticketKey}`).toBe('setup/a1b2c3d4');
+  });
+
+  it('is deterministic and collision-free across distinct run ids', () => {
+    const a = setupRunBranchIdentity('aaaaaaaa-1111');
+    const b = setupRunBranchIdentity('bbbbbbbb-2222');
+    expect(a).toEqual(setupRunBranchIdentity('aaaaaaaa-1111'));
+    expect(a.ticketKey).not.toBe(b.ticketKey);
   });
 });

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Test, type TestingModule } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
 import { join } from 'node:path';
-import { schema, ORCHESTRATOR_EXECUTOR_NAME } from '@brigadir/database';
+import { schema, ORCHESTRATOR_EXECUTOR_NAME, SETUP_EXECUTOR_NAME } from '@brigadir/database';
 import { BackendAppModule } from '../../apps/backend/src/app.module';
 import { startDatabase, startRedis, TEST_DASHBOARD_TOKEN, DbHarness, RedisHarness } from './harness';
 import { mockJira, type MockJira } from './mock-jira';
@@ -74,8 +74,11 @@ describe('workspace creation seeds only the orchestrator executor profile', () =
     });
     expect(res.status).toBe(201);
 
-    // Only the orchestrator's own profile — never the worker (claude/mock) defaults.
+    // Only the orchestrator's own profiles (triage + feature-015 setup) — never
+    // the worker (claude/mock) defaults.
     const rows = await db.db.select().from(schema.executors);
-    expect(rows.map((r) => r.name)).toEqual([ORCHESTRATOR_EXECUTOR_NAME]);
+    expect(rows.map((r) => r.name).sort()).toEqual(
+      [ORCHESTRATOR_EXECUTOR_NAME, SETUP_EXECUTOR_NAME].sort(),
+    );
   });
 });

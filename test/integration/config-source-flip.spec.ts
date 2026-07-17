@@ -55,10 +55,11 @@ describe('config source-of-truth flip (T130)', () => {
 
     expect(await db.db.select().from(schema.workspaces)).toHaveLength(1);
     // feature 010: the yaml executor + the seeded orchestrator's own cheap
-    // no-repo executor profile ("brigadir-orchestrator"); the yaml agent + the
-    // seeded "brigadir" orchestrator. Both seeded insert-if-absent → the second
-    // boot adds nothing (idempotent: still 2, not 4).
-    expect(await db.db.select().from(schema.executors)).toHaveLength(2);
+    // no-repo profile ("brigadir-orchestrator") + the feature-015 repo-mounted
+    // setup profile ("brigadir-setup"); the yaml agent + the seeded "brigadir"
+    // orchestrator. All seeded insert-if-absent → the second boot adds nothing
+    // (idempotent: still 3, not 6).
+    expect(await db.db.select().from(schema.executors)).toHaveLength(3);
     expect(await db.db.select().from(schema.agents)).toHaveLength(2);
   });
 

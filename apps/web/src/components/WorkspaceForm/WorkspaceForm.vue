@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue';
-import type { VerifyResponse, WorkspaceRepository } from '@brigadir/contracts';
+import type { ErrorIssue, VerifyResponse, WorkspaceRepository } from '@brigadir/contracts';
 import { useVerifyWorkspace, useCreateWorkspace } from '../../composables/useWorkspaces';
 import { ApiError } from '../../api/client';
 import { defaultExpiry } from '../../utils/date';
@@ -8,7 +8,7 @@ import { defaultExpiry } from '../../utils/date';
 // Flat create form (the former multi-step WorkspaceWizard, collapsed to one
 // screen). Verify stays an inline action; Create lives in the hosting
 // FormDialog footer, so we expose submit()/saving/canSubmit for it to drive.
-const emit = defineEmits<{ created: [workspaceId: string] }>();
+const emit = defineEmits<{ created: [workspaceId: string, warnings?: ErrorIssue[]] }>();
 
 const form = reactive({
   name: '',
@@ -97,7 +97,7 @@ async function submit() {
       board: form.board,
       repositories: repos,
     });
-    emit('created', ws.id);
+    emit('created', ws.id, ws.warnings);
   } catch (err) {
     applyIssues(err);
   }
