@@ -114,7 +114,7 @@ The **control plane (backend)** and **execution plane (worker)** are two process
 
 ## Quick start
 
-**Requirements:** Node.js 22 LTS (see `.nvmrc`), pnpm ≥ 9, Docker with a running daemon (needed both for `docker compose` and for the integration tests via Testcontainers).
+**Requirements:** Node.js 22+ (see `.nvmrc`; `--env-file` needs it), pnpm (`corepack enable` turns it on), Docker with a running daemon (needed both for `docker compose` and for the integration tests via Testcontainers). For live agent runs — an installed and logged-in `claude` CLI.
 
 ### 1. Install & static checks
 
@@ -127,24 +127,96 @@ pnpm lint
 ### 2. Tests
 
 ```bash
-pnpm test              # unit: contracts + mcp-server + libs
-pnpm test:integration  # Testcontainers: Postgres 16 + Redis 7, migrations from scratch
+pnpm test                        # unit: contracts + mcp-server + libs
+pnpm test:integration            # Testcontainers: Postgres 16 + Redis 7, migrations from scratch — needs Docker
+pnpm --filter @brigadir/web test # dashboard component tests
 ```
 
 Integration tests boot real containers, apply the committed migrations, and exercise the run scenarios, dedup, rate-limit accounting, the status machine, and reconcile — deterministically (re-running yields identical results).
 
-### 3. Full stack, one command
+### 3. Run for development (dev mode)
+
+The happy path from a clean clone to a working dashboard. Full detail — the `agents.yaml` story, first steps in the UI, a gotchas table — lives in [`docs/local-setup.md`](docs/local-setup.md); how the pieces fit together — in [`docs/architecture.md`](docs/architecture.md).
+
+**Secrets.** Copy the template and generate the three required values (boot **fails fast** without any of them — that's by design, don't work around it with defaults):
 
 ```bash
-cp .env.example .env      # optional for local, informational
-docker compose up --build
+cp .env.example .env
+openssl rand -base64 32   # → BRIGADIR_CREDENTIALS_KEY  (AES-256-GCM key for Jira creds at rest)
+openssl rand -hex 32      # → BRIGADIR_DASHBOARD_TOKEN  (dashboard bearer — you'll paste it into the UI)
+openssl rand -hex 32      # → BRIGADIR_JWT_SECRET       (signs per-run callback tokens)
 ```
 
-From empty volumes: Postgres and Redis become healthy → **backend** applies migrations and seeds workspace/executors/agents from `agents.yaml`, then serves `GET http://localhost:3000/health` → `{ "status": "ok", "db": "up", "redis": "up" }` → **worker** connects and registers the consumers + reconcile scheduler.
+**Infrastructure** — only Postgres and Redis in containers:
 
-> Local dev mode, secrets, and gotchas live in [`docs/local-setup.md`](docs/local-setup.md).
+```bash
+docker compose up -d postgres redis
+```
 
-### 4. Assemble a team from Claude Code (`brigadir-admin` admin-MCP)
+The ports are non-standard **on purpose**: Postgres on **5434**, Redis on **6380**, so a brew-installed Postgres/Redis squatting on 5432/6379 can never intercept the connection (the classic `role "brigadir" does not exist` — see the gotchas table in [`docs/local-setup.md`](docs/local-setup.md)). `DATABASE_URL`/`REDIS_URL` in `.env.example` already point at them.
+
+**Backend + worker**, the simple way — build once, run from `dist/`:
+
+```bash
+pnpm install && pnpm build
+node --env-file=.env dist/apps/backend/main.api.js     # terminal 1: applies migrations + seed on boot
+node --env-file=.env dist/apps/worker/main.worker.js   # terminal 2: poller, reconcile, run execution
+```
+
+> ⚠️ `node --env-file` is mandatory — nothing reads `.env` by itself.
+
+Check: `curl localhost:3000/health` → `{ "status": "ok", "db": "up", "redis": "up" }`.
+
+**Frontend** — two options:
+
+```bash
+pnpm --filter @brigadir/web dev   # Vite + hot-reload → http://localhost:5173, /api proxied to :3000
+```
+
+…or skip Vite and open http://localhost:3000 — the backend serves the built SPA itself (already produced by `pnpm build`).
+
+**First login:** the dashboard asks for a bearer — paste `BRIGADIR_DASHBOARD_TOKEN` from your `.env`.
+
+**Hot mode (watch)** — instead of the two `node` processes:
+
+```bash
+set -a; source .env; set +a            # nest start doesn't read .env either
+pnpm exec nest start backend --watch
+pnpm exec nest start worker --watch
+```
+
+What watch actually picks up — nest-webpack bundles only `apps/*` and `libs/*` from source; `packages/*` are runtime externals resolved from `packages/*/dist`:
+
+| You edit… | Watch picks it up? |
+|---|---|
+| `apps/*`, `libs/*` | ✅ yes — bundled from source |
+| `packages/*` (`@brigadir/contracts`, `mcp-server`, …) | ❌ only after `pnpm --filter <pkg> build` |
+
+So: before the first watch run, do `pnpm --filter @brigadir/contracts build` and `pnpm build:mcp-server` (the worker needs mcp-server for the callback channel). After editing `packages/contracts` — rebuild it (or keep `pnpm --filter @brigadir/contracts exec tsc -w` running as a third process), otherwise boot dies with `Cannot read properties of undefined` on new exports while typecheck stays green.
+
+> ⚠️ A watch-triggered worker restart kills active runs.
+
+### 4. Run in production (docker compose)
+
+The currently supported production path is the full compose stack. `docker-compose.yml` carries no secret values — add the three `BRIGADIR_*` vars as a pass-through list to the `backend` and `worker` services (names only, no values — see §3 of [`docs/local-setup.md`](docs/local-setup.md)), then:
+
+```bash
+export BRIGADIR_CREDENTIALS_KEY=... BRIGADIR_DASHBOARD_TOKEN=... BRIGADIR_JWT_SECRET=...
+docker compose up --build
+# → http://localhost:3000
+```
+
+From empty volumes: Postgres and Redis become healthy → **backend** applies migrations and seeds workspace/executors/agents from `agents.yaml` (if present), then serves `GET http://localhost:3000/health` → `{ "status": "ok", "db": "up", "redis": "up" }` → **worker** connects and registers the consumers + reconcile scheduler.
+
+**Known limitations of the current compose** (hardening is a separate iteration):
+
+- Postgres has **no named volume** — data lives inside the container and dies with it.
+- No `restart:` policy on any service.
+- Ports **5434/6380 must never be published externally** — they exist for local convenience only.
+- Put a **reverse proxy with TLS** in front of port 3000.
+- Live agent runs inside the container need git/ssh/`claude` CLI in the image and **API-key executor profiles** — claude subscription auth is only legal on the user's own machine ([`docs/architecture.md`](docs/architecture.md) §4).
+
+### 5. Assemble a team from Claude Code (`brigadir-admin` admin-MCP)
 
 `packages/admin-mcp` is a stdio MCP server you plug into **Claude Code** to build a team _outside_ any run: recon a board → `create_workspace` (always PAUSED) → `generate_agents` / `create_team` / `create_agent`. It is a thin HTTP client of the dashboard admin API, so the backend must be up. (Not to be confused with `mcp-server` / `brigadir-mcp`, the callback channel used _inside_ a run.)
 
