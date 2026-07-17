@@ -1,4 +1,5 @@
 export * from './jira-client.interface';
+export * from './jql';
 export * from './jira.errors';
 export * from './jira.module';
 export * from './workspace-connection.service';

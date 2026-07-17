@@ -5,6 +5,7 @@ import {
   JiraClientFactory,
   JiraHttpError,
   jiraDescriptionToMarkdown,
+  jqlEscape,
 } from '@brigadir/jira';
 import type { GetTicketInput, SearchTicketsInput } from '@brigadir/contracts';
 
@@ -190,9 +191,4 @@ export class JiraReadService {
       boardId: row.boardId,
     };
   }
-}
-
-/** Escape for a double-quoted JQL string value. */
-function jqlEscape(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }

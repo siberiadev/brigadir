@@ -320,3 +320,33 @@ describe('WorkspaceSettings — FormDialog reopen race (US4)', () => {
     expect((bodyQ('branch-prefix') as HTMLInputElement).value).toBe(sampleWorkspace.branch_prefix);
   });
 });
+
+// --------------------------------------------------------------------------
+// Scope preview button (live-Jira ticket count)
+// --------------------------------------------------------------------------
+
+describe('WorkspaceSettings — scope preview', () => {
+  it('previews the ticket count for the saved scope; a dirty scope_jql disables it', async () => {
+    server.use(
+      http.post('/api/workspaces/:id/ticket-count', () =>
+        HttpResponse.json({ count: 12, jql: 'project = "BRIG"', active_sprint: null }),
+      ),
+    );
+    const wrapper = await mountSettings();
+    await openModal(wrapper, 'edit-config');
+
+    // Seeded (unchanged) scope → button enabled, previews the count.
+    const btn = bodyQ('scope-preview-button') as HTMLButtonElement;
+    expect(btn).not.toBeNull();
+    expect(btn.disabled).toBe(false);
+    btn.click();
+    await flush();
+    await flush();
+    expect(bodyQ('scope-preview-result')?.textContent).toContain('12 ticket(s)');
+
+    // Editing scope_jql marks the form dirty → button disabled, hint shown.
+    await setBodyInput('scope-jql', 'labels = changed');
+    expect((bodyQ('scope-preview-button') as HTMLButtonElement).disabled).toBe(true);
+    expect(bodyQ('scope-preview-dirty')).not.toBeNull();
+  });
+});

@@ -165,6 +165,30 @@ export type WaitingTicket = z.infer<typeof WaitingTicketSchema>;
 export const WaitingListResponseSchema = makePaginatedResponseSchema(WaitingTicketSchema);
 export type WaitingListResponse = z.infer<typeof WaitingListResponseSchema>;
 
+/**
+ * POST /api/workspaces/:id/ticket-count — live-Jira preview of how many tickets
+ * fall inside the workspace poller scope (project + active sprint for scrum +
+ * `scope_jql`). An optional `status` narrows to a single status — this mirrors
+ * how an agent is actually triggered (`trigger_status == last_seen_status`), so
+ * the agent form can preview "how many tickets would trigger me". `trigger_jql`
+ * is deliberately NOT applied: it is stored/linted but never executed at runtime.
+ */
+export const TicketCountRequestSchema = z
+  .object({ status: z.string().min(1).optional() })
+  .strict();
+export type TicketCountRequest = z.infer<typeof TicketCountRequestSchema>;
+
+export const TicketCountResponseSchema = z
+  .object({
+    count: z.number().int(),
+    /** The composed JQL, echoed for transparency/debugging in the UI. */
+    jql: z.string(),
+    /** Scrum: the active sprint the count was scoped to; null (kanban, or no active sprint). */
+    active_sprint: z.object({ id: z.number().int() }).nullable(),
+  })
+  .strict();
+export type TicketCountResponse = z.infer<typeof TicketCountResponseSchema>;
+
 export const BoardStatusResponseSchema = z.object({
   id: z.string(),
   name: z.string(),

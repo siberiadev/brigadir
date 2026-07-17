@@ -108,6 +108,31 @@ describe('AgentForm — statuses + linter mirror', () => {
     expect(saved).toBe(true);
   });
 
+  it('preview button is gated on a trigger_status, then posts {status} and renders the count', async () => {
+    let sentStatus: string | undefined;
+    server.use(
+      http.post('/api/workspaces/:id/ticket-count', async ({ request }) => {
+        sentStatus = ((await request.json()) as { status?: string }).status;
+        return HttpResponse.json({ count: 7, jql: 'project = "BRIG"', active_sprint: { id: 100 } });
+      }),
+    );
+
+    const wrapper = mountForm();
+    await flush();
+
+    // No trigger status yet → button disabled.
+    const btn = wrapper.find('[data-test="trigger-preview-button"]');
+    expect(btn.exists()).toBe(true);
+    expect(btn.attributes('disabled')).toBeDefined();
+
+    await setStatus(wrapper, 'trigger-status-select', 'Ready for Dev');
+    await wrapper.find('[data-test="trigger-preview-button"]').trigger('click');
+    await flush();
+
+    expect(sentStatus).toBe('Ready for Dev');
+    expect(wrapper.find('[data-test="trigger-preview-result"]').text()).toContain('7 ticket(s)');
+  });
+
   it('renders profile options as "<type> — <model> (<name>)" / "mock (<name>)" and defaults to claude_cli', async () => {
     const wrapper = mountForm();
     await flush();

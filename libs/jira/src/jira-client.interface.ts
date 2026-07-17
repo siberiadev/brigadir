@@ -59,6 +59,13 @@ export interface JiraClient {
    * (feature 011, D7). Callers compose the JQL server-side (D6).
    */
   searchIssues(jql: string, fields: string[], maxResults: number): Promise<JiraIssue[]>;
+  /**
+   * POST /rest/api/3/search/approximate-count → the estimated number of issues
+   * matching the JQL. The new /search/jql endpoint dropped `total`, so this is
+   * the only way to get a count without paginating every page. Backs the
+   * dashboard "preview ticket count" buttons (workspace scope + agent trigger).
+   */
+  approximateCount(jql: string): Promise<number>;
 
   // --- mutations (serialized per issue key) ---
   /** Discover→match-by-name→POST; TTL cache; 409 retry once; NoTransitionPath. */

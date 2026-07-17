@@ -86,6 +86,9 @@ export class LazyJiraClient implements JiraClient {
   async searchIssues(jql: string, fields: string[], maxResults: number): Promise<JiraIssue[]> {
     return (await this.client()).searchIssues(jql, fields, maxResults);
   }
+  async approximateCount(jql: string): Promise<number> {
+    return (await this.client()).approximateCount(jql);
+  }
   async transitionTo(issueKey: string, targetStatusName: string): Promise<void> {
     return (await this.client()).transitionTo(issueKey, targetStatusName);
   }

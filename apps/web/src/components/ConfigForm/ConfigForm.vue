@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue';
 import type { WorkspaceRepository } from '@brigadir/contracts';
-import { useUpdateSettings } from '../../composables/useWorkspaces';
+import { useUpdateSettings, useTicketCount } from '../../composables/useWorkspaces';
 
 /**
  * Configuration form body (feature 008, US2) — branch prefix, advanced scope
@@ -51,6 +51,26 @@ async function submit() {
   emit('saved');
 }
 
+// --- live-Jira scope preview ---
+// Counts against the SAVED scope_jql, so it's only meaningful when the field is
+// unchanged. A dirty scope_jql disables the button (save first, then preview).
+const ticketCount = useTicketCount(props.workspaceId);
+const previewResult = ref('');
+const scopeDirty = computed(() => (form.scope_jql || '') !== (props.scopeJql ?? ''));
+
+async function previewCount() {
+  previewResult.value = '';
+  try {
+    const res = await ticketCount.mutateAsync({});
+    previewResult.value =
+      res.active_sprint === null && res.count === 0
+        ? 'No active sprint on this board — nothing in scope.'
+        : `${res.count} ticket(s) in scope.`;
+  } catch (err) {
+    previewResult.value = (err as Error)?.message ?? 'Preview failed.';
+  }
+}
+
 defineExpose({ submit, saving });
 </script>
 
@@ -67,6 +87,22 @@ defineExpose({ submit, saving });
     </el-divider>
     <el-form-item v-if="showAdvanced" label="Scope JQL (advanced)">
       <el-input v-model="form.scope_jql" data-test="scope-jql" />
+      <div class="preview-row">
+        <el-button
+          data-test="scope-preview-button"
+          :loading="ticketCount.isPending.value"
+          :disabled="scopeDirty"
+          @click="previewCount"
+        >
+          Preview ticket count
+        </el-button>
+        <span v-if="scopeDirty" class="preview-hint" data-test="scope-preview-dirty">
+          Save to preview the new scope.
+        </span>
+        <span v-else-if="previewResult" class="preview-hint" data-test="scope-preview-result">
+          {{ previewResult }}
+        </span>
+      </div>
     </el-form-item>
 
     <h4>Repositories (first = default)</h4>
@@ -96,5 +132,15 @@ defineExpose({ submit, saving });
   gap: 8px;
   align-items: center;
   margin-bottom: 8px;
+}
+.preview-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.preview-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 </style>

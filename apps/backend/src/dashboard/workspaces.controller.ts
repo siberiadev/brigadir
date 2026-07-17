@@ -8,15 +8,18 @@ import {
   type BrigadirDb,
   schema,
   getWorkspaceSettings,
+  getScopeJql,
   patchWorkspaceSettings,
   seedOrchestratorAgent,
 } from '@brigadir/database';
+import { buildScopeJql } from '@brigadir/ingest';
 import {
   JiraClientFactory,
   StatusesService,
   StatusesUnavailable,
   encodeJiraCredentials,
   decodeJiraCredentials,
+  jqlEscape,
 } from '@brigadir/jira';
 import {
   WorkspaceVerifyRequestSchema,
@@ -24,12 +27,14 @@ import {
   WorkspaceRotateRequestSchema,
   WorkspaceSettingsRequestSchema,
   CreateTeamRequestSchema,
+  TicketCountRequestSchema,
   type CreateTeamResponse,
   type WorkspaceListResponse,
   type WorkspaceResponse,
   type VerifyResponse,
   type WaitingListResponse,
   type WaitingTicket,
+  type TicketCountResponse,
   type JiraBoardType,
 } from '@brigadir/contracts';
 import { DashboardTokenGuard } from './dashboard-token.guard';
@@ -88,6 +93,64 @@ export class WorkspacesController {
     const parsed = WorkspaceVerifyRequestSchema.safeParse(body);
     if (!parsed.success) throw zodToValidationError(parsed.error);
     return this.runVerify(parsed.data);
+  }
+
+  /**
+   * Live-Jira preview of the ticket count for the workspace's poller scope
+   * (project + active sprint for scrum + `scope_jql`). Optional `status` narrows
+   * to one status — mirroring how an agent triggers (status equality), so the
+   * agent form can preview "how many tickets would trigger me". Uses the STORED
+   * credentials (via forWorkspace) and the SAME scope builder as the poller;
+   * `trigger_jql` is intentionally not applied (never executed at runtime).
+   */
+  @Post(':id/ticket-count')
+  @HttpCode(200)
+  async ticketCount(@Param('id') id: string, @Body() body: unknown): Promise<TicketCountResponse> {
+    const parsed = TicketCountRequestSchema.safeParse(body);
+    if (!parsed.success) throw zodToValidationError(parsed.error);
+
+    const [ws] = await this.db
+      .select({
+        boardId: schema.workspaces.jiraBoardId,
+        boardType: schema.workspaces.jiraBoardType,
+        projectKey: schema.workspaces.jiraProjectKey,
+      })
+      .from(schema.workspaces)
+      .where(eq(schema.workspaces.id, id))
+      .limit(1);
+    if (!ws) throw notFoundError('workspace_not_found', 'Workspace not found.');
+
+    const scopeJql = await getScopeJql(this.db, id);
+    const jira = await this.jiraFactory.forWorkspace(id);
+
+    // Scrum boards scope to the active sprint (mirrors the poller). No active
+    // sprint → idle: nothing would ingest, so the count is 0 (FR-030 parity).
+    let sprintId: number | null = null;
+    if (ws.boardType === 'scrum') {
+      sprintId = ws.boardId != null ? await jira.getActiveSprintId(ws.boardId) : null;
+      if (sprintId == null) {
+        return { count: 0, jql: '', active_sprint: null };
+      }
+    }
+
+    // Same builder the poller uses, WITHOUT `since` (full current scope), then
+    // AND the optional status — this is exactly the set that would trigger an
+    // agent bound to that status.
+    let jql = buildScopeJql({
+      boardType: ws.boardType as JiraBoardType,
+      projectKey: ws.projectKey,
+      sprintId,
+      scopeJql,
+    });
+    if (parsed.data.status) {
+      // buildScopeJql appends "ORDER BY updated ASC"; splice the status clause
+      // in before it so the JQL stays valid.
+      const [where, order] = jql.split(/\s+ORDER BY\s+/i);
+      jql = `${where} AND status = "${jqlEscape(parsed.data.status)}"${order ? ` ORDER BY ${order}` : ''}`;
+    }
+
+    const count = await jira.approximateCount(jql);
+    return { count, jql, active_sprint: sprintId != null ? { id: sprintId } : null };
   }
 
   @Post()

@@ -6,6 +6,7 @@ import type {
   WorkspaceCreateRequest,
   WorkspaceRotateRequest,
   WorkspaceSettingsRequest,
+  TicketCountRequest,
 } from '@brigadir/contracts';
 import { workspacesApi } from '../api/workspaces';
 
@@ -35,6 +36,17 @@ export function useWorkspace(id: string) {
 
 export function useVerifyWorkspace() {
   return useMutation({ mutationFn: (body: WorkspaceVerifyRequest) => api.verify(body) });
+}
+
+/**
+ * Live-Jira ticket-count preview (no server-state change → no invalidation,
+ * same shape as useVerifyWorkspace). Used by the workspace settings form
+ * (scope preview) and the agent form (trigger-status preview).
+ */
+export function useTicketCount(workspaceId: string) {
+  return useMutation({
+    mutationFn: (body: TicketCountRequest = {}) => api.ticketCount(workspaceId, body),
+  });
 }
 
 export function useCreateWorkspace() {

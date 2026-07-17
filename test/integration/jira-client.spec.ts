@@ -42,6 +42,14 @@ describe('BasicAuthJiraClient over mock Jira (T048/T052)', () => {
     expect(issues[0].fields.status.name).toBe('Ready for Dev');
   });
 
+  it('approximateCount returns the number of issues matching the JQL scope + status', async () => {
+    for (let i = 1; i <= 4; i++) mock.seedIssue(`BRIG-${i}`, { status: 'Ready for Dev' });
+    mock.seedIssue('BRIG-5', { status: 'In Progress' });
+    expect(await client.approximateCount('project = BRIG')).toBe(5);
+    expect(await client.approximateCount('project = BRIG AND status = "Ready for Dev"')).toBe(4);
+    expect(await client.approximateCount('project = BRIG AND status = "Done"')).toBe(0);
+  });
+
   it('serializes concurrent writes to one issue in submission order (SC-003)', async () => {
     mock.seedIssue('BRIG-1', { status: 'Ready for Dev' });
     await Promise.all([0, 1, 2, 3, 4].map((i) => client.addComment('BRIG-1', adf(`c${i}`))));

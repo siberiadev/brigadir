@@ -8,6 +8,8 @@ import type {
   WorkspaceCreateRequest,
   WorkspaceRotateRequest,
   WorkspaceSettingsRequest,
+  TicketCountRequest,
+  TicketCountResponse,
 } from '@brigadir/contracts';
 import { apiClient, toQuery, type ApiClient } from './client';
 
@@ -19,6 +21,10 @@ export function workspacesApi(client: ApiClient = apiClient) {
     get: (id: string) => client.get<WorkspaceResponse>(`/api/workspaces/${id}`),
     verify: (body: WorkspaceVerifyRequest) =>
       client.post<VerifyResponse>('/api/workspaces/verify', body),
+    // Live-Jira preview of how many tickets fall inside the workspace scope
+    // (optionally narrowed to a status — the agent-trigger preview).
+    ticketCount: (id: string, body: TicketCountRequest) =>
+      client.post<TicketCountResponse>(`/api/workspaces/${id}/ticket-count`, body),
     // feature 015 (FR-010): the response may carry warnings[] — e.g. the
     // brigadir template's triage executor was deleted and seeding fell back
     // to the built-in profile (same convention as agent create/update).

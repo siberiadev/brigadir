@@ -280,6 +280,15 @@ export class BasicAuthJiraClient implements JiraClient {
     return page.issues ?? [];
   }
 
+  async approximateCount(jql: string): Promise<number> {
+    const res = await this.request<{ count?: number }>(
+      'POST',
+      '/rest/api/3/search/approximate-count',
+      { jql },
+    );
+    return res.count ?? 0;
+  }
+
   private async getIssueContext(
     issueKey: string,
   ): Promise<{ projectKey: string; issueType: string; currentStatus: string }> {

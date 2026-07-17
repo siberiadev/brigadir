@@ -196,6 +196,8 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
       const keys = keyIn[1].split(',').map((s) => s.trim().replace(/^"|"$/g, ''));
       if (!keys.includes(i.key)) return false;
     }
+    const statusEq = jql.match(/status\s*=\s*"([^"]+)"/i);
+    if (statusEq && i.statusName !== statusEq[1]) return false;
     const labelEq = jql.match(/labels\s*=\s*"?([\w-]+)"?/i);
     if (labelEq && !i.labels.includes(labelEq[1])) return false;
     const labelIn = jql.match(/labels\s+in\s*\(([^)]*)\)/i);
@@ -246,6 +248,16 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
         issues: projected,
         ...(nextStart < all.length ? { nextPageToken: String(nextStart) } : {}),
       });
+    }),
+
+    // --- POST /rest/api/3/search/approximate-count (count matching the JQL scope) ---
+    http.post(`${baseUrl}/rest/api/3/search/approximate-count`, async ({ request }) => {
+      const r = maybe429();
+      if (r) return r;
+      const body = (await request.json()) as { jql?: string };
+      const jql = body.jql ?? '';
+      const count = [...issues.values()].filter((i) => matchesJql(i, jql)).length;
+      return HttpResponse.json({ count });
     }),
 
     // --- Agile board introspection (404 for an unknown/inaccessible board) ---

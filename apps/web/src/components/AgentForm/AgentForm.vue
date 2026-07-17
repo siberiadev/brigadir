@@ -15,6 +15,7 @@ import { MAX_PAGE_SIZE } from '@brigadir/contracts/pagination';
 import { useStatuses } from '../../composables/useStatuses';
 import { useAgents, useCreateAgent, useUpdateAgent, useTestRun } from '../../composables/useAgents';
 import { useExecutors } from '../../composables/useExecutors';
+import { useTicketCount } from '../../composables/useWorkspaces';
 import { ApiError } from '../../api/client';
 
 const props = defineProps<{
@@ -233,6 +234,27 @@ async function runTest() {
   }
 }
 
+// --- live-Jira trigger preview: how many tickets currently sit in the agent's
+// trigger_status inside the workspace scope (this is exactly what would trigger
+// a run today — trigger_jql is not evaluated at runtime). Available whenever a
+// trigger_status is chosen, in both create and edit mode.
+const ticketCount = useTicketCount(props.workspaceId);
+const triggerPreviewResult = ref('');
+
+async function previewTrigger() {
+  if (!form.trigger_status) return;
+  triggerPreviewResult.value = '';
+  try {
+    const res = await ticketCount.mutateAsync({ status: form.trigger_status });
+    triggerPreviewResult.value =
+      res.active_sprint === null && res.count === 0
+        ? 'No active sprint on this board — nothing would trigger.'
+        : `${res.count} ticket(s) in "${form.trigger_status}" would trigger this agent.`;
+  } catch (err) {
+    triggerPreviewResult.value = (err as Error)?.message ?? 'Preview failed.';
+  }
+}
+
 // The Cancel/Save buttons live in the hosting FormDialog footer (AgentsList),
 // so we expose the imperative bits the footer drives.
 defineExpose({ submit, saving });
@@ -337,6 +359,19 @@ defineExpose({ submit, saving });
         </el-select>
         <div v-if="errorFor('trigger_status')" class="field-error" data-test="trigger-status-error">
           {{ errorFor('trigger_status') }}
+        </div>
+        <div class="preview-row">
+          <el-button
+            data-test="trigger-preview-button"
+            :loading="ticketCount.isPending.value"
+            :disabled="!form.trigger_status"
+            @click="previewTrigger"
+          >
+            Preview matching tickets
+          </el-button>
+          <span v-if="triggerPreviewResult" class="field-hint" data-test="trigger-preview-result">
+            {{ triggerPreviewResult }}
+          </span>
         </div>
       </el-form-item>
 
@@ -481,6 +516,16 @@ defineExpose({ submit, saving });
   font-size: 12px;
   color: var(--el-color-warning);
   margin-top: 4px;
+}
+.preview-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.field-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 .test-run {
   display: flex;
