@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import type { RunCostPeriod, RunListItem, RunStatus } from '@brigadir/contracts';
 import { MAX_PAGE_SIZE } from '@brigadir/contracts/pagination';
-import { useRuns, useRunsCost } from '../composables/useRuns';
+import { useRuns, useRunsCost, useCancelAllRuns } from '../composables/useRuns';
 import { useAgents } from '../composables/useAgents';
 import { usePagination } from '../composables/usePagination';
 import { useNow } from '../composables/useNow';
@@ -65,6 +66,28 @@ function liveDuration(row: RunListItem): string {
 function openRun(row: RunListItem) {
   router.push(`/runs/${row.run_id}`);
 }
+
+// Bulk stop: queued + running → cancelled after an explicit confirmation.
+// `awaiting_human` runs are untouched server-side (rule #7), which the
+// dialog spells out so "stop all" never reads as "clears the human queue".
+const cancelAll = useCancelAllRuns(props.id);
+async function stopAllRuns() {
+  try {
+    await ElMessageBox.confirm(
+      'Cancel every queued and running run in this workspace? Runs awaiting a human are not affected. This cannot be undone.',
+      'Stop all runs',
+      { confirmButtonText: 'Stop all', cancelButtonText: 'Cancel', type: 'warning' },
+    );
+  } catch {
+    return; // dismissed
+  }
+  const res = await cancelAll.mutateAsync();
+  ElMessage.success(
+    res.cancelled_count === 0
+      ? 'No active runs to stop.'
+      : `Cancelled ${res.cancelled_count} run${res.cancelled_count === 1 ? '' : 's'}.`,
+  );
+}
 </script>
 
 <template>
@@ -72,6 +95,16 @@ function openRun(row: RunListItem) {
     <div class="header-row">
       <h2>Runs</h2>
       <div class="cost" data-test="cost-header">
+        <el-button
+          type="danger"
+          plain
+          size="small"
+          data-test="stop-all-runs"
+          :loading="cancelAll.isPending.value"
+          @click="stopAllRuns"
+        >
+          Stop all runs
+        </el-button>
         <el-radio-group v-model="period" size="small" data-test="cost-period">
           <el-radio-button label="24h" value="24h">24h</el-radio-button>
           <el-radio-button label="7d" value="7d">7d</el-radio-button>

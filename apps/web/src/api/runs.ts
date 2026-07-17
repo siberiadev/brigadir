@@ -6,6 +6,7 @@ import type {
   RunCostResponse,
   RunListResponse,
   RunRetryResponse,
+  RunsCancelAllResponse,
 } from '@brigadir/contracts';
 import { apiClient, toQuery, type ApiClient } from './client';
 
@@ -56,6 +57,8 @@ export function runsApi(client: ApiClient = apiClient) {
       client.get<RunCostResponse>(`/api/workspaces/${workspaceId}/runs/cost${toQuery({ period })}`),
     card: (runId: string) => client.get<RunCardResponse>(`/api/runs/${runId}`),
     cancel: (runId: string) => client.post<RunCancelResponse>(`/api/runs/${runId}/cancel`),
+    cancelAll: (workspaceId: string) =>
+      client.post<RunsCancelAllResponse>(`/api/workspaces/${workspaceId}/runs/cancel-all`),
     retry: (runId: string) => client.post<RunRetryResponse>(`/api/runs/${runId}/retry`),
   };
 }

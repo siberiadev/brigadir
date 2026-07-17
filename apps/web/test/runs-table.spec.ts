@@ -130,6 +130,58 @@ describe('Runs — table + filters + cost', () => {
     expect(table.text().match(/1m \d+s/)?.[0]).not.toBe(before);
   });
 
+  it('Stop all runs fires cancel-all only after confirmation and reports the count', async () => {
+    let cancelAllCalls = 0;
+    server.use(
+      http.post('/api/workspaces/:id/runs/cancel-all', () => {
+        cancelAllCalls += 1;
+        return HttpResponse.json({ ok: true, cancelled_count: 2 });
+      }),
+    );
+
+    const wrapper = mountRuns();
+    await flush();
+
+    await wrapper.find('[data-test="stop-all-runs"]').trigger('click');
+    await flush(5);
+    // No request until the ElMessageBox confirm (renders into document.body;
+    // pick the LAST box — earlier tests' boxes may still be transitioning out).
+    expect(cancelAllCalls).toBe(0);
+    const confirms = document.querySelectorAll<HTMLButtonElement>(
+      '.el-message-box__btns .el-button--primary',
+    );
+    expect(confirms.length).toBeGreaterThan(0);
+    confirms[confirms.length - 1].click();
+    await flush(10);
+
+    expect(cancelAllCalls).toBe(1);
+    expect(document.body.textContent).toContain('Cancelled 2 runs.');
+  });
+
+  it('dismissing the Stop all confirmation sends nothing', async () => {
+    let cancelAllCalls = 0;
+    server.use(
+      http.post('/api/workspaces/:id/runs/cancel-all', () => {
+        cancelAllCalls += 1;
+        return HttpResponse.json({ ok: true, cancelled_count: 0 });
+      }),
+    );
+
+    const wrapper = mountRuns();
+    await flush();
+
+    await wrapper.find('[data-test="stop-all-runs"]').trigger('click');
+    await flush(5);
+    const dismissals = document.querySelectorAll<HTMLButtonElement>(
+      '.el-message-box__btns .el-button:not(.el-button--primary)',
+    );
+    expect(dismissals.length).toBeGreaterThan(0);
+    dismissals[dismissals.length - 1].click();
+    await flush(10);
+
+    expect(cancelAllCalls).toBe(0);
+  });
+
   it('a row click routes to the run card', async () => {
     const wrapper = mountRuns();
     await flush();

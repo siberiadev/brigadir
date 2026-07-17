@@ -163,6 +163,23 @@ export const RunCancelResponseSchema = z
   .strict();
 export type RunCancelResponse = z.infer<typeof RunCancelResponseSchema>;
 
+// --- POST /api/workspaces/:id/runs/cancel-all ---
+
+/**
+ * Bulk stop for a workspace: every `queued` or `running` run flips to
+ * `cancelled` in one guarded UPDATE. `awaiting_human` is deliberately NOT
+ * touched (CLAUDE.md rule #7 — a parked run is a human's decision, never
+ * clobbered by a bulk action). `cancelled_count` = rows actually flipped
+ * (0 is a valid, successful outcome).
+ */
+export const RunsCancelAllResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    cancelled_count: z.number().int(),
+  })
+  .strict();
+export type RunsCancelAllResponse = z.infer<typeof RunsCancelAllResponseSchema>;
+
 // --- POST /api/runs/:id/retry ---
 
 export const RunRetryResponseSchema = z
