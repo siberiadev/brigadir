@@ -1232,3 +1232,12 @@ runs-global (422-матрица, ordering, limit, ticketless), home-workspaces
 (агрегаты, paused, runless), dashboard-auth (+3 новых роута), веб —
 home-dashboard.spec (24 сценария: тикер real-timers, spend без refetch,
 per-block degradation) + правки app-sidebar/workspace-tabs под новый роутинг.
+
+Пост-мерж коллизия с фичей 016 (влилась в main тем же днём): 016 намеренно
+перевернула open-очередь на newest-first, а hero 017 требует СТАРЕЙШИЕ 5
+(спека FR-005: longest-waiting = самое срочное). Решение (подтверждено
+оператором): аддитивный параметр `?order=oldest|newest` на
+GET /api/human-tasks (дефолт — newest-first 016-й, страница очереди не
+меняется; мусор → дефолт через `.catch()`); hero опрашивает `order=oldest`
+(зеркальный tie-break id ASC). Тесты: интеграционные кейсы flip/garbage в
+ordering-сьюте 016, веб-кейс «hero шлёт order=oldest».

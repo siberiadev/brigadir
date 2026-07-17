@@ -285,4 +285,17 @@ describe('human queue open ordering — newest-first, deterministic under pagina
     expect(new Set(walked).size).toBe(3);
     expect(page1.total).toBe(3);
   });
+
+  // Feature 017: the Home hero's explicit opt-in — oldest first (longest-
+  // waiting decisions on top), with the mirrored id-ASC tie-breaker.
+  it('?order=oldest flips the open list to oldest-first with id-asc ties', async () => {
+    const body = await fetch(`${url}/api/human-tasks?status=open&order=oldest`, { headers: authHeaders }).then((r) => r.json());
+    const tieIdsAsc = [...tieIdsDesc].reverse();
+    expect(body.items.map((t: { id: string }) => t.id)).toEqual([...tieIdsAsc, topId]);
+  });
+
+  it('a garbage order value falls back to the newest-first default', async () => {
+    const body = await fetch(`${url}/api/human-tasks?status=open&order=sideways`, { headers: authHeaders }).then((r) => r.json());
+    expect(body.items.map((t: { id: string }) => t.id)).toEqual([topId, ...tieIdsDesc]);
+  });
 });

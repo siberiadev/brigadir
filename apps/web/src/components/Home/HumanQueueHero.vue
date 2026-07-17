@@ -1,9 +1,10 @@
 <script setup lang="ts">
 /**
  * The hero block (feature 017, US1): "does the system need me?". Reuses the
- * existing open human-tasks list (top 5 oldest — the endpoint sorts open tasks
- * oldest-first); the header count is the SAME response's `total`, so count and
- * rows can never disagree within the block.
+ * existing open human-tasks list with the explicit `order=oldest` opt-in — the
+ * hero surfaces the LONGEST-waiting decisions (the queue page itself defaults
+ * to newest-first since feature 016). The header count is the SAME response's
+ * `total`, so count and rows can never disagree within the block.
  */
 import { computed } from 'vue';
 import { useRouter } from 'vue-router';
@@ -14,7 +15,7 @@ import { relativeAge } from '../../utils/date';
 const HERO_PAGE_SIZE = 5;
 
 const router = useRouter();
-const tasksQuery = useHumanTasks('open', { page: 1, page_size: HERO_PAGE_SIZE });
+const tasksQuery = useHumanTasks('open', { page: 1, page_size: HERO_PAGE_SIZE }, undefined, 'oldest');
 const items = computed<HumanQueueItem[]>(() => tasksQuery.data.value?.items ?? []);
 const total = computed(() => tasksQuery.data.value?.total ?? 0);
 

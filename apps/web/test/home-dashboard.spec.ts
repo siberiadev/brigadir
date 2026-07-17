@@ -130,6 +130,20 @@ describe('Home — human queue hero (US1)', () => {
     expect(wrapper.find('[data-test="hero-empty"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="hero-count"]').text()).toBe('0');
   });
+
+  it('requests the open list OLDEST-first (order=oldest) — longest-waiting on top', async () => {
+    // The queue page defaults to newest-first (feature 016); the hero opts in
+    // to the 017 ordering explicitly.
+    let capturedOrder: string | null = null;
+    server.use(
+      http.get('/api/human-tasks', ({ request }) => {
+        capturedOrder = new URL(request.url).searchParams.get('order');
+        return HttpResponse.json(sampleHumanQueueOpen);
+      }),
+    );
+    await mountHome();
+    expect(capturedOrder).toBe('oldest');
+  });
 });
 
 describe('Home — needs attention list (US3)', () => {

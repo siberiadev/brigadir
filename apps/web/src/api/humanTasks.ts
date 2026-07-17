@@ -1,6 +1,7 @@
 import type {
   HumanQueueCountResponse,
   HumanQueueListResponse,
+  HumanQueueOrder,
   HumanQueueStatus,
   PaginationQuery,
   ResolveHumanTaskInput,
@@ -23,9 +24,17 @@ export function humanTasksApi(client: ApiClient = apiClient) {
       status: HumanQueueStatus = 'open',
       params: Partial<PaginationQuery> = {},
       workspaceId?: string,
+      // Feature 017: open-list ordering opt-in ('oldest' — the Home hero).
+      // Omitted → server default (newest-first, feature 016).
+      order?: HumanQueueOrder,
     ) =>
       client.get<HumanQueueListResponse>(
-        `/api/human-tasks${toQuery({ status, ...params, ...(workspaceId ? { workspace: workspaceId } : {}) })}`,
+        `/api/human-tasks${toQuery({
+          status,
+          ...params,
+          ...(workspaceId ? { workspace: workspaceId } : {}),
+          ...(order ? { order } : {}),
+        })}`,
       ),
     count: () => client.get<HumanQueueCountResponse>('/api/human-tasks/count'),
     resolve: (id: string, body: ResolveHumanTaskInput) =>
