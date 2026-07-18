@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   AgentWriteRequestSchema,
   WorkspaceResponseSchema,
+  WorkspaceSettingsRequestSchema,
   VerifyResponseSchema,
 } from './dashboard.schema';
 
@@ -62,6 +63,7 @@ describe('dashboard schemas (T119)', () => {
       branch_prefix: 'feature',
       scope_jql: 'labels = ai',
       enabled: true,
+      ticket_scoping: false,
       created_at: '2026-07-12T00:00:00.000Z',
       updated_at: '2026-07-12T00:00:00.000Z',
     };
@@ -85,6 +87,19 @@ describe('dashboard schemas (T119)', () => {
       scope_jql: null,
     });
     expect(legacy.success).toBe(true);
+  });
+
+
+  it('ticket_scoping (feature 020, D2b): optional on the settings PUT, required boolean on the response', () => {
+    // Absent ⇒ unchanged (merge-patch): the PUT body parses without the key.
+    expect(WorkspaceSettingsRequestSchema.safeParse({}).success).toBe(true);
+    const on = WorkspaceSettingsRequestSchema.safeParse({ ticket_scoping: true });
+    expect(on.success).toBe(true);
+    if (on.success) expect(on.data.ticket_scoping).toBe(true);
+    // .strict() still rejects unknown keys.
+    expect(WorkspaceSettingsRequestSchema.safeParse({ ticket_scopingg: true }).success).toBe(false);
+    // Non-boolean rejected.
+    expect(WorkspaceSettingsRequestSchema.safeParse({ ticket_scoping: 'yes' }).success).toBe(false);
   });
 
   it('the Workspace/Verify response schemas never expose credentials', () => {

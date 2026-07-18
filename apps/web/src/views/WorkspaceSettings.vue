@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
-import { useWorkspace } from '../composables/useWorkspaces';
+import { useWorkspace, useSetTicketScoping } from '../composables/useWorkspaces';
 import CredentialBadge from '../components/CredentialBadge.vue';
 import ConnectionForm from '../components/ConnectionForm/ConnectionForm.vue';
 import ConfigForm from '../components/ConfigForm/ConfigForm.vue';
@@ -47,6 +47,25 @@ function onConnectionSaved() {
 function onConfigSaved() {
   showConfig.value = false;
   ElMessage.success('Settings saved — effective on the next poller pass.');
+}
+
+// Feature 020 (D2b): per-workspace opt-in for ticket repository scoping.
+// Inline switch (no modal) — the flag is standalone, like the list's
+// enable/pause toggle.
+const setTicketScoping = useSetTicketScoping();
+function onTicketScopingChange(value: string | number | boolean) {
+  setTicketScoping.mutate(
+    { workspaceId: props.id, ticketScoping: value === true },
+    {
+      onSuccess: () =>
+        ElMessage.success(
+          value === true
+            ? 'Ticket scoping enabled — new runs narrow to the ticket\'s Components.'
+            : 'Ticket scoping disabled.',
+        ),
+      onError: () => ElMessage.error('Failed to update ticket scoping.'),
+    },
+  );
 }
 </script>
 
@@ -103,6 +122,20 @@ function onConfigSaved() {
         </el-descriptions-item>
         <el-descriptions-item label="Scope filter (advanced)">
           <span data-test="config-scope-jql">{{ workspace.scope_jql ?? 'None' }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="Ticket scoping">
+          <div class="ticket-scoping">
+            <el-switch
+              :model-value="workspace.ticket_scoping"
+              :loading="setTicketScoping.isPending.value"
+              data-test="config-ticket-scoping"
+              @change="onTicketScopingChange"
+            />
+            <span class="ticket-scoping-hint">
+              Narrow each run's repositories to the ticket's Jira Components; unresolvable tickets go
+              to the human queue.
+            </span>
+          </div>
         </el-descriptions-item>
         <el-descriptions-item label="Repositories">
           <span v-if="!workspace.repositories.length" data-test="config-repos-empty">
@@ -208,6 +241,15 @@ function onConfigSaved() {
   font-weight: 600;
 }
 .repo-url {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+.ticket-scoping {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.ticket-scoping-hint {
   color: var(--el-text-color-secondary);
   font-size: 12px;
 }

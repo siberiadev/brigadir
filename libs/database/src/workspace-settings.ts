@@ -60,6 +60,17 @@ export async function getReworkMax(db: Db, workspaceId: string): Promise<number>
 }
 
 /**
+ * Whether ticket repository scoping via Jira Components is enabled for the
+ * workspace (feature 020, D2b). Absent settings key ⇒ false (OFF) — narrowing
+ * and the fail-closed gate never apply. The executor reads the flag off the
+ * settings row it already loads at repository resolution; this accessor exists
+ * for backend/tests.
+ */
+export async function getTicketScoping(db: Db, workspaceId: string): Promise<boolean> {
+  return (await getWorkspaceSettings(db, workspaceId)).ticket_scoping === true;
+}
+
+/**
  * The workspace's ordered repository list (feature 005; first = default). An
  * absent/empty `repositories` blob yields `[]`.
  */

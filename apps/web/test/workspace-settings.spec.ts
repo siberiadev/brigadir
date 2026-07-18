@@ -82,8 +82,16 @@ describe('WorkspaceSettings — read-only blocks (US1)', () => {
     expect(wrapper.find('[data-test="executors-table"]').exists()).toBe(false);
 
     // The read-only view has NO editable input controls (SC-001) — inputs live
-    // only inside the (closed) Edit modals.
-    expect(wrapper.findAll('input').length).toBe(0);
+    // only inside the (closed) Edit modals. The one sanctioned exception is the
+    // feature-020 ticket-scoping el-switch (a standalone toggle like the list's
+    // enable/pause switch), whose hidden checkbox input is excluded here.
+    const textInputs = wrapper.findAll('input').filter((i) => i.attributes('type') !== 'checkbox');
+    expect(textInputs.length).toBe(0);
+
+    // Feature 020 (D2b): the ticket-scoping toggle renders and reflects the
+    // persisted flag (sampleWorkspace carries ticket_scoping: false ⇒ off).
+    expect(wrapper.find('[data-test="config-ticket-scoping"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="config-ticket-scoping"]').classes()).not.toContain('is-checked');
 
     // Actual values surface.
     expect(wrapper.find('[data-test="jira-site"]').text()).toBe(sampleWorkspace.jira_site_url);

@@ -74,6 +74,14 @@ export interface WrapperOptions {
    * byte-identical to the pre-019 form.
    */
   repos?: WrapperRepoInfo[];
+  /**
+   * Feature 020 (D4): repositories EXCLUDED by ticket-component narrowing.
+   * Non-empty ⇒ the repositories section appends the `.repos/<name>` on-demand
+   * self-clone note (the same escape hatch the setup protocol uses), so a
+   * slightly-too-narrow scope never strands the run. Absent/empty (non-narrowed
+   * runs) ⇒ the section renders byte-identical to feature 019.
+   */
+  onDemandRepos?: { name: string; url: string }[];
 }
 
 /**
@@ -84,10 +92,25 @@ export interface WrapperOptions {
  * Deliberately NOT a behavior→wrapper compiler (research D9 — that stays
  * cut per the constitution's scope discipline).
  */
-function repositoriesSection(repos: WrapperRepoInfo[], useCallbackChannel: boolean): string[] {
+function repositoriesSection(
+  repos: WrapperRepoInfo[],
+  useCallbackChannel: boolean,
+  onDemandRepos: { name: string; url: string }[] = [],
+): string[] {
   const reportTarget = useCallbackChannel
     ? 'the `artifacts.repos` array of your complete_task call'
     : 'the `artifacts.repos` array of your final JSON report';
+  // Feature 020 (D4): narrowing is a fast path, not a wall — excluded repos
+  // stay reachable via the setup protocol's on-demand self-clone idiom.
+  const escapeHatch =
+    onDemandRepos.length > 0
+      ? [
+          "This ticket's Components scoped the run to the repositories above. These workspace " +
+            'repositories were NOT mounted; if the task genuinely needs one, clone it on demand ' +
+            'into `.repos/<name>` inside your workspace directory:',
+          ...onDemandRepos.map((r) => `- ${r.name}: ${r.url}`),
+        ]
+      : [];
   return [
     '## Repositories',
     'Your workspace directory contains one sub-directory per repository, each already ' +
@@ -106,6 +129,7 @@ function repositoriesSection(repos: WrapperRepoInfo[], useCallbackChannel: boole
     `- Report exactly one entry per CHANGED repository in ${reportTarget} — ` +
       '{repo, branch, pr_url, commits, files_changed} with schema_version: 2. Do not report ' +
       'untouched repositories.',
+    ...escapeHatch,
   ];
 }
 
@@ -126,7 +150,7 @@ export function buildWrapperText(ctx: RunContext, worktreeDir: string, options: 
     ctx.instruction,
     '',
     ...(options.repos && options.repos.length > 0
-      ? [...repositoriesSection(options.repos, options.useCallbackChannel), '']
+      ? [...repositoriesSection(options.repos, options.useCallbackChannel, options.onDemandRepos), '']
       : []),
     '## How to report your result',
     ...(options.useCallbackChannel ? callbackToolsSection() : structuredOutputSection()),

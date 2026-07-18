@@ -33,6 +33,8 @@ interface StoredIssue {
   issueType: string;
   sprintId?: number;
   labels: string[];
+  /** feature 020: component names served on GET /issue/{key} (repo-scoping input). */
+  components: string[];
   /** keys of blockers ("is blocked by"); resolved to live status on read. */
   blockedBy: string[];
   /** feature 004 (T114): epic (parent) key, resolved to live status on read. */
@@ -67,9 +69,12 @@ export interface MockJira {
       issueType?: string;
       sprintId?: number;
       labels?: string[];
+      components?: string[];
     },
   ): void;
   setStatus(key: string, status: string): void;
+  /** feature 020: replace the component names a ticket serves (repo-scoping round trips). */
+  setComponents(key: string, components: string[]): void;
   setCategory(status: string, category: StatusCategoryKey): void;
   /** feature 005: require a specific email:apiToken on /myself (else 401 — token_invalid). */
   expectAuth(email: string, apiToken: string): void;
@@ -295,6 +300,8 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
           // feature 011 (read tools): labels + the comments captured by the
           // write path, oldest-first like live Jira.
           labels: issue.labels ?? [],
+          // feature 020: component objects as live Jira serves them ({name}).
+          components: (issue.components ?? []).map((name) => ({ name })),
           comment: {
             comments: (comments.get(issue.key) ?? []).map((body, i) => ({
               author: { displayName: 'Mock Commenter' },
@@ -350,6 +357,7 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
         issueType: opts.issueType ?? 'Task',
         sprintId: opts.sprintId,
         labels: opts.labels ?? [],
+        components: opts.components ?? [],
         blockedBy: [],
         linked: [],
       });
@@ -357,6 +365,10 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
     setStatus(key, status) {
       const i = issues.get(key);
       if (i) i.statusName = status;
+    },
+    setComponents(key, components) {
+      const i = issues.get(key);
+      if (i) i.components = components;
     },
     setCategory(status, cat) {
       category[status] = cat;

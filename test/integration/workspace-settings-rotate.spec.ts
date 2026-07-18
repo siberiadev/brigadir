@@ -130,6 +130,41 @@ describe('workspace settings + rotation + expiry badge (T141)', () => {
     expect(settings.branch_prefix).toBe('feat');
   });
 
+  it('ticket_scoping (feature 020, D2b) round-trips; absent ⇒ false; merge-patch leaves it unchanged', async () => {
+    const id = await seedWorkspace(null);
+
+    // Absent settings key serializes as false (OFF by default).
+    const before = await fetch(`${url}/api/workspaces/${id}`, { headers });
+    expect(((await before.json()) as { ticket_scoping: boolean }).ticket_scoping).toBe(false);
+
+    // PUT true → persisted in the settings blob and serialized back.
+    const on = await fetch(`${url}/api/workspaces/${id}/settings`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ ticket_scoping: true }),
+    });
+    expect(on.status).toBe(200);
+    expect(((await on.json()) as { ticket_scoping: boolean }).ticket_scoping).toBe(true);
+    const [row] = await db.db.select().from(schema.workspaces).where(eq(schema.workspaces.id, id));
+    expect((row.settings as { ticket_scoping?: boolean }).ticket_scoping).toBe(true);
+
+    // A PUT WITHOUT the field is merge-patch: the flag stays on.
+    const other = await fetch(`${url}/api/workspaces/${id}/settings`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ branch_prefix: 'feat' }),
+    });
+    expect(((await other.json()) as { ticket_scoping: boolean }).ticket_scoping).toBe(true);
+
+    // .strict() still rejects unknown keys.
+    const bad = await fetch(`${url}/api/workspaces/${id}/settings`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ ticket_scopingg: true }),
+    });
+    expect(bad.status).toBe(422);
+  });
+
   // --- feature 008 (FR-014): additive read-only response fields ---
 
   it('toResponse maps bot_email (decoded email only) + branch_prefix + scope_jql, api_token absent', async () => {

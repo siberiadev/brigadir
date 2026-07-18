@@ -93,6 +93,22 @@ describe('presentEvent — other types', () => {
     expect(item.body).toBe('claude-sonnet-5 · 2 tools · mcp: brigadir (connected)');
   });
 
+  it('log/repo-scoping (feature 020, FR-015): renders the narrowing decision message verbatim', () => {
+    const item = presentEvent(
+      event('log', {
+        source: 'repo-scoping',
+        message: 'ticket components narrowed the repository set to: infra (ignored non-repository components: Design)',
+        components: ['infra', 'Design'],
+        matched: ['infra'],
+        ignored: ['Design'],
+        effective: ['infra'],
+        gate: 'passed',
+      }),
+    );
+    expect(item.title).toBe('Repository scoping');
+    expect(item.body).toContain('narrowed the repository set to: infra');
+  });
+
   it('jira_action: composed body', () => {
     const item = presentEvent(event('jira_action', { commented: true, transitioned_to: 'Review' }));
     expect(item.title).toBe('Jira');

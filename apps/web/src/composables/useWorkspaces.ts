@@ -99,3 +99,20 @@ export function useSetWorkspaceEnabled() {
     },
   });
 }
+
+/**
+ * Feature 020 (D2b): toggle ticket repository scoping via Jira Components for
+ * a workspace. Writes `settings.ticket_scoping` via the settings endpoint —
+ * same pattern as the enable/pause switch above.
+ */
+export function useSetTicketScoping() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ workspaceId, ticketScoping }: { workspaceId: string; ticketScoping: boolean }) =>
+      api.updateSettings(workspaceId, { ticket_scoping: ticketScoping }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: workspacesKey });
+      qc.invalidateQueries({ queryKey: workspaceKey(vars.workspaceId) });
+    },
+  });
+}

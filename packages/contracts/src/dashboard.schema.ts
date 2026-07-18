@@ -81,6 +81,10 @@ export const WorkspaceSettingsRequestSchema = z
     // pauses the workspace in the multi-workspace reconcile loop (settings jsonb;
     // no DDL — mirrors WorkspaceSettings.enabled).
     enabled: z.boolean().optional(),
+    // Feature 020 (D2b): per-workspace opt-in for ticket repository scoping via
+    // Jira Components. Absent ⇒ unchanged (settings jsonb; no DDL — mirrors
+    // WorkspaceSettings.ticket_scoping, OFF by default).
+    ticket_scoping: z.boolean().optional(),
   })
   .strict();
 export type WorkspaceSettingsRequest = z.infer<typeof WorkspaceSettingsRequestSchema>;
@@ -110,6 +114,9 @@ export const WorkspaceResponseSchema = z
     // Feature 006 (US5): the enabled/pause flag surfaced so the settings toggle
     // reflects persisted state. Absent settings ⇒ treated as enabled (true).
     enabled: z.boolean(),
+    // Feature 020 (D2b): ticket repository scoping via Jira Components. Absent
+    // settings key ⇒ false (OFF).
+    ticket_scoping: z.boolean(),
     created_at: z.string(),
     updated_at: z.string(),
   })

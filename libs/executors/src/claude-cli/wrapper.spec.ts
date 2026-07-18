@@ -114,6 +114,28 @@ describe('buildWrapperText (T103, D6)', () => {
       expect(text).toContain('- lib: /wt/run-1/lib');
     });
 
+    it('feature 020 (D4): a narrowed run lists excluded repos with the .repos/<name> on-demand note', () => {
+      const text = buildWrapperText(ctx, '/wt/run-1', {
+        useCallbackChannel: true,
+        repos: [repos[0]],
+        onDemandRepos: [{ name: 'backend', url: 'git@acme:backend.git' }],
+      });
+      expect(text).toContain('were NOT mounted');
+      expect(text).toContain('`.repos/<name>`');
+      expect(text).toContain('- backend: git@acme:backend.git');
+    });
+
+    it('feature 020: a NON-narrowed run renders byte-identical to the feature-019 wrapper', () => {
+      const before = buildWrapperText(ctx, '/wt/run-1', { useCallbackChannel: true, repos });
+      const withEmpty = buildWrapperText(ctx, '/wt/run-1', {
+        useCallbackChannel: true,
+        repos,
+        onDemandRepos: [],
+      });
+      expect(withEmpty).toBe(before);
+      expect(before).not.toContain('.repos/<name>');
+    });
+
     it('no-repo runs (repos absent or empty): wrapper is byte-identical to the pre-019 form', () => {
       const without = buildWrapperText(ctx, '/tmp/wt', { useCallbackChannel: true });
       const withEmpty = buildWrapperText(ctx, '/tmp/wt', { useCallbackChannel: true, repos: [] });
