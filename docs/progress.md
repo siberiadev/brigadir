@@ -1312,3 +1312,60 @@ UI: кнопка «Stop all runs» (danger plain) в шапке страницы
 finished_at проставлен, идемпотентность, 404) + 2 кейса в
 `runs-table.spec.ts` (запрос уходит ТОЛЬКО после подтверждения; dismiss —
 ничего не шлёт).
+
+## Iteration 27 — Multi-repository runs (feature 019, 2026-07-18)
+
+Прогон теперь готовит worktree на КАЖДЫЙ репозиторий из scope'а агента:
+`behavior.repositories: string[]` (подмножество workspace-репо; пусто/absent =
+ВСЕ), deprecated `behavior.repository` жив как одноэлементная форма (при обоих
+полях выигрывает список; хранимые строки не переписываются). Layout —
+`worktreeRoot/<runId>/<repo.name>/`, cwd агента = родитель, `runs.worktree_path`
+указывает на родителя, `.brigadir/wrapper.txt` — вне любого git-дерева. Одна
+ветка `<branch_prefix>/<ticketKey>` во всех репо; leftover-политика — по
+каждому репо, без изменений; partial failure на N-м репо откатывает уже
+созданные worktree и родителя (никаких осиротевших директорий). Resume:
+attach где ветка есть, создание где нет (расширение scope между попытками не
+брикает awaiting_human). Setup-прогоны сохранили одноэлементный scope (D5).
+
+ReportSchema v2: `schema_version: 1|2` (union, без связки «версия⇄поле» —
+v1-отчёты валидны навсегда), `artifacts.repos[]` ({repo, branch, pr_url,
+commits, files_changed}, max 20). Прецедентность плоской и plural-форм — ровно
+одна реализация `normalizeReportArtifacts` (contracts), её используют: скраббер
+(artifacts ОБЕИХ форм теперь скрабятся — закрыт пробел Constitution V),
+review-task (N PR → ОДНА review-задача со списком `<repo>: <url>`; один PR —
+байт-в-байт прежний заголовок), ADF-коммент и run card (артефакт-строки —
+net-new рендеринг: до 019 artifacts не показывались нигде), feature-context
+(по-репные branch:/PR: строки). Обёртка: секция `## Repositories` (путь/ветка/
+база каждого репо + правила a-d из FR-013, чеки только в изменённых репо);
+no-repo обёртка байт-идентична. Валидация имён scope'а на обоих write-путях:
+yaml superRefine (per-entry path) и agents controller (400, закрыт и старый
+пробел с опечаткой в `repository` через API). Executor-level yaml `repository`
+стал optional (runtime игнорирует с 2026-07-13). Web: мульти-селект
+Repositories в AgentForm (легаси-строка сидится одноэлементно, сейв переводит
+агента на plural), блок Artifacts на RunCard. Схема БД не менялась (scope в
+`agents.behavior` jsonb, отчёт в `runs.report` jsonb).
+
+Сознательное изменение поведения (D1): агент БЕЗ repo-полей раньше получал
+дефолтный (первый) репозиторий, теперь — ВСЕ репозитории воркспейса (в
+одно-репном воркспейсе идентично; интеграционный кейс «absent → default»
+переписан на «absent → all»).
+
+Тесты той же итерацией: contracts (v2/repos/normalizer/scope-валидация),
+worktree.spec (multi-repo layout, partial-failure unwind, per-repo leftover,
+resume-fallback), pick-repository (list-семантика), wrapper (Repositories
+секция, no-repo байт-идентичность), executor (parent worktree_path, cwd,
+однoэлементный setup-scope), callback unit+integration (скраб обеих форм,
+review fan-in), adf-composer снапшоты, agent-crud (422 c per-entry path),
+web agent-form (мульти-селект) и run-card (Artifacts); интеграционные:
+claude-cli-repository расширен (мульти-репо клоны, одна ветка в обоих кэшах,
+subset, unknown-name, отчёт v2 round-trip через фикстуру
+stream-success-multi-repo), callback-completion (легаси v1+flat E2E).
+Docs: architecture §6 (repos[] + enum [1,2]), §7 (repositories +
+Repositories-секция обёртки), §8 (RunRuntime.prepare(repos[])).
+
+Gates green locally: typecheck, lint, unit 296+14 (root+contracts pipeline),
+web 256 (30 files), интеграционные 324/326 (81 файл; dockerd с
+`--registry-mirror=https://mirror.gcr.io`, как в итерации 18). Два падения —
+`runs-cancel-all.spec.ts` (итерация 26), ПРЕДСУЩЕСТВУЮЩИЕ: воспроизводятся на
+чистом дереве без изменений 019 (проверено git stash), к фиче отношения не
+имеют — окружение/флейк bulk-stop, разбирать отдельной итерацией.

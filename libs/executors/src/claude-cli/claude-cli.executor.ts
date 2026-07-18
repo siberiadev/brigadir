@@ -28,7 +28,13 @@ import {
 import { buildArgs } from './args';
 import { buildChildEnv } from './env-allowlist';
 import { ClaudeStreamParser, type TerminalResult } from './stream-parser';
-import { prepare, cleanup, setupRunBranchIdentity, type WorktreeRepo } from './worktree';
+import {
+  prepareAll,
+  cleanupAll,
+  setupRunBranchIdentity,
+  type WorktreeRepo,
+  type MultiPrepareResult,
+} from './worktree';
 import { spawnGroup } from './process-group';
 import { buildWrapperText } from './wrapper';
 import { writeMcpConfig, defaultMcpConfigRoot, type WrittenMcpConfig } from './mcp-config';
@@ -37,46 +43,73 @@ import { buildFeatureContextSection } from './feature-context';
 const STDERR_TAIL_BYTES = 16 * 1024;
 
 /**
- * Which repository NAME a run asks for (platform-scoped executors,
- * 2026-07-13): the executor is platform capacity and carries no repository, so
- * the choice is the AGENT's — `behavior.repository` when set, else '' (= the
- * run workspace's default repository). Pure — unit-tested directly.
+ * Which repository NAMES a run asks for (feature 019, research D1). The
+ * executor is platform capacity and carries no repository (2026-07-13) —
+ * the choice is the AGENT's:
+ *   `behavior.repositories` (non-empty) > deprecated `behavior.repository`
+ *   (one-element list) > [] = ALL workspace repositories.
+ * Non-string junk degrades to the all-repos default, never crashes.
+ * Pure — unit-tested directly.
  */
-export function resolveRepositoryName(behavior: { repository?: unknown }): string {
-  return typeof behavior.repository === 'string' ? behavior.repository : '';
+export function resolveRepositoryNames(behavior: {
+  repository?: unknown;
+  repositories?: unknown;
+}): string[] {
+  if (Array.isArray(behavior.repositories)) {
+    const names = behavior.repositories.filter(
+      (n): n is string => typeof n === 'string' && n.length > 0,
+    );
+    if (names.length > 0) return names;
+  }
+  return typeof behavior.repository === 'string' && behavior.repository.length > 0
+    ? [behavior.repository]
+    : [];
 }
 
 /**
  * Repository source of truth (feature 005): workspace settings.repositories
  * (what the wizard/settings screen writes — DB wins) beats the legacy
  * agents.yaml workspace.repositories[], kept as fallback for yaml-imported
- * setups whose settings blob predates the wizard. Empty name = the workspace
- * default (first entry, FR-004/FR-008). Pure — unit-tested directly.
+ * setups whose settings blob predates the wizard. Feature 019 (research D1):
+ * `names` is a FILTER over the winning list — empty = ALL repositories, in
+ * workspace declaration order (the agent's list selects, the workspace
+ * orders); an unknown name fails loud (defense-in-depth behind config-time
+ * validation). Pure — unit-tested directly.
  */
-export function pickWorkspaceRepository(
+export function pickWorkspaceRepositories(
   dbRepos: { name: string; git_url: string; default_branch: string }[],
   yamlRepos: { name: string; url: string; default_branch: string }[],
-  repoName: string,
+  names: string[],
   yamlLoaded: boolean,
-): WorktreeRepo {
+): WorktreeRepo[] {
   if (dbRepos.length > 0) {
-    const entry = repoName ? dbRepos.find((r) => r.name === repoName) : dbRepos[0];
-    if (!entry) {
-      throw new Error(
-        `workspace has no repository named "${repoName}" in settings.repositories (linter should have caught this)`,
-      );
+    for (const name of names) {
+      if (!dbRepos.some((r) => r.name === name)) {
+        throw new Error(
+          `workspace has no repository named "${name}" in settings.repositories (linter should have caught this)`,
+        );
+      }
     }
-    return { name: entry.name, url: entry.git_url, defaultBranch: entry.default_branch };
+    const selected = names.length > 0 ? dbRepos.filter((r) => names.includes(r.name)) : dbRepos;
+    return selected.map((r) => ({ name: r.name, url: r.git_url, defaultBranch: r.default_branch }));
   }
 
-  const entry = repoName ? yamlRepos.find((r) => r.name === repoName) : yamlRepos[0];
-  if (!entry) {
+  for (const name of names) {
+    if (!yamlRepos.some((r) => r.name === name)) {
+      throw new Error(
+        `no repository "${name}" found: workspace settings has no repositories and ` +
+          (yamlLoaded ? 'agents.yaml does not define it either' : 'no agents.yaml is loaded'),
+      );
+    }
+  }
+  const selected = names.length > 0 ? yamlRepos.filter((r) => names.includes(r.name)) : yamlRepos;
+  if (selected.length === 0) {
     throw new Error(
-      `no repository "${repoName || '(default)'}" found: workspace settings has no repositories and ` +
+      `no repository "(default)" found: workspace settings has no repositories and ` +
         (yamlLoaded ? 'agents.yaml does not define it either' : 'no agents.yaml is loaded'),
     );
   }
-  return { name: entry.name, url: entry.url, defaultBranch: entry.default_branch };
+  return selected.map((r) => ({ name: r.name, url: r.url, defaultBranch: r.default_branch }));
 }
 
 class StderrTail {
@@ -132,23 +165,27 @@ export class ClaudeCliExecutor implements AgentExecutor {
   ) {}
 
   async run(ctx: RunContext, signal: AbortSignal): Promise<ExecutorResult> {
-    const { runtimeConfig, repo, branchPrefix, workspaceId, auth, apiKey, noRepo, setupRun } =
+    const { runtimeConfig, repos, branchPrefix, workspaceId, auth, apiKey, noRepo, setupRun } =
       await this.loadRunConfig(ctx.runId);
 
-    let worktree: { worktreeDir: string; branch: string; cacheDir: string };
+    // The run's workspace dir: the parent `worktreeRoot/<runId>` holding one
+    // worktree per repo (feature 019, research D3), or a scratch temp dir for
+    // no-repo runs. `workspace` stays null exactly for the scratch case.
+    let workspaceDir: string;
+    let workspace: MultiPrepareResult | null = null;
     if (noRepo) {
       // feature 010 (FR-018, Constitution V): a no-repository run (the
       // orchestrator's triage) runs from a scratch temp dir — no clone, no
       // worktree, no git credentials in reach. It reads only the system's own
       // run history (via the handoff section already assembled into the prompt).
       try {
-        worktree = { worktreeDir: await mkdtemp(join(tmpdir(), 'brigadir-orch-')), branch: '', cacheDir: '' };
+        workspaceDir = await mkdtemp(join(tmpdir(), 'brigadir-orch-'));
       } catch (err) {
         return { exitStatus: 'crashed', diagnostics: err instanceof Error ? err.message : String(err) };
       }
       // No `worktree_path` persisted — there is no repository worktree to inspect.
     } else {
-      // A repository worktree is branch-named after the ticket. A ticketless
+      // Repository worktrees are branch-named after the ticket. A ticketless
       // repo run is a config error EXCEPT for workspace-setup runs (feature
       // 015, FR-020): those are ticketless by design and get a local-only
       // `setup/<runId8>` branch instead (never pushed — spec FR-015).
@@ -171,8 +208,8 @@ export class ClaudeCliExecutor implements AgentExecutor {
         };
       }
       try {
-        worktree = await prepare(
-          repo!,
+        workspace = await prepareAll(
+          repos,
           ctx.runId,
           branchIdentity.ticketKey,
           branchIdentity.prefix,
@@ -183,10 +220,13 @@ export class ClaudeCliExecutor implements AgentExecutor {
       } catch (err) {
         return { exitStatus: 'crashed', diagnostics: err instanceof Error ? err.message : String(err) };
       }
+      workspaceDir = workspace.parentDir;
 
+      // Points at the PARENT dir — inspecting a kept failed workspace shows
+      // every repo worktree plus .brigadir/ (feature 019, spec FR-005).
       await this.db
         .update(schema.runs)
-        .set({ worktreePath: worktree.worktreeDir })
+        .set({ worktreePath: workspaceDir })
         .where(eq(schema.runs.id, ctx.runId));
     }
 
@@ -210,21 +250,27 @@ export class ClaudeCliExecutor implements AgentExecutor {
           ? await buildFeatureContextSection({ jira: this.jira, db: this.db }, ctx.ticket.key, workspaceId)
           : undefined;
 
-      await mkdir(join(worktree.worktreeDir, '.brigadir'), { recursive: true });
+      await mkdir(join(workspaceDir, '.brigadir'), { recursive: true });
       await writeFile(
-        join(worktree.worktreeDir, '.brigadir', 'wrapper.txt'),
-        buildWrapperText(ctx, worktree.worktreeDir, {
+        join(workspaceDir, '.brigadir', 'wrapper.txt'),
+        buildWrapperText(ctx, workspaceDir, {
           useCallbackChannel: runtimeConfig.useCallbackChannel,
           featureContextSection,
+          repos: workspace?.repos.map((r) => ({
+            name: r.repo.name,
+            absPath: r.worktreeDir,
+            defaultBranch: r.repo.defaultBranch,
+            branch: workspace!.branch,
+          })),
         }),
       );
     } catch (err) {
       await mcpConfig?.cleanup();
-      await this.cleanupWorkspace(worktree, noRepo, runtimeConfig.keepFailedWorktrees, ctx.runId);
+      await this.cleanupWorkspace(workspace, workspaceDir, runtimeConfig.keepFailedWorktrees, ctx.runId);
       return { exitStatus: 'crashed', diagnostics: err instanceof Error ? err.message : String(err) };
     }
 
-    const result = await this.runProcess(ctx, signal, worktree, runtimeConfig, mcpConfig, auth, apiKey);
+    const result = await this.runProcess(ctx, signal, workspaceDir, runtimeConfig, mcpConfig, auth, apiKey);
 
     try {
       await mcpConfig?.cleanup();
@@ -233,8 +279,8 @@ export class ClaudeCliExecutor implements AgentExecutor {
     }
 
     await this.cleanupWorkspace(
-      worktree,
-      noRepo,
+      workspace,
+      workspaceDir,
       runtimeConfig.keepFailedWorktrees && runFailed(result),
       ctx.runId,
     );
@@ -243,22 +289,24 @@ export class ClaudeCliExecutor implements AgentExecutor {
   }
 
   /**
-   * Tear down the run's workspace: a git worktree (normal runs) or the scratch
-   * temp dir (no-repo orchestrator runs — feature 010). Best-effort; a cleanup
-   * fault is logged, never fatal.
+   * Tear down the run's workspace: every per-repo worktree + the parent dir
+   * (repo runs — feature 019), or the scratch temp dir (no-repo orchestrator
+   * runs — feature 010; `workspace` is null there). `keep` retains the WHOLE
+   * parent for failed-run inspection. Best-effort; a cleanup fault is logged,
+   * never fatal.
    */
   private async cleanupWorkspace(
-    worktree: { worktreeDir: string; cacheDir: string },
-    noRepo: boolean,
+    workspace: MultiPrepareResult | null,
+    workspaceDir: string,
     keep: boolean,
     runId: string,
   ): Promise<void> {
     try {
-      if (noRepo) {
-        // No git worktree to prune — just remove the scratch dir.
-        if (!keep) await rm(worktree.worktreeDir, { recursive: true, force: true });
+      if (workspace === null) {
+        // No git worktrees to prune — just remove the scratch dir.
+        if (!keep) await rm(workspaceDir, { recursive: true, force: true });
       } else {
-        await cleanup(worktree.cacheDir, worktree.worktreeDir, { keep });
+        await cleanupAll(workspace, { keep });
       }
     } catch (err) {
       this.logger.error(`workspace cleanup failed for run ${runId}: ${String(err)}`);
@@ -273,7 +321,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
   private runProcess(
     ctx: RunContext,
     signal: AbortSignal,
-    worktree: { worktreeDir: string; cacheDir: string },
+    workspaceDir: string,
     runtimeConfig: ReturnType<typeof resolveClaudeCliConfig>,
     mcpConfig: WrittenMcpConfig | undefined,
     auth: EffectiveAuth,
@@ -281,7 +329,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
   ): Promise<ExecutorResult> {
     const argv = buildArgs({
       model: runtimeConfig.model,
-      worktreeDir: worktree.worktreeDir,
+      worktreeDir: workspaceDir,
       allowedTools: runtimeConfig.allowedTools,
       maxTurns: ctx.limits.maxTurns ?? runtimeConfig.maxTurns,
       maxBudgetUsd: ctx.limits.maxBudgetUsd,
@@ -295,7 +343,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
     // pass — the HOST's ANTHROPIC_API_KEY / AWS_* / CLAUDE_CODE_USE_BEDROCK /
     // NODE_EXTRA_CA_CERTS still can never leak through (none are allowlisted).
     applyAuthEnv(env, auth, apiKey);
-    const group = spawnGroup(runtimeConfig.cliPath, argv, { cwd: worktree.worktreeDir, env });
+    const group = spawnGroup(runtimeConfig.cliPath, argv, { cwd: workspaceDir, env });
 
     // D7: `claude -p` REQUIRES a prompt on stdin (never argv — size/secrets).
     // The full task (ticket + agent instruction + rules) already rides the
@@ -473,7 +521,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
 
   private async loadRunConfig(runId: string): Promise<{
     runtimeConfig: ReturnType<typeof resolveClaudeCliConfig>;
-    repo: WorktreeRepo | null;
+    repos: WorktreeRepo[];
     branchPrefix: string;
     workspaceId: string;
     auth: EffectiveAuth;
@@ -514,6 +562,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
       allowed_tools?: string[];
       branch_prefix?: string;
       repository?: string;
+      repositories?: string[];
       workspace_mode?: string;
     };
 
@@ -536,17 +585,22 @@ export class ClaudeCliExecutor implements AgentExecutor {
     // unconditionally (no data migration; live agent "TEST" keeps working).
     const runtimeConfig = resolveClaudeCliConfig(rawConfig, behavior.allowed_tools ?? []);
 
-    // Platform-scoped executors (2026-07-13): the repository is the AGENT's
-    // choice (behavior.repository), else the run workspace's default repo. A
-    // no-repository run resolves none (skips clone/worktree entirely).
-    let repo: WorktreeRepo | null = null;
+    // Platform-scoped executors (2026-07-13): the repository set is the
+    // AGENT's choice (behavior.repositories / deprecated behavior.repository),
+    // else ALL of the run workspace's repositories (feature 019, research D1).
+    // A no-repository run resolves none (skips clone/worktree entirely).
+    let repos: WorktreeRepo[] = [];
     if (!noRepo) {
       if (setupRun) {
         // feature 015 (FR-017): a workspace with no repositories degrades to
         // the repo-less scratch path — the setup protocol's recon branch is
         // best-effort and bounded; the run must proceed either way.
+        // Feature 019 (research D5): setup runs deliberately KEEP a
+        // one-element scope (the resolved default / template-named repo) —
+        // the setup protocol self-clones extras into .repos/<name>; the
+        // all-repos default does not apply here.
         try {
-          repo = await this.resolveRepository(row.workspaceId, resolveRepositoryName(behavior));
+          repos = (await this.resolveRepositories(row.workspaceId, resolveRepositoryNames(behavior))).slice(0, 1);
         } catch (err) {
           this.logger.warn(
             `setup run ${runId}: no repository available (${String(err)}) — proceeding without one (FR-017)`,
@@ -554,7 +608,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
           noRepo = true;
         }
       } else {
-        repo = await this.resolveRepository(row.workspaceId, resolveRepositoryName(behavior));
+        repos = await this.resolveRepositories(row.workspaceId, resolveRepositoryNames(behavior));
       }
     }
 
@@ -594,7 +648,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
 
     return {
       runtimeConfig,
-      repo,
+      repos,
       branchPrefix: behavior.branch_prefix ?? 'run',
       workspaceId: row.workspaceId,
       auth,
@@ -643,10 +697,10 @@ export class ClaudeCliExecutor implements AgentExecutor {
    * Repository source of truth (feature 005): `workspaces.settings.repositories`
    * (what the wizard/settings screen writes — DB wins) first; the legacy
    * `agents.yaml` workspace.repositories[] as fallback for yaml-imported setups
-   * whose settings blob predates the wizard. Empty name = the workspace default
-   * (first entry, FR-004/FR-008).
+   * whose settings blob predates the wizard. Empty name list = ALL workspace
+   * repositories in declaration order (feature 019, research D1).
    */
-  private async resolveRepository(workspaceId: string, repoName: string): Promise<WorktreeRepo> {
+  private async resolveRepositories(workspaceId: string, names: string[]): Promise<WorktreeRepo[]> {
     const [ws] = await this.db
       .select({ settings: schema.workspaces.settings })
       .from(schema.workspaces)
@@ -656,10 +710,10 @@ export class ClaudeCliExecutor implements AgentExecutor {
       repositories?: { name: string; git_url: string; default_branch: string }[];
     };
 
-    return pickWorkspaceRepository(
+    return pickWorkspaceRepositories(
       settings.repositories ?? [],
       this.agentsConfig?.workspace.repositories ?? [],
-      repoName,
+      names,
       this.agentsConfig !== null,
     );
   }

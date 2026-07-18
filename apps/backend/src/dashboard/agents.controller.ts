@@ -85,6 +85,7 @@ export class AgentsController {
   @Post()
   async create(@Body() body: unknown): Promise<AgentResponse & { warnings?: ErrorIssue[] }> {
     const req = this.parse(body);
+    await this.validateRepositoryScope(req.workspace_id, req);
     const { warnings } = await this.lintOrThrow(req.workspace_id, req, undefined);
 
     // feature 014: the system derives the immutable key ONCE, here. Base slug from
@@ -123,6 +124,7 @@ export class AgentsController {
     @Body() body: unknown,
   ): Promise<AgentResponse & { warnings?: ErrorIssue[] }> {
     const req = this.parse(body);
+    await this.validateRepositoryScope(req.workspace_id, req);
 
     const [existing] = await this.db
       .select({
@@ -266,6 +268,60 @@ export class AgentsController {
       );
     }
     return parsed.data;
+  }
+
+  /**
+   * Feature 019 (FR-003): every name in the agent's repository scope —
+   * `behavior.repositories[]` and the deprecated `behavior.repository` —
+   * must reference a repository declared in the workspace's settings.
+   * Config-time rejection with a per-entry field path (the run-time
+   * pickWorkspaceRepositories error stays as the last-resort guard); skipped
+   * when the workspace declares no repositories (yaml-fallback / repo-less
+   * workspaces — run-time resolution is the guard there).
+   */
+  private async validateRepositoryScope(
+    workspaceId: string,
+    req: ReturnType<AgentsController['parse']>,
+  ): Promise<void> {
+    const behavior = (req.behavior ?? {}) as { repositories?: string[]; repository?: string | null };
+    const names = behavior.repositories ?? [];
+    const single = behavior.repository;
+    if (names.length === 0 && !single) return;
+
+    const [ws] = await this.db
+      .select({ settings: schema.workspaces.settings })
+      .from(schema.workspaces)
+      .where(eq(schema.workspaces.id, workspaceId))
+      .limit(1);
+    const declared = new Set(
+      (((ws?.settings ?? {}) as { repositories?: { name: string }[] }).repositories ?? []).map(
+        (r) => r.name,
+      ),
+    );
+    if (declared.size === 0) return;
+
+    const issues: ErrorIssue[] = [];
+    names.forEach((name, j) => {
+      if (!declared.has(name)) {
+        issues.push({
+          path: ['behavior', 'repositories', String(j)],
+          code: 'unknown_repository',
+          message: `references unknown repository "${name}" — must match a workspace repository name`,
+          level: 'error',
+        });
+      }
+    });
+    if (single && !declared.has(single)) {
+      issues.push({
+        path: ['behavior', 'repository'],
+        code: 'unknown_repository',
+        message: `references unknown repository "${single}" — must match a workspace repository name`,
+        level: 'error',
+      });
+    }
+    if (issues.length > 0) {
+      throw validationError('Agent could not be saved.', issues);
+    }
   }
 
   private async lintOrThrow(

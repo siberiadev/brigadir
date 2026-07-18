@@ -9,6 +9,7 @@ import {
   ReportSchema,
   ReportProgressSchema,
   RequestHumanSchema,
+  normalizeReportArtifacts,
   type AgentReport,
   type AnswerOption,
 } from '@brigadir/contracts';
@@ -73,6 +74,25 @@ function scrubReport(report: AgentReport): AgentReport {
           })),
         }
       : report.team,
+    // feature 019 (research D7, Constitution V): artifact strings are
+    // agent-authored and reach persistence + the Jira comment + the dashboard
+    // card, so BOTH forms are scrubbed — the flat legacy fields (previously
+    // missed entirely) and every repos[] entry. files_changed is numeric.
+    artifacts: report.artifacts
+      ? {
+          ...report.artifacts,
+          branch: report.artifacts.branch !== undefined ? scrub(report.artifacts.branch) : undefined,
+          pr_url: report.artifacts.pr_url !== undefined ? scrub(report.artifacts.pr_url) : undefined,
+          commits: report.artifacts.commits?.map((c) => scrub(c)),
+          repos: report.artifacts.repos?.map((r) => ({
+            ...r,
+            repo: scrub(r.repo),
+            branch: r.branch !== undefined ? scrub(r.branch) : undefined,
+            pr_url: r.pr_url !== undefined ? scrub(r.pr_url) : undefined,
+            commits: r.commits?.map((c) => scrub(c)),
+          })),
+        }
+      : report.artifacts,
   };
 }
 
@@ -182,9 +202,18 @@ export class CallbackService {
     return { ok: true, outcome: scrubbedReport.outcome };
   }
 
-  /** FR-025: a successful pull_request-delivery run with a declared PR queues one non-blocking review task. */
+  /**
+   * FR-025: a successful pull_request-delivery run with declared PR(s) queues
+   * ONE non-blocking review task per run (feature 019, research D6): a single
+   * PR keeps the pre-019 title byte-for-byte; several PRs (multi-repo run)
+   * become one task listing every `<repo>: <url>` — one run, one review gate.
+   */
   private async maybeQueueReviewTask(runId: string, report: AgentReport): Promise<void> {
-    if (report.outcome !== 'success' || !report.artifacts?.pr_url) return;
+    if (report.outcome !== 'success') return;
+    const prs = normalizeReportArtifacts(report)
+      .filter((a) => a.pr_url)
+      .map((a) => ({ repo: a.repo, pr_url: a.pr_url! }));
+    if (prs.length === 0) return;
 
     const [row] = await this.db
       .select({ behavior: schema.agents.behavior })
@@ -195,10 +224,13 @@ export class CallbackService {
     const behavior = (row?.behavior ?? {}) as { code_delivery?: string };
     if (behavior.code_delivery !== 'pull_request') return;
 
+    const single = prs.length === 1;
     await this.humanTasks.createFromRequest(runId, {
       kind: 'review',
-      title: `Review PR: ${report.artifacts.pr_url}`,
-      details: report.artifacts.pr_url,
+      title: single ? `Review PR: ${prs[0].pr_url}` : `Review PRs (${prs.length})`,
+      details: single
+        ? prs[0].pr_url
+        : prs.map((p) => `- ${p.repo ? `${p.repo}: ` : ''}${p.pr_url}`).join('\n'),
       blocking: false,
     });
   }

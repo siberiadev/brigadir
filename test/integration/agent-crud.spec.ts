@@ -247,4 +247,66 @@ describe('agent CRUD + linter + test-run (T142/T143)', () => {
     expect(res.status).toBe(201);
     expect((await res.json()).key).toBe('brigadir-2'); // 'brigadir' reserved
   });
+
+  // --- feature 019: behavior.repositories validation (FR-003, US3) ---
+
+  async function declareWorkspaceRepos() {
+    await db.db
+      .update(schema.workspaces)
+      .set({
+        settings: {
+          repositories: [
+            { name: 'product', git_url: 'git@acme:product.git', default_branch: 'main' },
+            { name: 'infra', git_url: 'git@acme:infra.git', default_branch: 'main' },
+          ],
+        },
+      })
+      .where(eq(schema.workspaces.id, workspaceId));
+  }
+
+  it('feature 019: a valid behavior.repositories list round-trips through create + list', async () => {
+    await declareWorkspaceRepos();
+    const res = await post(agentBody({ behavior: { repositories: ['infra', 'product'] } }));
+    expect(res.status).toBe(201);
+    const created = await res.json();
+    expect(created.behavior.repositories).toEqual(['infra', 'product']);
+  });
+
+  it('feature 019: an unknown name in behavior.repositories → 422 with the per-entry path', async () => {
+    await declareWorkspaceRepos();
+    const res = await post(agentBody({ behavior: { repositories: ['infra', 'ghost'] } }));
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    const issue = body.error.issues.find(
+      (i: { code: string; path: (string | number)[] }) => i.code === 'unknown_repository',
+    );
+    expect(issue).toBeDefined();
+    expect(issue.path).toEqual(['behavior', 'repositories', '1']);
+    expect(issue.message).toContain('ghost');
+    expect(await db.db.select().from(schema.agents)).toHaveLength(0);
+  });
+
+  it('feature 019: the deprecated behavior.repository is still accepted, and a typo in it is now caught too', async () => {
+    await declareWorkspaceRepos();
+    const ok = await post(agentBody({ behavior: { repository: 'infra' } }));
+    expect(ok.status).toBe(201);
+    expect((await ok.json()).behavior.repository).toBe('infra');
+
+    const bad = await post(
+      agentBody({ name: 'Other', trigger_status: 'Code Review', behavior: { repository: 'ghost' } }),
+    );
+    expect(bad.status).toBe(422);
+    const body = await bad.json();
+    expect(
+      body.error.issues.some(
+        (i: { path: (string | number)[] }) => i.path.join('.') === 'behavior.repository',
+      ),
+    ).toBe(true);
+  });
+
+  it('feature 019: scope names are not validated when the workspace declares no repositories', async () => {
+    // yaml-fallback / repo-less workspaces: run-time resolution is the guard.
+    const res = await post(agentBody({ behavior: { repositories: ['anything'] } }));
+    expect(res.status).toBe(201);
+  });
 });

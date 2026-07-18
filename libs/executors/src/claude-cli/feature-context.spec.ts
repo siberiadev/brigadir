@@ -73,4 +73,60 @@ describe('buildFeatureContextSection (T115, D5/FR-026)', () => {
     const section = await buildFeatureContextSection({ jira, db: fakeDbNoArtifacts() as never }, 'BRIG-1', 'ws-1');
     expect(section).toBeUndefined();
   });
+
+  // Feature 019: prior-run artifacts ride the shared normalizer — a linked
+  // issue whose latest report used artifacts.repos[] surfaces EVERY repo's
+  // branch/PR (repo-prefixed); the legacy flat form renders unprefixed.
+  describe('per-repo artifact lines (feature 019)', () => {
+    function fakeDbWithReport(report: unknown): unknown {
+      return {
+        select: () => ({
+          from: () => ({
+            innerJoin: () => ({
+              where: () => ({
+                orderBy: () => ({
+                  limit: async () => [{ report }],
+                }),
+              }),
+            }),
+          }),
+        }),
+      };
+    }
+
+    const jira = () =>
+      fakeJira({ linked: [{ key: 'BRIG-2', status: 'Done', summary: 'Sibling work' }] });
+
+    it('renders one branch/PR line per repos[] entry, prefixed with the repo name', async () => {
+      const db = fakeDbWithReport({
+        schema_version: 2,
+        outcome: 'success',
+        summary: 's',
+        checks: [],
+        artifacts: {
+          repos: [
+            { repo: 'lib', branch: 'feat/BRIG-2', pr_url: 'https://git/lib/1' },
+            { repo: 'consumer', branch: 'feat/BRIG-2' },
+          ],
+        },
+      });
+      const section = await buildFeatureContextSection({ jira: jira(), db: db as never }, 'BRIG-1', 'ws-1');
+      expect(section).toContain('  branch: lib: feat/BRIG-2');
+      expect(section).toContain('  PR: lib: https://git/lib/1');
+      expect(section).toContain('  branch: consumer: feat/BRIG-2');
+    });
+
+    it('legacy flat artifacts render without a repo prefix (unchanged form)', async () => {
+      const db = fakeDbWithReport({
+        schema_version: 1,
+        outcome: 'success',
+        summary: 's',
+        checks: [],
+        artifacts: { branch: 'feat/BRIG-2', pr_url: 'https://git/pr/1' },
+      });
+      const section = await buildFeatureContextSection({ jira: jira(), db: db as never }, 'BRIG-1', 'ws-1');
+      expect(section).toContain('  branch: feat/BRIG-2');
+      expect(section).toContain('  PR: https://git/pr/1');
+    });
+  });
 });

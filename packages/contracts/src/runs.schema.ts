@@ -140,12 +140,29 @@ export const RunCardRunSchema = z
   .strict();
 export type RunCardRun = z.infer<typeof RunCardRunSchema>;
 
+// Feature 019: one line per repo the run reported artifacts for — already
+// normalized by the backend via normalizeReportArtifacts (flat legacy reports
+// arrive as one element with repo=null); commits collapsed to a count for the
+// card.
+export const RunCardArtifactSchema = z
+  .object({
+    repo: z.string().nullable(),
+    branch: z.string().nullable(),
+    pr_url: z.string().nullable(),
+    commits_count: z.number().int().nullable(),
+    files_changed: z.number().int().nullable(),
+  })
+  .strict();
+export type RunCardArtifact = z.infer<typeof RunCardArtifactSchema>;
+
 export const RunCardResponseSchema = z
   .object({
     run: RunCardRunSchema,
     // Null for ticketless workspace-setup runs (feature 011).
     ticket: RunTicketRefSchema.nullable(),
     checks: z.array(RunCardCheckSchema),
+    // Feature 019: empty for runs without reported artifacts.
+    artifacts: z.array(RunCardArtifactSchema),
     events: z.array(RunCardEventSchema),
     history: z.array(RunCardHistoryItemSchema),
   })

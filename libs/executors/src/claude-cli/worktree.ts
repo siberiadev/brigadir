@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -12,10 +12,22 @@ export interface WorktreeRepo {
   defaultBranch: string;
 }
 
-export interface PrepareResult {
+/** One prepared per-repo worktree inside a run's parent workspace dir. */
+export interface RepoWorktree {
+  repo: WorktreeRepo;
   worktreeDir: string;
-  branch: string;
   cacheDir: string;
+}
+
+/**
+ * A run's whole prepared workspace (feature 019): the parent dir the agent
+ * works in (`worktreeRoot/<runId>`), containing one worktree per repo — all
+ * on the SAME branch (branch↔ticket traceability across repos).
+ */
+export interface MultiPrepareResult {
+  parentDir: string;
+  branch: string;
+  repos: RepoWorktree[];
 }
 
 export class WorktreePrepareError extends Error {
@@ -31,7 +43,7 @@ export class WorktreePrepareError extends Error {
  * are unique; every resume creates a NEW setup run per feature 011), and
  * local-only — a setup run never pushes (spec FR-015); cleanup removes the
  * worktree like any run, and a leftover zero-commit branch falls under the
- * standard leftover policy in prepare().
+ * standard leftover policy in prepareAll().
  */
 export function setupRunBranchIdentity(runId: string): { branchPrefix: string; ticketKey: string } {
   return { branchPrefix: 'setup', ticketKey: runId.slice(0, 8) };
@@ -58,92 +70,140 @@ async function git(args: string[], cwd?: string): Promise<string> {
   }
 }
 
-/**
- * Prepare a per-run git worktree (research D3). Keeps one cached local clone
- * per repository (`repoCacheRoot/<repo.name>`) and adds a fresh worktree off
- * `origin/<repo.defaultBranch>` per run, on branch `<branchPrefix>/<ticketKey>`.
- * Leftover-branch policy (revised, live incident 2026-07-14): an existing
- * branch with ZERO commits beyond the base ref is a worthless remnant of an
- * attempt that died before doing work — it is deleted and recreated so
- * retries are possible. An existing branch WITH commits is real prior work —
- * fail fast and loud (never silently reuse or force-reset); a human decides.
- */
-export async function prepare(
-  repo: WorktreeRepo,
-  runId: string,
-  ticketKey: string,
-  branchPrefix: string,
-  worktreeRoot: string,
-  repoCacheRoot: string,
-  opts: { reuseBranch?: boolean } = {},
-): Promise<PrepareResult> {
-  await mkdir(repoCacheRoot, { recursive: true });
-  await mkdir(worktreeRoot, { recursive: true });
-
+/** One cached local clone per repository (`repoCacheRoot/<repo.name>`), refreshed per run. */
+async function ensureCache(repo: WorktreeRepo, repoCacheRoot: string): Promise<string> {
   const cacheDir = join(repoCacheRoot, repo.name);
   if (existsSync(join(cacheDir, '.git'))) {
     await git(['fetch', 'origin'], cacheDir);
   } else {
     await git(['clone', repo.url, cacheDir]);
   }
-
   await git(['worktree', 'prune'], cacheDir);
+  return cacheDir;
+}
 
-  const branch = `${branchPrefix}/${ticketKey}`;
-  const worktreeDir = join(worktreeRoot, runId);
+/**
+ * Add one repo's worktree on `branch` into `worktreeDir` (research D3 layout).
+ * Leftover-branch policy (revised, live incident 2026-07-14) — applied PER
+ * REPO, unchanged by feature 019: an existing branch with ZERO commits beyond
+ * the base ref is a worthless remnant of an attempt that died before doing
+ * work — it is deleted and recreated so retries are possible. An existing
+ * branch WITH commits is real prior work — fail fast and loud (never silently
+ * reuse or force-reset); a human decides.
+ *
+ * `reuseBranch` (feature 004 FR-016/018): a resumed attempt deliberately
+ * CONTINUES the ticket branch a prior attempt started — attach where the
+ * branch exists. Feature 019 (research D4): if the branch does NOT exist in
+ * some repo (agent scope widened between attempts, or the first attempt never
+ * branched there), fall through to fresh creation instead of failing — a
+ * resume is a continuation, not a stale-leftover hazard.
+ */
+async function addRepoWorktree(
+  repo: WorktreeRepo,
+  cacheDir: string,
+  worktreeDir: string,
+  branch: string,
+  opts: { reuseBranch?: boolean },
+): Promise<void> {
   const baseRef = `origin/${repo.defaultBranch}`;
-
   try {
-    if (opts.reuseBranch) {
-      // Feature 004 (FR-016/018): a resumed attempt deliberately CONTINUES
-      // the same ticket branch a prior attempt started — attach a worktree
-      // to the existing branch rather than creating a fresh one.
+    const exists = await branchExists(cacheDir, branch);
+    if (opts.reuseBranch && exists) {
       await git(['worktree', 'add', worktreeDir, branch], cacheDir);
-    } else {
-      // Live incident 2026-07-14: a failed attempt leaves its branch behind
-      // (cleanup removes the worktree, never the branch), so EVERY retry of a
-      // failed run collided here and failure became permanent. Distinguish the
-      // two leftover cases instead of failing on both:
-      //  - branch exists with ZERO commits beyond the base ref → worthless
-      //    leftover of an attempt that died before doing work; delete and
-      //    recreate fresh (deterministic, nothing lost).
-      //  - branch exists WITH commits → real prior work; keep failing loud
-      //    (no silent reuse/force-reset — a human decides).
-      const exists = await branchExists(cacheDir, branch);
-      if (exists) {
-        const ahead = (await git(['rev-list', '--count', `${baseRef}..${branch}`], cacheDir)).trim();
-        if (ahead === '0') {
-          await git(['branch', '-D', branch], cacheDir);
-        } else {
-          throw new WorktreePrepareError(
-            `branch "${branch}" already exists with ${ahead} commit(s) of prior work — ` +
-              `refusing to discard or silently reuse it; delete or merge the branch, then retry`,
-          );
-        }
-      }
-      await git(['worktree', 'add', '-b', branch, worktreeDir, baseRef], cacheDir);
+      return;
     }
+    if (exists) {
+      const ahead = (await git(['rev-list', '--count', `${baseRef}..${branch}`], cacheDir)).trim();
+      if (ahead === '0') {
+        await git(['branch', '-D', branch], cacheDir);
+      } else {
+        throw new WorktreePrepareError(
+          `branch "${branch}" already exists with ${ahead} commit(s) of prior work — ` +
+            `refusing to discard or silently reuse it; delete or merge the branch, then retry`,
+        );
+      }
+    }
+    await git(['worktree', 'add', '-b', branch, worktreeDir, baseRef], cacheDir);
   } catch (err) {
     if (err instanceof WorktreePrepareError) throw err;
     throw new WorktreePrepareError(
       `cannot create worktree on branch "${branch}": ${(err as Error).message}`,
     );
   }
-
-  return { worktreeDir, branch, cacheDir };
 }
 
 /**
- * Remove the per-run worktree. `--force` is required because the tree may
- * have uncommitted/dirty files; it removes the working tree and its
- * administrative entry but does NOT delete the branch (pushed work is
- * preserved). Skipped entirely when `keep` is set (debugging a failed run).
+ * Prepare a run's workspace (feature 019, research D3/D4): one worktree per
+ * repo under `worktreeRoot/<runId>/<repo.name>/`, every repo on the same
+ * `<branchPrefix>/<ticketKey>` branch off `origin/<repo.defaultBranch>`.
+ * Sequential by design — repo counts are small and error attribution stays
+ * deterministic. ALL-OR-NOTHING: a failure at repo N unwinds the N-1
+ * worktrees already created and removes the parent dir (spec FR-008/SC-006),
+ * then rethrows naming the failing repo.
  */
-export async function cleanup(
-  cacheDir: string,
-  worktreeDir: string,
+export async function prepareAll(
+  repos: WorktreeRepo[],
+  runId: string,
+  ticketKey: string,
+  branchPrefix: string,
+  worktreeRoot: string,
+  repoCacheRoot: string,
+  opts: { reuseBranch?: boolean } = {},
+): Promise<MultiPrepareResult> {
+  if (repos.length === 0) {
+    throw new WorktreePrepareError('no repositories to prepare for this run');
+  }
+  await mkdir(repoCacheRoot, { recursive: true });
+  const parentDir = join(worktreeRoot, runId);
+  await mkdir(parentDir, { recursive: true });
+
+  const branch = `${branchPrefix}/${ticketKey}`;
+  const prepared: RepoWorktree[] = [];
+  for (const repo of repos) {
+    try {
+      const cacheDir = await ensureCache(repo, repoCacheRoot);
+      const worktreeDir = join(parentDir, repo.name);
+      await addRepoWorktree(repo, cacheDir, worktreeDir, branch, opts);
+      prepared.push({ repo, worktreeDir, cacheDir });
+    } catch (err) {
+      // Unwind everything this run already created — no orphaned half-prepared
+      // workspaces (best-effort per worktree; `git worktree prune` on the next
+      // run's ensureCache reclaims any stale admin entry).
+      for (const p of prepared) {
+        await git(['worktree', 'remove', '--force', p.worktreeDir], p.cacheDir).catch(() => {});
+      }
+      await rm(parentDir, { recursive: true, force: true });
+      const message = err instanceof Error ? err.message : String(err);
+      throw new WorktreePrepareError(`repo "${repo.name}": ${message}`);
+    }
+  }
+
+  return { parentDir, branch, repos: prepared };
+}
+
+/**
+ * Remove the run's whole workspace: every per-repo worktree (`--force` — the
+ * trees may be dirty; branches are NOT deleted, pushed/committed work is
+ * preserved) and then the parent dir (which also carries `.brigadir/`).
+ * Skipped entirely when `keep` is set (debugging a failed run keeps the whole
+ * parent for inspection). Worktree-removal faults are remembered but do not
+ * stop the loop or the parent removal — the first one is rethrown at the end
+ * so the caller can log it; a stale cache admin entry is reclaimed by the
+ * next run's `git worktree prune`.
+ */
+export async function cleanupAll(
+  workspace: { parentDir: string; repos: Pick<RepoWorktree, 'cacheDir' | 'worktreeDir'>[] },
   opts: { keep?: boolean } = {},
 ): Promise<void> {
   if (opts.keep) return;
-  await git(['worktree', 'remove', '--force', worktreeDir], cacheDir);
+  let firstError: unknown;
+  for (const p of workspace.repos) {
+    try {
+      await git(['worktree', 'remove', '--force', p.worktreeDir], p.cacheDir);
+    } catch (err) {
+      firstError ??= err;
+    }
+  }
+  await rm(workspace.parentDir, { recursive: true, force: true });
+  if (firstError !== undefined) throw firstError;
 }

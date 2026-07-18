@@ -145,9 +145,14 @@ export type StatusesResponse = z.infer<typeof StatusesResponseSchema>;
 export const AgentBehaviorRequestSchema = z
   .object({
     branch_prefix: z.string().nullable().optional(),
-    // Platform-scoped executors (2026-07-13): the run's repository is an AGENT
-    // choice, persisted here — empty/absent means the workspace default repo.
+    // DEPRECATED (feature 019): the single-repo form — semantically a
+    // one-element `repositories` list. Kept valid forever; stored rows are
+    // never rewritten. When both are present, `repositories` wins.
     repository: z.string().nullable().optional(),
+    // Feature 019: the agent's repository scope — a subset of the workspace's
+    // repository names. Empty/absent = ALL workspace repositories. Names are
+    // validated against workspace settings in the agents controller (400).
+    repositories: z.array(z.string().min(1)).optional(),
     allowed_tools: z.array(z.string()).optional(),
     required_checks: z.array(z.string()).optional(),
     use_callback_channel: z.boolean().optional(),

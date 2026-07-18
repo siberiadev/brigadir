@@ -188,19 +188,19 @@ describe('AgentForm — repository select (platform-scoped executors, 2026-07-13
     });
   }
 
-  it('lists the workspace repositories plus an explicit "workspace default" empty option', async () => {
+  it('feature 019: lists the workspace repositories as a multi-select; empty selection = all repos', async () => {
     const wrapper = mountWithRepos();
     await flush();
 
     const select = selectByTest(wrapper, 'repository-select');
+    expect(select.props('multiple')).toBe(true);
     const options = select.findAllComponents({ name: 'ElOption' });
-    expect(options.map((o) => o.props('label'))).toEqual(['workspace default', 'api', 'infra']);
-    expect(options[0].props('value')).toBe('');
-    // A fresh form starts on the workspace default.
-    expect(select.props('modelValue')).toBe('');
+    expect(options.map((o) => o.props('label'))).toEqual(['api', 'infra']);
+    // A fresh form starts with the all-repositories default (empty selection).
+    expect(select.props('modelValue')).toEqual([]);
   });
 
-  it('persists the choice into behavior.repository (null when left on the default)', async () => {
+  it('feature 019: persists the selection into behavior.repositories and retires the legacy key', async () => {
     let posted: Record<string, unknown> | undefined;
     server.use(
       http.post('/api/agents', async ({ request }) => {
@@ -216,21 +216,31 @@ describe('AgentForm — repository select (platform-scoped executors, 2026-07-13
     await setStatus(wrapper, 'trigger-status-select', 'Ready for Dev');
     await setStatus(wrapper, 'status-success-select', 'In Review');
     await setStatus(wrapper, 'status-failure-select', 'Blocked');
-    await selectByTest(wrapper, 'repository-select').setValue('infra');
+    await selectByTest(wrapper, 'repository-select').setValue(['infra', 'api']);
     await (wrapper.vm as unknown as { submit: () => Promise<void> }).submit();
     await flush();
 
     expect(posted).toBeTruthy();
-    // repository is a BEHAVIOR key, never a top-level agent field.
-    expect(posted).not.toHaveProperty('repository');
-    expect((posted!.behavior as Record<string, unknown>).repository).toBe('infra');
+    // repository scope is a BEHAVIOR key, never a top-level agent field.
+    expect(posted).not.toHaveProperty('repositories');
+    const behavior = posted!.behavior as Record<string, unknown>;
+    expect(behavior.repositories).toEqual(['infra', 'api']);
+    // Saving THIS agent moves it onto the plural form.
+    expect(behavior.repository).toBeNull();
   });
 
-  it('seeds the select from an existing agent behavior.repository on edit', async () => {
+  it('feature 019: seeds the multi-select from behavior.repositories on edit', async () => {
+    const agent = { ...sampleAgent, behavior: { ...sampleAgent.behavior, repositories: ['api', 'infra'] } };
+    const wrapper = mountWithRepos(agent);
+    await flush();
+    expect(selectByTest(wrapper, 'repository-select').props('modelValue')).toEqual(['api', 'infra']);
+  });
+
+  it('feature 019: a legacy behavior.repository seeds as a one-element selection (US2)', async () => {
     const agent = { ...sampleAgent, behavior: { ...sampleAgent.behavior, repository: 'api' } };
     const wrapper = mountWithRepos(agent);
     await flush();
-    expect(selectByTest(wrapper, 'repository-select').props('modelValue')).toBe('api');
+    expect(selectByTest(wrapper, 'repository-select').props('modelValue')).toEqual(['api']);
   });
 });
 

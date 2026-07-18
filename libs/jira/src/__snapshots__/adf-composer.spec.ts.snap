@@ -354,3 +354,105 @@ exports[`buildRunComment (T051) > renders a success report (info panel + summary
   "version": 1,
 }
 `;
+
+exports[`buildRunComment (T051) > renders one artifact line per repos[] entry after the checks taskList 1`] = `
+{
+  "content": [
+    {
+      "attrs": {
+        "panelType": "info",
+      },
+      "content": [
+        {
+          "content": [
+            {
+              "text": "Run succeeded",
+              "type": "text",
+            },
+          ],
+          "type": "paragraph",
+        },
+      ],
+      "type": "panel",
+    },
+    {
+      "content": [
+        {
+          "text": "Implemented the ticket and ran tests.",
+          "type": "text",
+        },
+      ],
+      "type": "paragraph",
+    },
+    {
+      "attrs": {
+        "localId": "brigadir-checks",
+      },
+      "content": [
+        {
+          "attrs": {
+            "localId": "check-0",
+            "state": "DONE",
+          },
+          "content": [
+            {
+              "text": "✅ tests_pass",
+              "type": "text",
+            },
+          ],
+          "type": "taskItem",
+        },
+        {
+          "attrs": {
+            "localId": "check-1",
+            "state": "TODO",
+          },
+          "content": [
+            {
+              "text": "⚠ lint_pass — 2 warnings",
+              "type": "text",
+            },
+          ],
+          "type": "taskItem",
+        },
+      ],
+      "type": "taskList",
+    },
+    {
+      "content": [
+        {
+          "content": [
+            {
+              "content": [
+                {
+                  "text": "lib: feat/BRIG-1 — https://git.example.com/lib/pull/7 (2 commits, 3 files)",
+                  "type": "text",
+                },
+              ],
+              "type": "paragraph",
+            },
+          ],
+          "type": "listItem",
+        },
+        {
+          "content": [
+            {
+              "content": [
+                {
+                  "text": "consumer: feat/BRIG-1",
+                  "type": "text",
+                },
+              ],
+              "type": "paragraph",
+            },
+          ],
+          "type": "listItem",
+        },
+      ],
+      "type": "bulletList",
+    },
+  ],
+  "type": "doc",
+  "version": 1,
+}
+`;

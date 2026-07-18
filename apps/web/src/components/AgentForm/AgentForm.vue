@@ -74,9 +74,15 @@ const form = reactive({
   timeout_minutes: a?.timeout_minutes ?? 45,
   max_budget_usd: a?.max_budget_usd ?? null,
   max_attempts: a?.max_attempts ?? 2,
-  // The run's repository is the AGENT's choice (behavior.repository); '' = the
-  // workspace default repo, resolved at run time.
-  repository: (a?.behavior?.repository as string | undefined) ?? '',
+  // Feature 019: the agent's repository SCOPE (behavior.repositories) — a
+  // multi-select subset of workspace repos; [] = ALL workspace repositories.
+  // Legacy rows carry the deprecated single behavior.repository — rendered as
+  // a one-element selection; saving rewrites THIS agent onto the plural form.
+  repositories:
+    (a?.behavior?.repositories as string[] | undefined) ??
+    (typeof a?.behavior?.repository === 'string' && a.behavior.repository !== ''
+      ? [a.behavior.repository as string]
+      : []),
   branch_prefix: (a?.behavior?.branch_prefix as string | undefined) ?? '',
   allowed_tools: (a?.behavior?.allowed_tools as string[] | undefined) ?? [],
   required_checks: (a?.behavior?.required_checks as string[] | undefined) ?? [],
@@ -174,7 +180,11 @@ function buildRequest(): AgentWriteRequest {
     max_attempts: form.max_attempts,
     behavior: {
       branch_prefix: form.branch_prefix || null,
-      repository: form.repository || null,
+      // Feature 019: the plural scope is the written form; the deprecated
+      // single key is nulled on save of THIS agent only (untouched agents keep
+      // whatever stored form they have — no migration).
+      repositories: form.repositories,
+      repository: null,
       allowed_tools: form.allowed_tools,
       required_checks: form.required_checks,
       use_callback_channel: form.use_callback_channel,
@@ -394,10 +404,16 @@ defineExpose({ submit, saving });
       </el-form-item>
     </div>
 
-    <!-- feature 010: orchestrator triage runs have no repository workspace. -->
-    <el-form-item v-if="!isOrchestrator" label="Repository">
-      <el-select v-model="form.repository" clearable data-test="repository-select">
-        <el-option label="workspace default" value="" data-test="repository-default-option" />
+    <!-- feature 010: orchestrator triage runs have no repository workspace.
+         feature 019: multi-select repository SCOPE; empty = all workspace repos. -->
+    <el-form-item v-if="!isOrchestrator" label="Repositories (empty = all)">
+      <el-select
+        v-model="form.repositories"
+        multiple
+        clearable
+        placeholder="all repositories"
+        data-test="repository-select"
+      >
         <el-option v-for="r in repositories" :key="r.name" :label="r.name" :value="r.name" />
       </el-select>
     </el-form-item>
