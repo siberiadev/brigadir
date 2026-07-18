@@ -28,6 +28,8 @@ import {
   type WorkspaceListResponse,
   type WorkspaceResponse,
   type VerifyResponse,
+  type WaitingListResponse,
+  type WaitingTicket,
   type JiraBoardType,
 } from '@brigadir/contracts';
 import { DashboardTokenGuard } from './dashboard-token.guard';
@@ -278,6 +280,64 @@ export class WorkspacesController {
       if (err instanceof StatusesUnavailable) throw statusesUnavailable();
       throw err;
     }
+  }
+
+  /**
+   * Feature 022 (contracts/dashboard-waiting.md): заблокированные тикеты в
+   * trigger-статусах — «waiting on [keys]» + классификация. Чистое чтение БД
+   * (diff-кэш blocked_*), свежесть = последний release-проход. Порядок —
+   * канонический release-order (priority_id ASC NULLS LAST, jira_key ASC).
+   */
+  @Get(':id/waiting')
+  async waiting(
+    @Param('id') id: string,
+    @Query('page') pageRaw?: string,
+    @Query('page_size') pageSizeRaw?: string,
+  ): Promise<WaitingListResponse> {
+    const [wsRow] = await this.db
+      .select({ id: schema.workspaces.id })
+      .from(schema.workspaces)
+      .where(eq(schema.workspaces.id, id))
+      .limit(1);
+    if (!wsRow) throw notFoundError('workspace_not_found', 'Workspace not found.');
+
+    const { page, pageSize, limit, offset } = parsePagination(pageRaw, pageSizeRaw);
+    const waitingWhere = and(
+      eq(schema.tickets.workspaceId, id),
+      sql`${schema.tickets.blockedState} is not null`,
+    );
+
+    const [{ total }] = await this.db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(schema.tickets)
+      .where(waitingWhere);
+
+    const rows = await this.db
+      .select({
+        ticketId: schema.tickets.id,
+        jiraKey: schema.tickets.jiraKey,
+        summary: schema.tickets.summary,
+        priorityId: schema.tickets.priorityId,
+        priorityName: schema.tickets.priorityName,
+        blockedBy: schema.tickets.blockedBy,
+        blockedState: schema.tickets.blockedState,
+      })
+      .from(schema.tickets)
+      .where(waitingWhere)
+      .orderBy(sql`${schema.tickets.priorityId} asc nulls last`, schema.tickets.jiraKey)
+      .limit(limit)
+      .offset(offset);
+
+    const items: WaitingTicket[] = rows.map((r) => ({
+      ticket_id: r.ticketId,
+      jira_key: r.jiraKey,
+      summary: r.summary,
+      priority_id: r.priorityId,
+      priority_name: r.priorityName,
+      blocked_by: (r.blockedBy as string[] | null) ?? [],
+      blocked_state: r.blockedState as WaitingTicket['blocked_state'],
+    }));
+    return { items, page, page_size: pageSize, total };
   }
 
   /**

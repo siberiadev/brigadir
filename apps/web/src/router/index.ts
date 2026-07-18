@@ -49,6 +49,13 @@ export const routes: RouteRecordRaw[] = [
         props: (to) => ({ workspaceId: to.params.id }),
       },
       {
+        // Feature 022 (US3): blocked-waiting tickets of the workspace.
+        path: 'waiting',
+        name: 'waiting',
+        component: () => import('../views/WorkspaceWaiting.vue'),
+        props: true,
+      },
+      {
         // Feature 008 (US3): the standalone settings page is retired — settings
         // is now a nested tab child. Declared BEFORE `:catchAll` so the
         // `/workspaces/:id/settings` deep-link resolves to this tab and is not

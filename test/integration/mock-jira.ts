@@ -35,6 +35,10 @@ interface StoredIssue {
   labels: string[];
   /** feature 020: component names served on GET /issue/{key} (repo-scoping input). */
   components: string[];
+  /** feature 022: issue priority echoed in search results when requested. */
+  priority?: { id: string; name: string };
+  /** feature 022: resolution name (blocker probe input); undefined = unresolved. */
+  resolution?: string;
   /** keys of blockers ("is blocked by"); resolved to live status on read. */
   blockedBy: string[];
   /** feature 004 (T114): epic (parent) key, resolved to live status on read. */
@@ -70,9 +74,15 @@ export interface MockJira {
       sprintId?: number;
       labels?: string[];
       components?: string[];
+      /** feature 022: Jira priority ({id, name}); omit for a priority-less issue. */
+      priority?: { id: string; name: string };
     },
   ): void;
   setStatus(key: string, status: string): void;
+  /** feature 022: set/clear an issue's resolution (blocker probe reads it). */
+  setResolution(key: string, resolution: string | undefined): void;
+  /** feature 022: arm a one-shot 500 on the next POST /search/jql (fast-path kill-switch tests). */
+  arm500OnNextSearch(): void;
   /** feature 020: replace the component names a ticket serves (repo-scoping round trips). */
   setComponents(key: string, components: string[]): void;
   setCategory(status: string, category: StatusCategoryKey): void;
@@ -85,6 +95,8 @@ export interface MockJira {
   /** Arm a one-shot 500 on the next GET /issue/{key} (run-dispatch description fetch fallback). */
   arm500OnNextIssueGet(): void;
   addBlockedByLink(key: string, blockerKey: string): void;
+  /** feature 022: break a blocked-by link (a human fixes the board). */
+  removeBlockedByLink(key: string, blockerKey: string): void;
   /** feature 004 (T114): set this issue's epic (parent) key. */
   setEpic(key: string, epicKey: string): void;
   /** feature 004 (T114): add a generic issue link (both issues must already be seeded). */
@@ -119,6 +131,7 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
   let botDisplayName = 'BRIGADIR Bot';
   let armed500Statuses = false;
   let armed500IssueGet = false;
+  let armed500Search = false;
 
   const catOf = (status: string): StatusCategoryKey => category[status] ?? 'indeterminate';
 
@@ -141,6 +154,10 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
       status: { name: i.statusName, statusCategory: { key: catOf(i.statusName) } },
       updated: i.updated,
       issuelinks: i.blockedBy.map(linkFor),
+      // feature 022: priority/resolution are projected only when requested
+      // (the search handler echoes requested fields), like live Jira.
+      priority: i.priority ?? null,
+      resolution: i.resolution ? { name: i.resolution } : null,
     },
   });
 
@@ -150,6 +167,11 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
    * Everything else (project clause, ORDER BY) is ignored.
    */
   const matchesJql = (i: StoredIssue, jql: string): boolean => {
+    // feature 022: the scope probe relies on the project clause excluding
+    // cross-project blockers — mock it as a key-prefix match (like live Jira,
+    // where the key prefix IS the project key).
+    const project = jql.match(/project\s*=\s*"?([A-Za-z0-9]+)"?/i);
+    if (project && i.key.split('-')[0] !== project[1]) return false;
     const upd = jql.match(/updated\s*>=\s*"([^"]+)"/i);
     if (upd) {
       // Mirror LIVE Jira (incident 2026-07-13): JQL datetime literals accept ONLY
@@ -200,6 +222,10 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
     http.post(`${baseUrl}/rest/api/3/search/jql`, async ({ request }) => {
       const r = maybe429();
       if (r) return r;
+      if (armed500Search) {
+        armed500Search = false;
+        return HttpResponse.json({ errorMessages: ['boom'] }, { status: 500 });
+      }
       const body = (await request.json()) as { jql?: string; fields?: string[]; nextPageToken?: string };
       const jql = body.jql ?? '';
       const all = [...issues.values()]
@@ -358,6 +384,7 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
         sprintId: opts.sprintId,
         labels: opts.labels ?? [],
         components: opts.components ?? [],
+        priority: opts.priority,
         blockedBy: [],
         linked: [],
       });
@@ -365,6 +392,13 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
     setStatus(key, status) {
       const i = issues.get(key);
       if (i) i.statusName = status;
+    },
+    setResolution(key, resolution) {
+      const i = issues.get(key);
+      if (i) i.resolution = resolution;
+    },
+    arm500OnNextSearch() {
+      armed500Search = true;
     },
     setComponents(key, components) {
       const i = issues.get(key);
@@ -390,6 +424,10 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
       if (!issue) throw new Error(`seed the blocked issue before linking (${key})`);
       if (!issues.has(blockerKey)) throw new Error(`seed the blocker before linking (${blockerKey})`);
       issue.blockedBy.push(blockerKey);
+    },
+    removeBlockedByLink(key, blockerKey) {
+      const issue = issues.get(key);
+      if (issue) issue.blockedBy = issue.blockedBy.filter((k) => k !== blockerKey);
     },
     setEpic(key, epicKey) {
       const issue = issues.get(key);
@@ -438,6 +476,7 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
       botDisplayName = 'BRIGADIR Bot';
       armed500Statuses = false;
       armed500IssueGet = false;
+      armed500Search = false;
       for (const k of Object.keys(category)) {
         if (!(k in DEFAULT_CATEGORY)) delete category[k];
         else category[k] = DEFAULT_CATEGORY[k];

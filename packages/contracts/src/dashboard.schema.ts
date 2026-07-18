@@ -137,6 +137,34 @@ export const VerifyResponseSchema = z
   .strict();
 export type VerifyResponse = z.infer<typeof VerifyResponseSchema>;
 
+// --- Waiting tickets (feature 022, contracts/dashboard-waiting.md) ---
+
+/**
+ * waiting — обычное ожидание блокеров; cycle — участник цикла blocked-by;
+ * dead_end — блокер закрыт вне done-категории; out_of_scope — блокер вне
+ * наблюдаемого скоупа борды (по такому тикету дополнительно висит run-less
+ * human task).
+ */
+export const BlockedStateSchema = z.enum(['waiting', 'cycle', 'dead_end', 'out_of_scope']);
+export type BlockedState = z.infer<typeof BlockedStateSchema>;
+
+export const WaitingTicketSchema = z
+  .object({
+    ticket_id: z.string().uuid(),
+    jira_key: z.string(),
+    summary: z.string().nullable(),
+    priority_id: z.number().int().nullable(),
+    priority_name: z.string().nullable(),
+    blocked_by: z.array(z.string()).min(1),
+    blocked_state: BlockedStateSchema,
+  })
+  .strict();
+export type WaitingTicket = z.infer<typeof WaitingTicketSchema>;
+
+/** GET /api/workspaces/:id/waiting — детерминированный порядок: priority_id ASC NULLS LAST, jira_key ASC. */
+export const WaitingListResponseSchema = makePaginatedResponseSchema(WaitingTicketSchema);
+export type WaitingListResponse = z.infer<typeof WaitingListResponseSchema>;
+
 export const BoardStatusResponseSchema = z.object({
   id: z.string(),
   name: z.string(),

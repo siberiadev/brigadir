@@ -3,6 +3,7 @@ import { RunsModule } from '@brigadir/runs';
 import { HumanTasksModule } from '@brigadir/human-tasks';
 import { PipelineService } from './pipeline.service';
 import { SetupApplyService } from './setup-apply.service';
+import { DependencyReleaseService } from './dependency-release.service';
 
 /**
  * PipelineModule — the status machine (onStatusChanged + onRunFinished).
@@ -14,7 +15,7 @@ import { SetupApplyService } from './setup-apply.service';
  */
 @Module({
   imports: [RunsModule, HumanTasksModule],
-  providers: [PipelineService, SetupApplyService],
-  exports: [PipelineService, SetupApplyService],
+  providers: [PipelineService, SetupApplyService, DependencyReleaseService],
+  exports: [PipelineService, SetupApplyService, DependencyReleaseService],
 })
 export class PipelineModule {}

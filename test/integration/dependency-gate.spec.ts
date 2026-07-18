@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { schema } from '@brigadir/database';
 import { encodeJiraCredentials, JiraClientFactory, type JiraClient } from '@brigadir/jira';
 import { PipelineService } from '@brigadir/pipeline';
@@ -151,7 +151,7 @@ describe('dependency gate (T057 trigger-side, T066 reconcile-side)', () => {
 
   // ---- T057: trigger side ----
 
-  it('trigger side: an open "is blocked by" blocker enqueues no run', async () => {
+  it('trigger side: an open "is blocked by" blocker enqueues no run and persists the waiting state', async () => {
     const status = 'Ready A';
     const agentId = await seedAgent('gate-blocked', status);
     const key = `BRIG-${++counter}`;
@@ -170,6 +170,13 @@ describe('dependency gate (T057 trigger-side, T066 reconcile-side)', () => {
     });
 
     expect(await runCount(agentId)).toBe(0);
+    // Feature 022 (FR-001): the skip is recorded, not dropped.
+    const [row] = await db.db
+      .select({ blockedBy: schema.tickets.blockedBy, blockedState: schema.tickets.blockedState })
+      .from(schema.tickets)
+      .where(eq(schema.tickets.id, ticket.id));
+    expect(row.blockedState).toBe('waiting');
+    expect(row.blockedBy).toEqual(['BLK-1']);
   });
 
   it('trigger side: a ticket with only non-blocking links fires normally', async () => {
@@ -209,16 +216,27 @@ describe('dependency gate (T057 trigger-side, T066 reconcile-side)', () => {
       .insert(schema.tickets)
       .values({ workspaceId, jiraKey: key, jiraId: '10000', summary: key, lastSeenStatus: status });
 
-    // Pass 1: blocker still open → no run.
+    // Pass 1: blocker still open → no run; waiting cache kept current (022).
     await reconcile.reEvaluateDependencies(ws, jira);
     expect(await runCount(agentId)).toBe(0);
+    const waitingRow = async () =>
+      (
+        await db.db
+          .select({ blockedBy: schema.tickets.blockedBy, blockedState: schema.tickets.blockedState })
+          .from(schema.tickets)
+          .where(and(eq(schema.tickets.workspaceId, workspaceId), eq(schema.tickets.jiraKey, key)))
+      )[0];
+    expect((await waitingRow()).blockedState).toBe('waiting');
+    expect((await waitingRow()).blockedBy).toEqual([blockerKey]);
 
     // Blocker resolves (only the blocker's status changes).
     mock.moveBlocker(blockerKey, 'Done', 'done');
 
-    // Pass 2: now clear → fires exactly once.
+    // Pass 2: now clear → fires exactly once; waiting cache cleared (022).
     await reconcile.reEvaluateDependencies(ws, jira);
     expect(await runCount(agentId)).toBe(1);
+    expect((await waitingRow()).blockedState).toBeNull();
+    expect((await waitingRow()).blockedBy).toBeNull();
 
     // Pass 3: an active/succeeded run now exists → zero additional.
     await reconcile.reEvaluateDependencies(ws, jira);

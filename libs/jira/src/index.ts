@@ -15,3 +15,5 @@ export * from './jira-client-factory';
 export * from './statuses.service';
 export * from './rate-limiter';
 export * from './per-issue-write-queue';
+export * from './scope-jql';
+export * from './priority';

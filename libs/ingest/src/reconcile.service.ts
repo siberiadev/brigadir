@@ -1,14 +1,12 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
-import { and, eq, sql } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import { type JiraClient, JiraClientFactory, WorkspaceConnectionService } from '@brigadir/jira';
-import { RunTriggerService } from '@brigadir/runs';
-import { evaluateDependencyGate, buildAgentTriggerEvent } from '@brigadir/pipeline';
+import { DependencyReleaseService } from '@brigadir/pipeline';
 import type { JiraBoardType } from '@brigadir/contracts';
 import { PollerService, type WorkspaceContext } from './poller.service';
 import { WatchdogService } from './watchdog.service';
 import { DriftRepairService } from './drift-repair.service';
-import { POLL_FIELDS } from './scope-jql';
 
 /**
  * ReconcileService (contracts.md C7 / research D7). One pass = four ordered
@@ -44,7 +42,7 @@ export class ReconcileService {
     private readonly poller: PollerService,
     private readonly watchdog: WatchdogService,
     private readonly drift: DriftRepairService,
-    private readonly runTrigger: RunTriggerService,
+    private readonly release: DependencyReleaseService,
   ) {}
 
   async run(): Promise<void> {
@@ -100,66 +98,13 @@ export class ReconcileService {
   }
 
   /**
-   * Dependency re-evaluation (contracts.md C7 step 2 / FR-036). For tickets
-   * currently sitting in some enabled agent's `trigger_status` with NO
-   * active/succeeded run for that agent, fetch the current issue links, re-check
-   * the gate, and trigger (via RunTriggerService → three dedup layers) when now
-   * clear — independent of the HWM floor, since resolving a blocker changes only
-   * the blocker's `updated`.
+   * Dependency re-evaluation (contracts.md C7 step 2 / FR-036). Feature 022:
+   * the pass body lives in `DependencyReleaseService` (libs/pipeline) so the
+   * post-success fast path shares the exact fetch→gate→order→trigger code; this
+   * method stays as the reconcile-facing seam (and the test surface).
    */
   async reEvaluateDependencies(ws: WorkspaceContext, jira: JiraClient): Promise<void> {
-    const candidates = await this.db
-      .select({
-        ticketId: schema.tickets.id,
-        ticketKey: schema.tickets.jiraKey,
-        agentId: schema.agents.id,
-        // feature 014: logs use the key (the readable technical handle), not the persona.
-        agentKey: schema.agents.key,
-        behavior: schema.agents.behavior,
-      })
-      .from(schema.tickets)
-      .innerJoin(
-        schema.agents,
-        and(
-          eq(schema.agents.workspaceId, schema.tickets.workspaceId),
-          eq(schema.agents.triggerStatus, schema.tickets.lastSeenStatus),
-          eq(schema.agents.enabled, true),
-        ),
-      )
-      .where(
-        and(
-          eq(schema.tickets.workspaceId, ws.id),
-          sql`not exists (
-            select 1 from ${schema.runs}
-            where ${schema.runs.ticketId} = ${schema.tickets.id}
-              and ${schema.runs.agentId} = ${schema.agents.id}
-              and ${schema.runs.status} in ('queued', 'running', 'awaiting_human', 'succeeded')
-          )`,
-        ),
-      );
-    if (candidates.length === 0) return;
-
-    const keys = [...new Set(candidates.map((c) => c.ticketKey))];
-    const jql = `project = "${ws.projectKey}" AND key in (${keys.join(', ')})`;
-    const issues = await jira.searchUpdated(jql, [...POLL_FIELDS]);
-    const byKey = new Map(issues.map((i) => [i.key, i]));
-
-    for (const c of candidates) {
-      const issue = byKey.get(c.ticketKey);
-      if (!issue) continue;
-      if (evaluateDependencyGate(issue) !== 'clear') continue;
-
-      const res = await this.runTrigger.trigger({
-        ticketId: c.ticketId,
-        agentId: c.agentId,
-        triggerEvent: buildAgentTriggerEvent('poller', c.behavior),
-      });
-      if (!res.deduplicated) {
-        this.logger.log(
-          `dependency re-eval: ${c.ticketKey} now clear for "${c.agentKey}" → run ${res.runId}`,
-        );
-      }
-    }
+    await this.release.releaseFor(ws, jira);
   }
 
   private async ensureBoardType(

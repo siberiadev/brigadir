@@ -244,6 +244,10 @@ CREATE TABLE tickets (
   summary         text,
   last_seen_status text,                       -- кэш для diff, НЕ источник правды
   last_seen_updated timestamptz,               -- кэш updated тикета; high-water mark поллера живёт в workspaces.settings
+  priority_id     int,                         -- кэш Jira priority.id (feature 022); ASC = важнее; NULL = без приоритета
+  priority_name   text,                        -- кэш имени приоритета для дашборда (feature 022)
+  blocked_by      jsonb,                       -- кэш открытых blocked-by ключей, string[] (feature 022); NULL = не ждёт
+  blocked_state   text,                        -- waiting | cycle | dead_end | out_of_scope (feature 022); NULL = не ждёт
   UNIQUE (workspace_id, jira_key)
 );
 
