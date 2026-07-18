@@ -3,7 +3,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import { type JiraClient, POLL_FIELDS, parseJiraPriority } from '@brigadir/jira';
 import { RunTriggerService } from '@brigadir/runs';
-import type { JiraBoardType, TriggerEvent } from '@brigadir/contracts';
+import type { JiraBoardType, JiraIssue, TriggerEvent } from '@brigadir/contracts';
 import { evaluateDependencyGate, blockingKeys } from './dependency-gate';
 import type { StatusChangeSource } from './pipeline.service';
 
@@ -122,7 +122,17 @@ export class DependencyReleaseService {
     const issues = await jira.searchUpdated(jql, [...POLL_FIELDS]);
     const byKey = new Map(issues.map((i) => [i.key, i]));
 
-    for (const c of candidates) {
+    // FR-006: deterministic release order — priority (ASC id, NULLS LAST) from
+    // the fresh fetch, stable jira_key tiebreak. Sequential await below makes
+    // enqueue order = this order.
+    const ordered = [...candidates].sort((a, b) =>
+      compareReleaseOrder(
+        { priorityId: priorityOf(byKey.get(a.ticketKey)), jiraKey: a.ticketKey },
+        { priorityId: priorityOf(byKey.get(b.ticketKey)), jiraKey: b.ticketKey },
+      ),
+    );
+
+    for (const c of ordered) {
       const issue = byKey.get(c.ticketKey);
       if (!issue) continue;
 
@@ -157,6 +167,31 @@ export class DependencyReleaseService {
       }
     }
   }
+}
+
+/** Ticket slice the release-order comparator reads. */
+export interface ReleaseOrderKey {
+  priorityId: number | null;
+  jiraKey: string;
+}
+
+/**
+ * Canonical release order (FR-006 / data-model.md §4): priority_id ASC with
+ * NULLS LAST (un-prioritized tickets go after prioritized ones), then plain
+ * lexicographic jira_key ASC as the stable tiebreak. Used identically by the
+ * release loop (in-memory) and the dashboard waiting list (SQL ORDER BY).
+ */
+export function compareReleaseOrder(a: ReleaseOrderKey, b: ReleaseOrderKey): number {
+  if (a.priorityId !== b.priorityId) {
+    if (a.priorityId === null) return 1;
+    if (b.priorityId === null) return -1;
+    return a.priorityId - b.priorityId;
+  }
+  return a.jiraKey < b.jiraKey ? -1 : a.jiraKey > b.jiraKey ? 1 : 0;
+}
+
+function priorityOf(issue: JiraIssue | undefined): number | null {
+  return issue ? parseJiraPriority(issue).priorityId : null;
 }
 
 /**

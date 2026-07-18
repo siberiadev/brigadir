@@ -59,8 +59,8 @@
 
 **Independent Test**: quickstart Scenario 2 — B(High)/C(Low)/D(no priority) blocked by A; on A's completion order is B→C→D, 10/10 repetitions identical.
 
-- [ ] T016 [US2] Canonical comparator (priority_id ASC NULLS LAST, then `jira_key` lexicographic ASC — data-model.md §4) applied to the candidate list in `libs/pipeline/src/dependency-release.service.ts` before the trigger loop (both entry points: full pass and `releaseDependentsOf`); colocated unit spec `libs/pipeline/src/dependency-release.spec.ts` covering priority order, NULLS LAST, tiebreak, and stability
-- [ ] T017 [US2] Integration test (in `test/integration/sprint-sequencing.spec.ts`): priority wave — three tickets with mixed/missing priorities released by one completion trigger in comparator order; loop the scenario 10× asserting identical enqueue order (SC-004; mock-jira issues seeded with `priority` field)
+- [X] T016 [US2] Canonical comparator (priority_id ASC NULLS LAST, then `jira_key` lexicographic ASC — data-model.md §4) applied to the candidate list in `libs/pipeline/src/dependency-release.service.ts` before the trigger loop (both entry points: full pass and `releaseDependentsOf`); colocated unit spec `libs/pipeline/src/dependency-release.spec.ts` covering priority order, NULLS LAST, tiebreak, and stability
+- [X] T017 [US2] Integration test (in `test/integration/sprint-sequencing.spec.ts`): priority wave — three tickets with mixed/missing priorities released by one completion trigger in comparator order; loop the scenario 10× asserting identical enqueue order (SC-004; mock-jira issues seeded with `priority` field)
 
 **Checkpoint**: release order deterministic and priority-respecting.
 

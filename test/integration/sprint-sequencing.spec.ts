@@ -254,6 +254,50 @@ describe('sprint sequencing (feature 022)', () => {
     expect((await runsFor(ticketF)).length).toBe(1);
   }, 120_000);
 
+  it('US2: a simultaneously released wave starts in priority order, identically on every repetition (SC-004)', async () => {
+    for (let rep = 0; rep < 10; rep += 1) {
+      const status = `Wave Ready ${++counter}`;
+      await seedAgent(`wave-worker-${counter}`, status);
+
+      const keyBlocker = `SEQ-${++counter}`;
+      // Seeded already Done: the wave is clear on the very first release pass.
+      mock.seedIssue(keyBlocker, { status: 'Done' });
+
+      // High(2) / Low(4) / no-priority, seeded out of order on purpose.
+      const keyLow = `SEQ-${++counter}`;
+      const keyHigh = `SEQ-${++counter}`;
+      const keyNone = `SEQ-${++counter}`;
+      mock.seedIssue(keyLow, { status, priority: { id: '4', name: 'Low' } });
+      mock.seedIssue(keyHigh, { status, priority: { id: '2', name: 'High' } });
+      mock.seedIssue(keyNone, { status });
+      for (const key of [keyLow, keyHigh, keyNone]) mock.addBlockedByLink(key, keyBlocker);
+
+      const ticketIds = new Map<string, string>();
+      for (const key of [keyLow, keyHigh, keyNone]) ticketIds.set(key, await seedTicket(key, status));
+
+      await reconcile.reEvaluateDependencies(ws, jira);
+
+      const rows = await db.db
+        .select({ ticketId: schema.runs.ticketId, createdAt: schema.runs.createdAt })
+        .from(schema.runs)
+        .where(
+          and(
+            eq(schema.runs.workspaceId, workspaceId),
+            eq(schema.runs.agentId, (await db.db
+              .select({ id: schema.agents.id })
+              .from(schema.agents)
+              .where(and(eq(schema.agents.workspaceId, workspaceId), eq(schema.agents.triggerStatus, status))))[0].id),
+          ),
+        )
+        .orderBy(asc(schema.runs.createdAt));
+      const orderedKeys = rows.map(
+        (r) => [...ticketIds.entries()].find(([, id]) => id === r.ticketId)?.[0],
+      );
+      // High priority first, then Low, then no-priority — every repetition.
+      expect(orderedKeys).toEqual([keyHigh, keyLow, keyNone]);
+    }
+  }, 240_000);
+
   it('US1: waiting ticket shows its blocker keys while parked (FR-001)', async () => {
     const status = `Wait Ready ${++counter}`;
     await seedAgent(`wait-worker-${counter}`, status);
