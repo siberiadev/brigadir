@@ -15,6 +15,7 @@ defineProps<{ id: string }>();
 // Agents/Settings are setup surfaces.
 const tabs = [
   { name: 'runs', label: 'Runs' },
+  { name: 'waiting', label: 'Waiting' },
   { name: 'workspace-human-queue', label: 'Human queue' },
   { name: 'agents', label: 'Agents' },
   { name: 'settings', label: 'Settings' },

@@ -72,11 +72,11 @@
 
 **Independent Test**: quickstart Scenario 3 — endpoint returns the waiting row with blocker keys; row disappears after release; Waiting tab renders with pagination rules.
 
-- [ ] T018 [P] [US3] `BlockedStateSchema` + `WaitingTicketSchema` + `WaitingListResponseSchema = makePaginatedResponseSchema(WaitingTicketSchema)` in `packages/contracts/src/dashboard.schema.ts` exactly per `contracts/dashboard-waiting.md`; export via `packages/contracts/src/index.ts`
-- [ ] T019 [US3] `GET /api/workspaces/:id/waiting` in `apps/backend/src/dashboard/workspaces.controller.ts`: `parsePagination` from `dashboard.helpers.ts`, rows `WHERE workspace_id=:id AND blocked_state IS NOT NULL`, `ORDER BY priority_id ASC NULLS LAST, jira_key ASC`, 404 on unknown workspace
-- [ ] T020 [US3] Endpoint integration test (in `test/integration/sprint-sequencing.spec.ts` alongside the seeded waiting states): envelope shape validates against `WaitingListResponseSchema`, deterministic order, released ticket disappears, 404 case
-- [ ] T021 [P] [US3] Web data layer: `apps/web/src/api/tickets.ts` (fetch wrapper) + `apps/web/src/composables/useWaitingTickets.ts` — TanStack query keyed by (workspaceId, page, pageSize) with `placeholderData: (prev) => prev`, paired with `usePagination`/`bindTotal`
-- [ ] T022 [US3] `apps/web/src/views/WorkspaceWaiting.vue` + `waiting` child route in `apps/web/src/router/index.ts` + tab entry in `apps/web/src/views/WorkspacePage.vue`: table (jira_key, summary, priority_name, blocked_by keys, state tag), shared `<ListPagination>`, state tags colored only via `--el-color-*` variables, static lucide icons (no hover animation — sidebar-only rule)
+- [X] T018 [P] [US3] `BlockedStateSchema` + `WaitingTicketSchema` + `WaitingListResponseSchema = makePaginatedResponseSchema(WaitingTicketSchema)` in `packages/contracts/src/dashboard.schema.ts` exactly per `contracts/dashboard-waiting.md`; export via `packages/contracts/src/index.ts`
+- [X] T019 [US3] `GET /api/workspaces/:id/waiting` in `apps/backend/src/dashboard/workspaces.controller.ts`: `parsePagination` from `dashboard.helpers.ts`, rows `WHERE workspace_id=:id AND blocked_state IS NOT NULL`, `ORDER BY priority_id ASC NULLS LAST, jira_key ASC`, 404 on unknown workspace
+- [X] T020 [US3] Endpoint integration test (in `test/integration/sprint-sequencing.spec.ts` alongside the seeded waiting states): envelope shape validates against `WaitingListResponseSchema`, deterministic order, released ticket disappears, 404 case
+- [X] T021 [P] [US3] Web data layer: `apps/web/src/api/tickets.ts` (fetch wrapper) + `apps/web/src/composables/useWaitingTickets.ts` — TanStack query keyed by (workspaceId, page, pageSize) with `placeholderData: (prev) => prev`, paired with `usePagination`/`bindTotal`
+- [X] T022 [US3] `apps/web/src/views/WorkspaceWaiting.vue` + `waiting` child route in `apps/web/src/router/index.ts` + tab entry in `apps/web/src/views/WorkspacePage.vue`: table (jira_key, summary, priority_name, blocked_by keys, state tag), shared `<ListPagination>`, state tags colored only via `--el-color-*` variables, static lucide icons (no hover animation — sidebar-only rule)
 
 **Checkpoint**: operators see and can audit the waiting set.
 
