@@ -8,10 +8,9 @@ import {
   getReconcileState,
   setReconcileState,
 } from '@brigadir/database';
-import { type JiraClient } from '@brigadir/jira';
+import { type JiraClient, POLL_FIELDS, buildScopeJql, sinceClause } from '@brigadir/jira';
 import { PipelineService } from '@brigadir/pipeline';
 import type { JiraBoardType, JiraIssue } from '@brigadir/contracts';
-import { POLL_FIELDS, buildScopeJql, sinceClause } from './scope-jql';
 
 /** Resolved workspace the reconcile pass operates on. */
 export interface WorkspaceContext {

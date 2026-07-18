@@ -1,14 +1,13 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { and, eq, sql } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
-import { type JiraClient, JiraClientFactory, WorkspaceConnectionService } from '@brigadir/jira';
+import { type JiraClient, JiraClientFactory, WorkspaceConnectionService, POLL_FIELDS } from '@brigadir/jira';
 import { RunTriggerService } from '@brigadir/runs';
 import { evaluateDependencyGate, buildAgentTriggerEvent } from '@brigadir/pipeline';
 import type { JiraBoardType } from '@brigadir/contracts';
 import { PollerService, type WorkspaceContext } from './poller.service';
 import { WatchdogService } from './watchdog.service';
 import { DriftRepairService } from './drift-repair.service';
-import { POLL_FIELDS } from './scope-jql';
 
 /**
  * ReconcileService (contracts.md C7 / research D7). One pass = four ordered
