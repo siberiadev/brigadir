@@ -127,6 +127,44 @@ describe('secret scrubbing at the run boundary (T113)', () => {
     expect(commentText).not.toContain(PLANTED_SECRET_2);
   });
 
+  // Feature 019 (research D7): artifact strings are agent-authored free text
+  // and now pass the scrubber too — BOTH the legacy flat form and repos[].
+  it('planted secrets in artifacts (flat AND repos[]) are scrubbed before persistence and Jira', async () => {
+    const { runId, workspaceId, ticketKey } = await seedRunningRun();
+    const token = tokenFor(runId, workspaceId, ticketKey);
+
+    const res = await post(runId, 'complete', token, {
+      schema_version: 2,
+      outcome: 'success',
+      summary: 'Done.',
+      checks: [],
+      artifacts: {
+        branch: `feat/x-${PLANTED_SECRET_1}`,
+        commits: [`abc used ${PLANTED_SECRET_2}`],
+        repos: [
+          {
+            repo: 'lib',
+            branch: `feat/y-${PLANTED_SECRET_1}`,
+            pr_url: `https://git/pr?token=${PLANTED_SECRET_2}`,
+            commits: [`def leaked ${PLANTED_SECRET_1}`],
+          },
+        ],
+      },
+    });
+    expect(res.status).toBe(200);
+
+    const [row] = await db.db.select().from(schema.runs).where(eq(schema.runs.id, runId)).limit(1);
+    const reportJson = JSON.stringify(row.report);
+    expect(reportJson).not.toContain(PLANTED_SECRET_1);
+    expect(reportJson).not.toContain(PLANTED_SECRET_2);
+    expect(reportJson).toContain('[REDACTED]');
+
+    await waitFor(() => mock.commentsFor(ticketKey).length > 0);
+    const commentText = JSON.stringify(mock.commentsFor(ticketKey));
+    expect(commentText).not.toContain(PLANTED_SECRET_1);
+    expect(commentText).not.toContain(PLANTED_SECRET_2);
+  });
+
   it('a blocking request_human with a planted secret in details is scrubbed in the task row and the Jira comment', async () => {
     const { runId, workspaceId, ticketKey } = await seedRunningRun();
     const token = tokenFor(runId, workspaceId, ticketKey);

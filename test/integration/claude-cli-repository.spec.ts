@@ -22,16 +22,17 @@ import {
 const execFileAsync = promisify(execFile);
 
 /**
- * Repository resolution for claude_cli runs (platform-scoped executors,
- * 2026-07-13): `agents.behavior.repository` wins; absent → the run
- * workspace's default repository (first `settings.repositories` entry);
+ * Repository resolution for claude_cli runs (feature 019 multi-repo,
+ * research D1): `behavior.repositories` (subset) wins; deprecated
+ * `behavior.repository` = one-element list; absent → ALL workspace
+ * repositories (deliberate 019 behavior change from "first entry only");
  * neither settings repos nor a yaml fallback → the run fails with a clear
  * error. This suite boots the worker WITHOUT agents.yaml (DB-only), so the
  * workspace settings are the only repo source — the executor config's
  * leftover `repository` key (baseExecutorConfig still carries 'product')
  * must be IGNORED throughout.
  */
-describe('claude_cli repository resolution (behavior.repository → workspace default → error)', () => {
+describe('claude_cli repository resolution (repositories[] → repository → all → error)', () => {
   let db: DbHarness;
   let redis: RedisHarness;
   let worker: TestingModule;
@@ -85,9 +86,10 @@ describe('claude_cli repository resolution (behavior.repository → workspace de
   async function triggerRun(opts: {
     behavior?: Record<string, unknown>;
     workspaceSettings?: Record<string, unknown>;
+    fixture?: string;
   }): Promise<string> {
     resetFakeClaudeEnv();
-    process.env.FAKE_CLAUDE_FIXTURE = 'stream-success';
+    process.env.FAKE_CLAUDE_FIXTURE = opts.fixture ?? 'stream-success';
     const p = await seedPipeline(db.db, {
       executorType: 'claude_cli',
       // baseExecutorConfig still carries the pre-0003 leftover repository key —
@@ -121,7 +123,32 @@ describe('claude_cli repository resolution (behavior.repository → workspace de
     }
   }
 
-  it('behavior.repository wins: the run clones the named repo, not the workspace default', async () => {
+  /** The ticket branch a run created in a cache repo, if any. */
+  async function branchInCache(cacheName: string, ticketKey: string): Promise<boolean> {
+    const cacheDir = join(env.repoCacheRoot, cacheName);
+    if (!existsSync(cacheDir)) return false;
+    const { stdout } = await execFileAsync('git', [
+      '-C',
+      cacheDir,
+      'branch',
+      '--list',
+      `run/${ticketKey}`,
+    ]);
+    return stdout.trim() !== '';
+  }
+
+  /** Ticket key of the run's own ticket row (branch name = run/<key>). */
+  async function ticketKeyOf(runId: string): Promise<string> {
+    const [row] = await db.db
+      .select({ key: schema.tickets.jiraKey })
+      .from(schema.runs)
+      .innerJoin(schema.tickets, eq(schema.runs.ticketId, schema.tickets.id))
+      .where(eq(schema.runs.id, runId))
+      .limit(1);
+    return row!.key;
+  }
+
+  it('deprecated behavior.repository wins: the run clones ONLY the named repo (US2 legacy path)', async () => {
     const runId = await triggerRun({
       behavior: { repository: 'infra' },
       workspaceSettings: { repositories: repositories() },
@@ -132,18 +159,67 @@ describe('claude_cli repository resolution (behavior.repository → workspace de
     // cloned, and the default (product) was never touched.
     expect(existsSync(join(env.repoCacheRoot, 'infra'))).toBe(true);
     expect(existsSync(join(env.repoCacheRoot, 'product'))).toBe(false);
+    // Feature 019: worktree_path points at the run's PARENT workspace dir.
+    expect(row.worktreePath).toBe(join(env.worktreeRoot, runId));
   });
 
-  it('absent behavior.repository → the workspace default (first settings entry)', async () => {
+  it('absent scope → ALL workspace repositories, every worktree on the same ticket branch (feature 019, D1)', async () => {
     const runId = await triggerRun({
       workspaceSettings: { repositories: repositories() },
     });
     const row = await pollRun(runId);
     expect(row.status).toBe('succeeded');
+    // BOTH repos cloned (pre-019 this case resolved only the default/first).
     expect(existsSync(join(env.repoCacheRoot, 'product'))).toBe(true);
+    expect(existsSync(join(env.repoCacheRoot, 'infra'))).toBe(true);
+    // Same branch↔ticket identity in every repo (worktrees are cleaned up
+    // after the run; the branches remain in the caches).
+    const key = await ticketKeyOf(runId);
+    expect(await branchInCache('product', key)).toBe(true);
+    expect(await branchInCache('infra', key)).toBe(true);
+    expect(row.worktreePath).toBe(join(env.worktreeRoot, runId));
   });
 
-  it('no behavior.repository, no settings repos, no yaml → the run fails with a clear error', async () => {
+  it('behavior.repositories subset: only the named repos get worktrees/branches (US3)', async () => {
+    const runId = await triggerRun({
+      behavior: { repositories: ['infra'] },
+      workspaceSettings: { repositories: repositories() },
+    });
+    const row = await pollRun(runId);
+    expect(row.status).toBe('succeeded');
+    const key = await ticketKeyOf(runId);
+    expect(await branchInCache('infra', key)).toBe(true);
+    expect(await branchInCache('product', key)).toBe(false);
+  });
+
+  it('an unknown name in behavior.repositories fails the run with a clear error (defense behind config validation)', async () => {
+    const runId = await triggerRun({
+      behavior: { repositories: ['ghost'] },
+      workspaceSettings: { repositories: repositories() },
+    });
+    const row = await pollRun(runId);
+    expect(row.status).toBe('failed');
+    expect(row.error).toMatch(/no repository named "ghost"/);
+  });
+
+  it('a multi-repo report round-trips: artifacts.repos[] persisted on the run (feature 019)', async () => {
+    const runId = await triggerRun({
+      workspaceSettings: { repositories: repositories() },
+      fixture: 'stream-success-multi-repo',
+    });
+    const row = await pollRun(runId);
+    expect(row.status).toBe('succeeded');
+    const report = row.report as {
+      schema_version: number;
+      artifacts?: { repos?: { repo: string; pr_url?: string }[] };
+    };
+    expect(report.schema_version).toBe(2);
+    expect(report.artifacts?.repos).toHaveLength(2);
+    expect(report.artifacts?.repos?.map((r) => r.repo)).toEqual(['product', 'infra']);
+    expect(report.artifacts?.repos?.[0].pr_url).toBe('https://git.example.com/product/pull/11');
+  });
+
+  it('no scope fields, no settings repos, no yaml → the run fails with a clear error', async () => {
     const runId = await triggerRun({}); // workspace settings stay {}
     const row = await pollRun(runId);
     expect(row.status).toBe('failed');

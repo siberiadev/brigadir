@@ -72,7 +72,10 @@ export const ClaudeCliExecutorConfigSchema = z
     concurrency: z.number().int().min(1).default(2),
     model: z.string().min(1),
     cliPath: z.string().min(1).default('claude'),
-    repository: z.string().min(1),
+    // Deprecated (feature 019): runtime-ignored since platform-scoped
+    // executors (2026-07-13) and stripped by the config-seeder — kept optional
+    // so old YAMLs stay valid; the repo choice lives on agent behavior.
+    repository: z.string().min(1).optional(),
     allowedTools: z.array(z.string()).optional(),
     keepFailedWorktrees: z.boolean().default(false),
     worktreeRoot: z.string().min(1).optional(),
@@ -139,6 +142,13 @@ export const AgentBehaviorSchema = z
     allowed_tools: z.array(z.string()).optional(),
     required_checks: z.array(z.string()).optional(),
     verification: z.string().optional(),
+    // Feature 019: the agent's repository scope — a subset of
+    // workspace.repositories[].name. Empty/absent = ALL workspace repos.
+    repositories: z.array(z.string().min(1)).optional(),
+    // Deprecated single-repo form (semantically a one-element list); kept
+    // valid forever — stored rows are never rewritten. When both are present,
+    // `repositories` wins (research D1).
+    repository: z.string().min(1).optional(),
   })
   .passthrough();
 
@@ -193,17 +203,46 @@ export const AgentsConfigSchema = z
     });
 
     // claude_cli cross-field checks (contracts/executor-config.md, D9):
-    // `repository` must reference a declared workspace repository.
+    // a deprecated executor-level `repository`, when present, must reference
+    // a declared workspace repository.
     const repoNames = new Set((config.workspace.repositories ?? []).map((r) => r.name));
     for (const [name, executor] of Object.entries(config.executors)) {
       if (executor.type !== 'claude_cli') continue;
-      if (!repoNames.has(executor.repository)) {
+      if (executor.repository !== undefined && !repoNames.has(executor.repository)) {
         ctx.addIssue({
           code: 'custom',
           path: ['executors', name, 'repository'],
           message: `references unknown repository "${executor.repository}" — must match one of workspace.repositories[].name`,
         });
       }
+    }
+
+    // Feature 019 (FR-003): every name in an agent's repository scope —
+    // behavior.repositories[] and the deprecated behavior.repository — must
+    // reference a declared workspace repository (mirrors the executor check
+    // above). Skipped when the workspace declares no repositories: repo-less
+    // workspaces stay valid and run-time resolution is the guard there.
+    if (repoNames.size > 0) {
+      config.agents.forEach((agent, index) => {
+        const behavior = agent.behavior;
+        if (!behavior) return;
+        (behavior.repositories ?? []).forEach((repoName, j) => {
+          if (!repoNames.has(repoName)) {
+            ctx.addIssue({
+              code: 'custom',
+              path: ['agents', index, 'behavior', 'repositories', j],
+              message: `references unknown repository "${repoName}" — must match one of workspace.repositories[].name`,
+            });
+          }
+        });
+        if (behavior.repository !== undefined && !repoNames.has(behavior.repository)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['agents', index, 'behavior', 'repository'],
+            message: `references unknown repository "${behavior.repository}" — must match one of workspace.repositories[].name`,
+          });
+        }
+      });
     }
 
     // claude_cli `allowedTools`: if the executor doesn't declare its own,

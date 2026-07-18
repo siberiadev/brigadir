@@ -274,6 +274,17 @@ export const sampleRunCard: RunCardResponse = {
     { position: 2, name: 'typecheck', status: 'warn', reason: 'deprecated API used' },
     { position: 3, name: 'e2e', status: 'skip', reason: null },
   ],
+  // Feature 019: per-repo artifact lines (normalized by the backend).
+  artifacts: [
+    {
+      repo: 'api',
+      branch: 'feat/BRIG-1',
+      pr_url: 'https://github.com/acme/api/pull/9',
+      commits_count: 2,
+      files_changed: 5,
+    },
+    { repo: 'web', branch: 'feat/BRIG-1', pr_url: null, commits_count: 1, files_changed: null },
+  ],
   events: [
     { id: '1', type: 'started', payload: {}, created_at: '2026-07-12T10:00:05.000Z' },
     { id: '2', type: 'report', payload: { ok: false }, created_at: '2026-07-12T10:00:47.000Z' },

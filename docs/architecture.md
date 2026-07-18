@@ -521,7 +521,7 @@ all-or-nothing: невалидный агент ⇒ 422 с path-qualified issues
   "required": ["schema_version", "outcome", "summary", "checks"],
   "additionalProperties": false,
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "enum": [1, 2] },
     "outcome": { "enum": ["success", "failure", "needs_human", "routed", "team"] },
     "summary": { "type": "string", "maxLength": 2000,
       "description": "2-4 предложения: что сделано / что не получилось" },
@@ -599,11 +599,28 @@ all-or-nothing: невалидный агент ⇒ 422 с path-qualified issues
     },
     "artifacts": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "branch":  { "type": "string" },
         "pr_url":  { "type": "string" },
         "commits": { "type": "array", "items": { "type": "string" } },
-        "files_changed": { "type": "integer" }
+        "files_changed": { "type": "integer" },
+        "repos": {
+          "type": "array", "maxItems": 20,
+          "description": "feature 019 (v2): по-репозиторные артефакты мульти-репо прогона — ОДНА запись на каждый репозиторий, который агент реально менял. При наличии repos[] плоские поля игнорируются потребителями (authoritative-форма); прецедентность реализована ровно один раз — normalizeReportArtifacts (packages/contracts/report.schema.ts), её используют скраббер, review-task, ADF-коммент, run card и feature-context.",
+          "items": {
+            "type": "object",
+            "required": ["repo"],
+            "additionalProperties": false,
+            "properties": {
+              "repo":          { "type": "string", "maxLength": 200 },
+              "branch":        { "type": "string", "maxLength": 300 },
+              "pr_url":        { "type": "string", "maxLength": 1000 },
+              "commits":       { "type": "array", "maxItems": 100, "items": { "type": "string", "maxLength": 500 } },
+              "files_changed": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
       }
     }
   }
@@ -617,8 +634,9 @@ all-or-nothing: невалидный агент ⇒ 422 с path-qualified issues
 - `outcome=routed` ⇒ `routing` обязателен (feature 010, тем же `superRefine`, что и needs_human). `routed` эмитит только оркестратор; `routed` от не-оркестратора пайплайн трактует как failure (FR-002). `routing.task` скраббится наравне с прочими free-text полями (FR-003). Валидность таргета (exists ∧ enabled ∧ не оркестратор ∧ тот же workspace) и бюджет rework-циклов проверяются в пайплайне, не в схеме.
 - `outcome=team` ⇒ `team` обязателен (feature 011). Принятие — атомарное: валидация proposal'а (имена ∪ существующие агенты, статусы против живой борды, executor-профили по имени, коллизии триггеров) и применение (агенты enabled + бестикетная review-задача + finalize succeeded) в одной транзакции; невалидный proposal — 422 с списком ошибок через complete_task, прогон остаётся running (агент чинит и повторяет).
 - Из `checks` строятся: чеклист ✅/❌ в Vue-дашборде и ADF-коммент в Jira (`taskList` + `panel`).
-- Отчёт проходит **скраббер секретов** (regex+entropy) до записи в БД и постинга в Jira.
-- Схема версионируется (`schema_version`); миграции отчётов — вперёд-совместимые.
+- Из `artifacts` (feature 019) — артефакт-строки: по одной на репозиторий (`<repo>: <branch> — <pr_url> (<n> commits, <m> files)`) в ADF-комменте и блоке Artifacts на run card; легаси-плоская форма рендерится одной строкой без префикса репозитория.
+- Отчёт проходит **скраббер секретов** (regex+entropy) до записи в БД и постинга в Jira; artifacts (обе формы) скрабятся наравне с прочими free-text полями (feature 019 закрыл этот пробел).
+- Схема версионируется (`schema_version`); миграции отчётов — вперёд-совместимые. v2 (feature 019) добавил `artifacts.repos[]`; v1-отчёты валидны навсегда, связки «версия⇄поле» нет (v1+repos и v2+плоские — тоже валидны).
 - Для QA-агента `checks` — это его чек-план; для Implementer — определение готовности (tests pass, lint pass, PR opened). Набор рекомендованных checks задаётся в обёртке инструкции.
 
 ---
@@ -633,8 +651,9 @@ all-or-nothing: невалидный агент ⇒ 422 с path-qualified issues
   "reporting":        "on_milestones",   // never | on_milestones | verbose
   "human_escalation": "on_ambiguity",    // never | on_blocker | on_ambiguity | always_before_finish
   "on_failure":       "report_and_stop", // report_and_stop | retry_once_then_report
-  "code_delivery":    "branch_push",     // none | branch_push | pull_request
-  "repository":       "product",         // из workspace.settings.repositories; пусто = дефолтный
+  "code_delivery":    "branch_push",     // none | branch_push | pull_request (применяется ПО каждому изменённому репо — feature 019)
+  "repositories":     ["lib", "consumer"], // feature 019: SCOPE агента — подмножество workspace.settings.repositories[].name; пусто/absent = ВСЕ репозитории воркспейса
+  "repository":       "product",         // DEPRECATED (feature 019): одноэлементная форма scope; при обоих полях выигрывает repositories; хранимые строки не переписываются
   "branch_prefix":    "feat",            // override; пусто = наследуется от workspace.branch_prefix
   "allowed_tools":    ["Read", "Edit", "Write", "Glob", "Grep", "Bash(git *)", "Bash(pnpm *)"],
   "required_checks":  ["tests_pass", "lint_pass", "build_pass"], // прекомпилированный чек-план
@@ -667,6 +686,16 @@ You have MCP tools from the "brigadir" server. They are the ONLY way to report t
 - If you cannot finish, still call complete_task with outcome=failure or needs_human.
 ```
 
+Мульти-репо прогоны (feature 019, реализовано в живой обёртке `wrapper.ts`): у repo-carrying
+прогона workspace-директория — РОДИТЕЛЬ `worktreeRoot/<runId>/` с worktree на каждый репозиторий
+scope'а (`<runId>/<repo.name>/`, все на одной ветке `<branch_prefix>/<ticketKey>`). Обёртка
+рендерит секцию `## Repositories`: список всех подготовленных репо (имя, абсолютный путь, ветка,
+база) + правила поведения: (a) решить по тикету, какие репо реально требуют изменений; (b)
+коммитить/пушить только в изменённых; (c) при взаимозависимых PR ссылаться на зависимый PR в
+описании каждого; (d) отчитаться `artifacts.repos[]` (schema_version: 2) по одной записи на
+ИЗМЕНЁННЫЙ репозиторий; чеки/тесты — только в изменённых репо. No-repo (triage) прогоны получают
+обёртку, байт-в-байт идентичную до-019.
+
 Для не-Claude executor'ов те же опции компилируются в соответствующий формат (OpenAI system message + tools); для Routines — в сохранённый промпт routine + текст триггера. Компилятор обёртки — единственная точка, где «опции поведения» превращаются в текст: это позволяет улучшать промпт-инженерию без миграции пользовательских данных.
 
 Фазировка: полный компилятор behavior→wrapper — Phase 2. В **Phase 0** используется упрощённый статический шаблон: раздел про MCP-тулзы заменён инструкцией «верни финальный ответ строго как JSON по схеме отчёта» (канал `--json-schema`), эскалация к человеку — через `outcome=needs_human`. С Phase 1 в шаблон возвращается MCP-раздел.
@@ -685,7 +714,9 @@ You have MCP tools from the "brigadir" server. They are the ONLY way to report t
 
 ```ts
 export interface RunRuntime {
-  prepare(spec: { repoUrl: string; ref: string; env: Record<string,string> }): Promise<WorkspaceHandle>;
+  // feature 019: prepare принимает СПИСОК репозиториев — WorkspaceHandle обозначает
+  // родительскую директорию прогона с worktree на каждый repo (одна ветка во всех).
+  prepare(spec: { repos: { repoUrl: string; ref: string }[]; env: Record<string,string> }): Promise<WorkspaceHandle>;
   spawn(handle: WorkspaceHandle, cmd: string[], opts: SpawnOpts): Promise<AgentProcess>; // kill = process group
   cleanup(handle: WorkspaceHandle): Promise<void>;
 }

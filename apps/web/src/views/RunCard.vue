@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
-import type { RunCheckStatus, RunStatus } from '@brigadir/contracts';
-import { CircleDollarSign, Copy, Hash, RotateCcw, Timer, X } from 'lucide-vue-next';
+import type { RunCardArtifact, RunCheckStatus, RunStatus } from '@brigadir/contracts';
+import { CircleDollarSign, Copy, GitBranch, Hash, RotateCcw, Timer, X } from 'lucide-vue-next';
 import { useRunCard, useCancelRun, useRetryRun } from '../composables/useRunCard';
 import { useNow } from '../composables/useNow';
 import BackLink from '../components/BackLink.vue';
@@ -72,6 +72,14 @@ const CHECK_GLYPH: Record<RunCheckStatus, string> = {
 // Steps the model made in this session = timeline items after presentation
 // (the report_progress tool_call/progress duplicates count as one step).
 const stepCount = computed(() => presentEvents(card.value?.events ?? []).length);
+
+// Feature 019: per-repo artifact counts line, e.g. "2 commits, 3 files".
+function artifactCounts(a: RunCardArtifact): string {
+  const parts: string[] = [];
+  if (a.commits_count !== null) parts.push(pluralize(a.commits_count, 'commit'));
+  if (a.files_changed !== null) parts.push(pluralize(a.files_changed, 'file'));
+  return parts.join(', ');
+}
 
 // Executor tag: type + the actual model; session id for the copy button.
 // Both live only in the session-init `log` event (the run record has neither).
@@ -200,6 +208,34 @@ const liveDuration = computed(() => {
           <a v-if="run.external_ref" :href="run.external_ref" target="_blank" rel="noopener" data-test="external-ref">
             {{ run.external_ref }}
           </a>
+        </section>
+
+        <!-- Artifacts (feature 019): one line per repo the run reported;
+             hidden entirely when the report carried none. -->
+        <section v-if="card.artifacts.length > 0" class="section">
+          <h3>Artifacts</h3>
+          <ul class="artifacts" data-test="artifacts">
+            <li
+              v-for="(a, i) in card.artifacts"
+              :key="i"
+              class="artifact-row"
+              :data-test="`artifact-${i}`"
+            >
+              <GitBranch :size="13" />
+              <span v-if="a.repo" class="artifact-repo" :data-test="`artifact-repo-${i}`">{{ a.repo }}</span>
+              <span v-if="a.branch" class="artifact-branch">{{ a.branch }}</span>
+              <a
+                v-if="a.pr_url"
+                :href="a.pr_url"
+                target="_blank"
+                rel="noopener"
+                :data-test="`artifact-pr-${i}`"
+              >
+                {{ a.pr_url }}
+              </a>
+              <span v-if="artifactCounts(a)" class="artifact-counts muted">{{ artifactCounts(a) }}</span>
+            </li>
+          </ul>
         </section>
 
         <!-- Report checklist — hidden until checks arrive (partial report) -->
@@ -357,6 +393,29 @@ const liveDuration = computed(() => {
   align-items: center;
   gap: $space-sm;
   min-width: 0;
+}
+.artifacts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.artifact-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: $space-sm;
+  padding: 4px 0;
+  font-size: 13px;
+
+  a {
+    word-break: break-all;
+  }
+}
+.artifact-repo {
+  font-weight: $font-weight-medium;
+}
+.artifact-counts {
+  font-size: 12px;
 }
 .glyph {
   width: 1.4em;

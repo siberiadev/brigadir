@@ -151,6 +151,46 @@ describe('callback completion (T104)', () => {
     expect(mock.transitionsFor(ticketKey)).toContain('Code Review');
   });
 
+  // Feature 019 US2: a v1 report with the legacy FLAT artifacts form is
+  // processed exactly as before — validates, persists verbatim (post-scrub),
+  // and the Jira comment renders the single repo-less artifact line.
+  it('back-compat: v1 + flat artifacts validates, persists, and renders one legacy artifact line', async () => {
+    const { runId, ticketKey } = await seedAndTrigger({
+      callbacks: [
+        {
+          tool: 'complete',
+          body: {
+            schema_version: 1,
+            outcome: 'success',
+            summary: 'Implemented on a branch.',
+            checks: [{ name: 'tests_pass', status: 'pass' }],
+            artifacts: {
+              branch: 'feat/legacy-1',
+              pr_url: 'https://github.com/acme/repo/pull/5',
+              commits: ['abc fix'],
+              files_changed: 2,
+            },
+          },
+        },
+      ],
+    });
+
+    const row = await pollRun(runId, TERMINAL);
+    expect(row.status).toBe('succeeded');
+    expect(row.report).toMatchObject({
+      schema_version: 1,
+      artifacts: { branch: 'feat/legacy-1', pr_url: 'https://github.com/acme/repo/pull/5' },
+    });
+
+    // The success comment carries the flat artifact line WITHOUT a repo prefix.
+    const deadline = Date.now() + 10_000;
+    while (mock.commentsFor(ticketKey).length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const commentText = JSON.stringify(mock.commentsFor(ticketKey));
+    expect(commentText).toContain('feat/legacy-1 — https://github.com/acme/repo/pull/5 (1 commit, 2 files)');
+  });
+
   it('fail-closed: a run that calls nothing finalizes failed, and report-shaped stdout never rescues it (FR-010/011)', async () => {
     // Streams a schema-VALID structured_output in its terminal result event
     // (the same fixture the non-callback success test uses) but makes NO

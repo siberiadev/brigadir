@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ReportSchema } from './report.schema';
+import { ReportSchema, normalizeReportArtifacts } from './report.schema';
 
 const baseSuccess = {
   schema_version: 1 as const,
@@ -91,8 +91,13 @@ describe('ReportSchema v1', () => {
     expect(ReportSchema.safeParse(r).success).toBe(false);
   });
 
-  it('rejects wrong schema_version', () => {
+  it('accepts schema_version 2 (feature 019 — v1|v2 union)', () => {
     const r = { ...baseSuccess, schema_version: 2 };
+    expect(ReportSchema.safeParse(r).success).toBe(true);
+  });
+
+  it('rejects an unknown schema_version', () => {
+    const r = { ...baseSuccess, schema_version: 3 };
     expect(ReportSchema.safeParse(r).success).toBe(false);
   });
 
@@ -209,5 +214,98 @@ describe('ReportSchema v1', () => {
       };
       expect(ReportSchema.safeParse(r).success).toBe(false);
     });
+  });
+});
+
+// Feature 019: per-repository artifacts (ReportSchema v2). No version⇄field
+// coupling — v1+flat, v1+repos, v2+flat, v2+repos all validate (research D2).
+describe('ReportSchema v2 artifacts.repos', () => {
+  const repoEntry = {
+    repo: 'lib',
+    branch: 'feat/T-1',
+    pr_url: 'https://git.example.com/lib/pull/1',
+    commits: ['abc123 contract change'],
+    files_changed: 2,
+  };
+
+  it('accepts v2 with per-repo artifacts', () => {
+    const r = {
+      ...baseSuccess,
+      schema_version: 2,
+      artifacts: { repos: [repoEntry, { repo: 'consumer' }] },
+    };
+    expect(ReportSchema.safeParse(r).success).toBe(true);
+  });
+
+  it('accepts v1 with flat artifacts (legacy form stays valid)', () => {
+    const r = {
+      ...baseSuccess,
+      artifacts: { branch: 'feat/T-1', pr_url: 'https://x', commits: ['abc'], files_changed: 3 },
+    };
+    expect(ReportSchema.safeParse(r).success).toBe(true);
+  });
+
+  it('accepts v1 with repos and v2 with flat (no version⇄field coupling)', () => {
+    expect(
+      ReportSchema.safeParse({ ...baseSuccess, artifacts: { repos: [repoEntry] } }).success,
+    ).toBe(true);
+    expect(
+      ReportSchema.safeParse({ ...baseSuccess, schema_version: 2, artifacts: { branch: 'b' } })
+        .success,
+    ).toBe(true);
+  });
+
+  it('accepts both forms in one report (repos authoritative at consumption)', () => {
+    const r = {
+      ...baseSuccess,
+      schema_version: 2,
+      artifacts: { branch: 'feat/T-1', repos: [repoEntry] },
+    };
+    expect(ReportSchema.safeParse(r).success).toBe(true);
+  });
+
+  it('requires repo on each entry', () => {
+    const r = { ...baseSuccess, artifacts: { repos: [{ branch: 'feat/T-1' }] } };
+    expect(ReportSchema.safeParse(r).success).toBe(false);
+  });
+
+  it('rejects unknown keys inside a repo entry (.strict())', () => {
+    const r = { ...baseSuccess, artifacts: { repos: [{ ...repoEntry, pushed: true }] } };
+    expect(ReportSchema.safeParse(r).success).toBe(false);
+  });
+
+  it('rejects more than 20 repo entries', () => {
+    const r = {
+      ...baseSuccess,
+      artifacts: { repos: Array.from({ length: 21 }, (_, i) => ({ repo: `r${i}` })) },
+    };
+    expect(ReportSchema.safeParse(r).success).toBe(false);
+  });
+});
+
+describe('normalizeReportArtifacts (feature 019 — the ONE precedence rule)', () => {
+  it('returns repos[] verbatim when present, ignoring flat fields', () => {
+    const out = normalizeReportArtifacts({
+      artifacts: { branch: 'flat-b', pr_url: 'flat-p', repos: [{ repo: 'lib', branch: 'b1' }] },
+    });
+    expect(out).toEqual([{ repo: 'lib', branch: 'b1' }]);
+  });
+
+  it('an explicitly empty repos[] is authoritative (flat NOT resurrected)', () => {
+    expect(normalizeReportArtifacts({ artifacts: { branch: 'flat-b', repos: [] } })).toEqual([]);
+  });
+
+  it('maps flat fields to a one-element list without a repo name', () => {
+    const out = normalizeReportArtifacts({
+      artifacts: { branch: 'b', pr_url: 'p', commits: ['c'], files_changed: 1 },
+    });
+    expect(out).toEqual([
+      { repo: undefined, branch: 'b', pr_url: 'p', commits: ['c'], files_changed: 1 },
+    ]);
+  });
+
+  it('returns [] for absent or empty artifacts', () => {
+    expect(normalizeReportArtifacts({})).toEqual([]);
+    expect(normalizeReportArtifacts({ artifacts: {} })).toEqual([]);
   });
 });

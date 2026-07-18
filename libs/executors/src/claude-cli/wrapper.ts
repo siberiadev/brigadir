@@ -55,10 +55,58 @@ function callbackToolsSection(): string[] {
   ];
 }
 
+/** One prepared repository as listed in the wrapper (feature 019, research D9). */
+export interface WrapperRepoInfo {
+  name: string;
+  absPath: string;
+  defaultBranch: string;
+  branch: string;
+}
+
 export interface WrapperOptions {
   useCallbackChannel: boolean;
   /** Feature 004 US6 (T115): pre-compiled, budget-bounded feature-context block. Omitted when empty. */
   featureContextSection?: string;
+  /**
+   * Feature 019: every repository prepared in this run's workspace. Present ⇒
+   * the wrapper renders the `## Repositories` section + multi-repo conduct
+   * rules (spec FR-013). Absent/empty (no-repo triage runs) ⇒ the wrapper is
+   * byte-identical to the pre-019 form.
+   */
+  repos?: WrapperRepoInfo[];
+}
+
+/**
+ * The `## Repositories` section (feature 019, spec FR-013): lists every
+ * prepared repo with its absolute path and branches, and instructs the agent
+ * to (a) pick the repos the ticket actually needs, (b) commit/push only
+ * there, (c) cross-reference dependent PRs, (d) report per-repo artifacts.
+ * Deliberately NOT a behavior→wrapper compiler (research D9 — that stays
+ * cut per the constitution's scope discipline).
+ */
+function repositoriesSection(repos: WrapperRepoInfo[], useCallbackChannel: boolean): string[] {
+  const reportTarget = useCallbackChannel
+    ? 'the `artifacts.repos` array of your complete_task call'
+    : 'the `artifacts.repos` array of your final JSON report';
+  return [
+    '## Repositories',
+    'Your workspace directory contains one sub-directory per repository, each already ' +
+      'checked out on its own working branch:',
+    ...repos.map(
+      (r) => `- ${r.name}: ${r.absPath} (branch ${r.branch}, based on ${r.defaultBranch})`,
+    ),
+    'Rules for working across repositories:',
+    '- Decide from the ticket which of these repositories actually need changes; leave the ' +
+      'others completely untouched.',
+    '- Commit and push only in repositories you actually changed. Never commit, push, or open ' +
+      'a PR in a repository you did not change.',
+    '- If your changes in different repositories depend on each other, open a separate PR per ' +
+      'repository and reference each dependent PR in the other PR\'s description.',
+    '- Run the required checks/tests inside each repository you changed (and only there).',
+    `- Report exactly one entry per CHANGED repository in ${reportTarget} — ` +
+      '{repo, branch, pr_url, commits, files_changed} with schema_version: 2. Do not report ' +
+      'untouched repositories.',
+  ];
 }
 
 export function buildWrapperText(ctx: RunContext, worktreeDir: string, options: WrapperOptions): string {
@@ -77,6 +125,9 @@ export function buildWrapperText(ctx: RunContext, worktreeDir: string, options: 
     '## Your task',
     ctx.instruction,
     '',
+    ...(options.repos && options.repos.length > 0
+      ? [...repositoriesSection(options.repos, options.useCallbackChannel), '']
+      : []),
     '## How to report your result',
     ...(options.useCallbackChannel ? callbackToolsSection() : structuredOutputSection()),
     '',

@@ -92,6 +92,54 @@ describe('RunCard — report + diagnostics', () => {
     expect(wrapper.find('[data-test="timeline"]').exists()).toBe(true);
   });
 
+  // Feature 019: per-repo artifact lines.
+  it('renders one artifact line per repo (name, branch, PR link, counts)', async () => {
+    const wrapper = mountCard();
+    await flush();
+
+    const artifacts = wrapper.find('[data-test="artifacts"]');
+    expect(artifacts.exists()).toBe(true);
+    const first = wrapper.find('[data-test="artifact-0"]');
+    expect(first.find('[data-test="artifact-repo-0"]').text()).toBe('api');
+    expect(first.text()).toContain('feat/BRIG-1');
+    expect(first.find('[data-test="artifact-pr-0"]').attributes('href')).toBe(
+      'https://github.com/acme/api/pull/9',
+    );
+    expect(first.text()).toContain('2 commits, 5 files');
+    // Second repo: no PR, no files count — only what was reported renders.
+    const second = wrapper.find('[data-test="artifact-1"]');
+    expect(second.text()).toContain('web');
+    expect(second.find('[data-test="artifact-pr-1"]').exists()).toBe(false);
+    expect(second.text()).toContain('1 commit');
+  });
+
+  it('legacy flat artifacts render one repo-less line; no artifacts → section hidden (US2)', async () => {
+    server.use(
+      http.get('/api/runs/:id', () =>
+        HttpResponse.json({
+          ...sampleRunCard,
+          artifacts: [
+            { repo: null, branch: 'feat/BRIG-1', pr_url: null, commits_count: null, files_changed: 3 },
+          ],
+        }),
+      ),
+    );
+    const wrapper = mountCard();
+    await flush();
+    const row = wrapper.find('[data-test="artifact-0"]');
+    expect(row.exists()).toBe(true);
+    expect(row.find('[data-test="artifact-repo-0"]').exists()).toBe(false);
+    expect(row.text()).toContain('feat/BRIG-1');
+    expect(row.text()).toContain('3 files');
+
+    server.use(
+      http.get('/api/runs/:id', () => HttpResponse.json({ ...sampleRunCard, artifacts: [] })),
+    );
+    const empty = mountCard();
+    await flush();
+    expect(empty.find('[data-test="artifacts"]').exists()).toBe(false);
+  });
+
   it('shows a not-found empty state on a 404', async () => {
     server.use(
       http.get('/api/runs/:id', () =>

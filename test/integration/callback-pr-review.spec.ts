@@ -128,4 +128,52 @@ describe('PR-review task on successful PR delivery (T112)', () => {
     const tasks = await db.db.select().from(schema.humanTasks).where(eq(schema.humanTasks.runId, runId));
     expect(tasks).toHaveLength(0);
   });
+
+  // Feature 019 (research D6): a multi-repo run with several PRs still queues
+  // ONE review task — a single review gate per run, listing every repo's PR.
+  it('multiple repos[] PRs → one review task listing every <repo>: <url> line', async () => {
+    const { runId, workspaceId, ticketKey } = await seedRunningRun({ code_delivery: 'pull_request' });
+    const token = tokenFor(runId, workspaceId, ticketKey);
+
+    const res = await complete(runId, token, {
+      schema_version: 2,
+      outcome: 'success',
+      summary: 'Coupled change across lib and consumer.',
+      checks: [],
+      artifacts: {
+        repos: [
+          { repo: 'lib', branch: 'feat/X', pr_url: 'https://github.com/acme/lib/pull/1' },
+          { repo: 'consumer', branch: 'feat/X', pr_url: 'https://github.com/acme/consumer/pull/2' },
+          { repo: 'docs', branch: 'feat/X' }, // changed but no PR — not a review line
+        ],
+      },
+    });
+    expect(res.status).toBe(200);
+
+    const tasks = await db.db.select().from(schema.humanTasks).where(eq(schema.humanTasks.runId, runId));
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({ kind: 'review', blocking: false });
+    expect(tasks[0].title).toBe('Review PRs (2)');
+    expect(tasks[0].details).toContain('- lib: https://github.com/acme/lib/pull/1');
+    expect(tasks[0].details).toContain('- consumer: https://github.com/acme/consumer/pull/2');
+    expect(tasks[0].details).not.toContain('docs');
+  });
+
+  it('a single repos[] PR keeps the pre-019 title byte-for-byte (US2)', async () => {
+    const { runId, workspaceId, ticketKey } = await seedRunningRun({ code_delivery: 'pull_request' });
+    const token = tokenFor(runId, workspaceId, ticketKey);
+
+    const res = await complete(runId, token, {
+      schema_version: 2,
+      outcome: 'success',
+      summary: 'One repo changed.',
+      checks: [],
+      artifacts: { repos: [{ repo: 'lib', pr_url: 'https://github.com/acme/lib/pull/7' }] },
+    });
+    expect(res.status).toBe(200);
+
+    const tasks = await db.db.select().from(schema.humanTasks).where(eq(schema.humanTasks.runId, runId));
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].title).toBe('Review PR: https://github.com/acme/lib/pull/7');
+  });
 });

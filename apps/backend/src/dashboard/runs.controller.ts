@@ -5,6 +5,8 @@ import { RunTriggerService } from '@brigadir/runs';
 import {
   GlobalRunsQuerySchema,
   RunCostPeriodSchema,
+  normalizeReportArtifacts,
+  type AgentReport,
   type GlobalRunsResponse,
   type RunCardResponse,
   type RunCancelResponse,
@@ -262,6 +264,7 @@ export class RunsController {
         externalRef: schema.runs.externalRef,
         error: schema.runs.error,
         createdAt: schema.runs.createdAt,
+        report: schema.runs.report,
         ticketKey: schema.tickets.jiraKey,
         ticketSummary: schema.tickets.summary,
         siteUrl: schema.workspaces.jiraSiteUrl,
@@ -340,6 +343,16 @@ export class RunsController {
         name: c.name,
         status: c.status as RunCardResponse['checks'][number]['status'],
         reason: c.reason ?? null,
+      })),
+      // Feature 019: artifacts projected from the stored (scrubbed) report via
+      // the shared normalizer — a legacy flat report arrives as one repo-less
+      // line; commits collapse to a count for the card.
+      artifacts: normalizeReportArtifacts((run.report ?? {}) as AgentReport).map((a) => ({
+        repo: a.repo ?? null,
+        branch: a.branch ?? null,
+        pr_url: a.pr_url ?? null,
+        commits_count: a.commits !== undefined ? a.commits.length : null,
+        files_changed: a.files_changed ?? null,
       })),
       events: events.map((e) => ({
         id: String(e.id),

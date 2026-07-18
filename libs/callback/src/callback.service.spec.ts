@@ -148,6 +148,73 @@ describe('CallbackService (T100)', () => {
     expect(scrubbedReport.routing.target_agent).toBe('Developer');
   });
 
+  // Feature 019 (research D7): artifacts were previously unscrubbed — both
+  // the legacy flat form and repos[] now pass the scrubber field-by-field.
+  it('complete: scrubs artifact strings in BOTH forms before finalize', async () => {
+    const finalizeWithReport = vi.fn().mockResolvedValue(true);
+    const service = new CallbackService(
+      fakeDb({ agentBehavior: {} }) as never,
+      fakeModuleRef() as never,
+      { finalizeWithReport } as unknown as RunsService,
+      { onRunFinished: vi.fn() } as unknown as PipelineService,
+      { acceptTeamReport: vi.fn() } as unknown as SetupApplyService,
+      {} as unknown as HumanTaskService,
+    );
+
+    const secret = 'sk-ant-' + 'c'.repeat(30);
+    await service.complete('run-1', {
+      schema_version: 2,
+      outcome: 'success',
+      summary: 'done',
+      checks: [],
+      artifacts: {
+        branch: `feat/${secret}`,
+        commits: [`abc ${secret}`],
+        repos: [
+          { repo: 'lib', branch: `feat/${secret}`, pr_url: `https://pr?t=${secret}`, commits: [`def ${secret}`], files_changed: 1 },
+        ],
+      },
+    });
+
+    const [, scrubbedReport] = finalizeWithReport.mock.calls[0];
+    expect(JSON.stringify(scrubbedReport)).not.toContain(secret);
+    // Structure survives scrubbing — counts and repo names intact.
+    expect(scrubbedReport.artifacts.repos[0].repo).toBe('lib');
+    expect(scrubbedReport.artifacts.repos[0].files_changed).toBe(1);
+  });
+
+  // Feature 019 (research D6): several PRs → ONE review task listing them all.
+  it('complete: multiple repos[] PRs queue one review task with a per-repo list', async () => {
+    const createFromRequest = vi.fn().mockResolvedValue({ created: true, blocking: false, mayFinishWithoutComplete: false });
+    const service = new CallbackService(
+      fakeDb({ agentBehavior: { code_delivery: 'pull_request' } }) as never,
+      fakeModuleRef() as never,
+      { finalizeWithReport: vi.fn().mockResolvedValue(true) } as unknown as RunsService,
+      { onRunFinished: vi.fn() } as unknown as PipelineService,
+      { acceptTeamReport: vi.fn() } as unknown as SetupApplyService,
+      { createFromRequest } as unknown as HumanTaskService,
+    );
+
+    await service.complete('run-1', {
+      schema_version: 2,
+      outcome: 'success',
+      summary: 'shipped both',
+      checks: [],
+      artifacts: {
+        repos: [
+          { repo: 'lib', pr_url: 'https://github.com/acme/lib/pull/1' },
+          { repo: 'consumer', pr_url: 'https://github.com/acme/consumer/pull/2' },
+        ],
+      },
+    });
+
+    expect(createFromRequest).toHaveBeenCalledTimes(1);
+    const [, request] = createFromRequest.mock.calls[0];
+    expect(request.title).toBe('Review PRs (2)');
+    expect(request.details).toContain('- lib: https://github.com/acme/lib/pull/1');
+    expect(request.details).toContain('- consumer: https://github.com/acme/consumer/pull/2');
+  });
+
   it('complete: success + pull_request delivery + pr_url queues a non-blocking review task', async () => {
     const createFromRequest = vi.fn().mockResolvedValue({ created: true, blocking: false, mayFinishWithoutComplete: false });
     const service = new CallbackService(

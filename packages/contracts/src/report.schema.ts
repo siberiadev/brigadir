@@ -129,18 +129,41 @@ export const ReportHumanTaskSchema = z
   })
   .strict();
 
+/**
+ * Per-repository artifact entry (feature 019, ReportSchema v2). One entry per
+ * repository the agent actually changed; `repo` is the workspace repository
+ * NAME. Agent-reported data — consumers render it verbatim after scrubbing;
+ * membership in the prepared-repo set is instructed in the wrapper, not
+ * schema-enforced.
+ */
+export const ReportRepoArtifactSchema = z
+  .object({
+    repo: z.string().min(1).max(200),
+    branch: z.string().max(300).optional(),
+    pr_url: z.string().max(1000).optional(),
+    commits: z.array(z.string().max(500)).max(100).optional(),
+    files_changed: z.number().int().min(0).optional(),
+  })
+  .strict();
+
 export const ReportArtifactsSchema = z
   .object({
+    // Flat single-repo form — kept valid forever for v1 producers (feature 019).
     branch: z.string().optional(),
     pr_url: z.string().optional(),
     commits: z.array(z.string()).optional(),
     files_changed: z.number().int().optional(),
+    // Plural form (v2) — authoritative when present; see normalizeReportArtifacts.
+    repos: z.array(ReportRepoArtifactSchema).max(20).optional(),
   })
   .strict();
 
 export const ReportSchema = z
   .object({
-    schema_version: z.literal(1),
+    // v2 (feature 019) adds artifacts.repos; v1 stays valid forever — no
+    // version⇄field coupling (forward-compatible per architecture §6, no
+    // migration machinery exists or is wanted).
+    schema_version: z.union([z.literal(1), z.literal(2)]),
     outcome: z.enum(REPORT_OUTCOMES),
     summary: z.string().max(2000),
     checks: z.array(ReportCheckSchema).max(50),
@@ -184,5 +207,35 @@ export const ReportSchema = z
 export type ReportCheck = z.infer<typeof ReportCheckSchema>;
 export type ReportHumanTask = z.infer<typeof ReportHumanTaskSchema>;
 export type ReportRouting = z.infer<typeof ReportRoutingSchema>;
+export type ReportRepoArtifact = z.infer<typeof ReportRepoArtifactSchema>;
 export type AgentReport = z.infer<typeof ReportSchema>;
 export type HumanTaskKind = (typeof HUMAN_TASK_KINDS)[number];
+
+/** Normalized artifact entry: `repo` is absent for the legacy flat form. */
+export type NormalizedRepoArtifact = Omit<ReportRepoArtifact, 'repo'> & { repo?: string };
+
+/**
+ * The ONE implementation of the flat-vs-plural artifacts precedence rule
+ * (feature 019, contracts/report-v2-artifacts.md): `repos[]` present ⇒
+ * authoritative (flat ignored, never double-rendered); else non-empty flat
+ * fields ⇒ one-element list with `repo` undefined (legacy single-repo form);
+ * else empty. Consumers: secret scrubbing, review-task creation, Jira ADF
+ * comment, dashboard run card, feature-context — none may re-implement this.
+ */
+export function normalizeReportArtifacts(
+  report: Pick<AgentReport, 'artifacts'>,
+): NormalizedRepoArtifact[] {
+  const artifacts = report.artifacts;
+  if (!artifacts) return [];
+  if (artifacts.repos !== undefined) return artifacts.repos;
+  const { branch, pr_url, commits, files_changed } = artifacts;
+  if (
+    branch === undefined &&
+    pr_url === undefined &&
+    commits === undefined &&
+    files_changed === undefined
+  ) {
+    return [];
+  }
+  return [{ branch, pr_url, commits, files_changed }];
+}

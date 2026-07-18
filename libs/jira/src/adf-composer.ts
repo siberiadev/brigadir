@@ -1,4 +1,10 @@
-import type { ADFDoc, ADFNode, AgentReport, AnswerOption } from '@brigadir/contracts';
+import {
+  normalizeReportArtifacts,
+  type ADFDoc,
+  type ADFNode,
+  type AgentReport,
+  type AnswerOption,
+} from '@brigadir/contracts';
 
 /**
  * ADF composer (contracts.md C3 / research D6). Pure: a run report → an ADF
@@ -59,7 +65,40 @@ export function buildRunComment(report: AgentReport): ADFDoc {
     });
   }
 
+  // Feature 019: one artifact line per repo the run reported (already scrubbed
+  // upstream, like every other report field). Both forms ride the shared
+  // normalizer — a legacy flat report renders one line without a repo prefix.
+  const artifacts = normalizeReportArtifacts(report);
+  if (artifacts.length > 0) {
+    content.push({
+      type: 'bulletList',
+      content: artifacts.map((a) => ({
+        type: 'listItem',
+        content: [paragraph(formatArtifactLine(a))],
+      })),
+    });
+  }
+
   return { version: 1, type: 'doc', content };
+}
+
+/** `<repo>: <branch> — <pr_url> (<n> commits, <m> files)`, absent fields omitted. */
+function formatArtifactLine(a: {
+  repo?: string;
+  branch?: string;
+  pr_url?: string;
+  commits?: string[];
+  files_changed?: number;
+}): string {
+  const head = [a.repo, a.branch].filter((v) => v !== undefined && v !== '').join(': ');
+  const parts: string[] = [];
+  if (head) parts.push(head);
+  if (a.pr_url) parts.push(parts.length > 0 ? `— ${a.pr_url}` : a.pr_url);
+  const counts: string[] = [];
+  if (a.commits !== undefined) counts.push(`${a.commits.length} commit${a.commits.length === 1 ? '' : 's'}`);
+  if (a.files_changed !== undefined) counts.push(`${a.files_changed} file${a.files_changed === 1 ? '' : 's'}`);
+  if (counts.length > 0) parts.push(`(${counts.join(', ')})`);
+  return parts.join(' ');
 }
 
 const HUMAN_TASK_KIND_HEADING = {

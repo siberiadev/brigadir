@@ -75,4 +75,50 @@ describe('buildWrapperText (T103, D6)', () => {
     expect(text).not.toContain('BRIG-1');
     expect(text).not.toContain('working on Jira ticket');
   });
+
+  // Feature 019 (spec FR-013, research D9): the Repositories section.
+  describe('repositories section (feature 019)', () => {
+    const repos = [
+      { name: 'lib', absPath: '/wt/run-1/lib', defaultBranch: 'main', branch: 'feat/BRIG-1' },
+      { name: 'consumer', absPath: '/wt/run-1/consumer', defaultBranch: 'develop', branch: 'feat/BRIG-1' },
+    ];
+
+    it('lists every prepared repo with absolute path, branch and base branch', () => {
+      const text = buildWrapperText(ctx, '/wt/run-1', { useCallbackChannel: true, repos });
+      expect(text).toContain('## Repositories');
+      expect(text).toContain('- lib: /wt/run-1/lib (branch feat/BRIG-1, based on main)');
+      expect(text).toContain('- consumer: /wt/run-1/consumer (branch feat/BRIG-1, based on develop)');
+    });
+
+    it('carries the four FR-013 conduct rules + touched-repos-only checks', () => {
+      const text = buildWrapperText(ctx, '/wt/run-1', { useCallbackChannel: true, repos });
+      expect(text).toContain('Decide from the ticket which of these repositories actually need changes');
+      expect(text).toContain('Commit and push only in repositories you actually changed');
+      expect(text).toContain("reference each dependent PR in the other PR's description");
+      expect(text).toContain('Run the required checks/tests inside each repository you changed (and only there)');
+      expect(text).toContain('one entry per CHANGED repository');
+      expect(text).toContain('schema_version: 2');
+    });
+
+    it('points the report target at complete_task on the callback channel and at the JSON report on Phase 0', () => {
+      const callbackText = buildWrapperText(ctx, '/wt/run-1', { useCallbackChannel: true, repos });
+      expect(callbackText).toContain('artifacts.repos` array of your complete_task call');
+
+      const phase0Text = buildWrapperText(ctx, '/wt/run-1', { useCallbackChannel: false, repos });
+      expect(phase0Text).toContain('artifacts.repos` array of your final JSON report');
+    });
+
+    it('single-repo runs get the section too (uniform layout — the wrapper names the repo path)', () => {
+      const text = buildWrapperText(ctx, '/wt/run-1', { useCallbackChannel: true, repos: [repos[0]] });
+      expect(text).toContain('## Repositories');
+      expect(text).toContain('- lib: /wt/run-1/lib');
+    });
+
+    it('no-repo runs (repos absent or empty): wrapper is byte-identical to the pre-019 form', () => {
+      const without = buildWrapperText(ctx, '/tmp/wt', { useCallbackChannel: true });
+      const withEmpty = buildWrapperText(ctx, '/tmp/wt', { useCallbackChannel: true, repos: [] });
+      expect(withEmpty).toBe(without);
+      expect(without).not.toContain('## Repositories');
+    });
+  });
 });

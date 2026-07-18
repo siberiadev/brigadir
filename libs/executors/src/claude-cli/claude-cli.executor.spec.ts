@@ -12,21 +12,36 @@ vi.mock('./worktree', async (importOriginal) => ({
   // Keep the real setupRunBranchIdentity (pure) — only the git-touching
   // functions are faked.
   ...(await importOriginal<typeof import('./worktree')>()),
-  prepare: vi.fn(),
-  cleanup: vi.fn(),
+  prepareAll: vi.fn(),
+  cleanupAll: vi.fn(),
 }));
 vi.mock('./process-group', () => ({
   spawnGroup: vi.fn(),
 }));
 
-import { prepare, cleanup } from './worktree';
+import { prepareAll, cleanupAll } from './worktree';
 import { spawnGroup } from './process-group';
 import { ClaudeCliExecutor } from './claude-cli.executor';
 import { DEFAULT_REPO_RUN_ALLOWED_TOOLS } from './claude-cli.config';
 
-const prepareMock = prepare as unknown as ReturnType<typeof vi.fn>;
-const cleanupMock = cleanup as unknown as ReturnType<typeof vi.fn>;
+const prepareMock = prepareAll as unknown as ReturnType<typeof vi.fn>;
+const cleanupMock = cleanupAll as unknown as ReturnType<typeof vi.fn>;
 const spawnGroupMock = spawnGroup as unknown as ReturnType<typeof vi.fn>;
+
+/** Fake MultiPrepareResult for a single-repo workspace rooted at `parentDir`. */
+function fakeWorkspace(parentDir: string, repoName = 'product', branch = 'feat/BRIG-1') {
+  return {
+    parentDir,
+    branch,
+    repos: [
+      {
+        repo: { name: repoName, url: `git@acme:${repoName}.git`, defaultBranch: 'main' },
+        worktreeDir: join(parentDir, repoName),
+        cacheDir: join(parentDir, '..', 'cache', repoName),
+      },
+    ],
+  };
+}
 
 const FIXTURES_DIR = join(process.cwd(), 'test', 'fixtures', 'claude-cli');
 function readFixtureLines(name: string): string[] {
@@ -149,11 +164,7 @@ describe('ClaudeCliExecutor.run (T082)', () => {
 
   beforeEach(async () => {
     worktreeDir = await mkdtemp(join(tmpdir(), 'brigadir-executor-test-'));
-    prepareMock.mockReset().mockResolvedValue({
-      worktreeDir,
-      branch: 'feat/BRIG-1',
-      cacheDir: join(worktreeDir, '..', 'cache'),
-    });
+    prepareMock.mockReset().mockResolvedValue(fakeWorkspace(worktreeDir));
     cleanupMock.mockReset().mockResolvedValue(undefined);
     spawnGroupMock.mockReset();
   });
@@ -184,7 +195,13 @@ describe('ClaudeCliExecutor.run (T082)', () => {
     expect((result.report as { outcome: string }).outcome).toBe('success');
     expect(result.externalRef).toBe('sess-success-1');
     expect(result.costUsd).toBe(0.0123);
-    expect(cleanupMock).toHaveBeenCalledWith(expect.any(String), worktreeDir, { keep: false });
+    // Feature 019: cleanup gets the whole workspace (parent dir + repo worktrees).
+    expect(cleanupMock).toHaveBeenCalledWith(
+      expect.objectContaining({ parentDir: worktreeDir }),
+      { keep: false },
+    );
+    // The child process runs from the PARENT dir (spec FR-005).
+    expect(spawnGroupMock.mock.calls[0][2]).toMatchObject({ cwd: worktreeDir });
   });
 
   it('invalid report: completed with no report and a diagnostic', async () => {
@@ -381,11 +398,7 @@ describe('ClaudeCliExecutor — default allowed tools (ST3-768)', () => {
 
   beforeEach(async () => {
     worktreeDir = await mkdtemp(join(tmpdir(), 'brigadir-tools-test-'));
-    prepareMock.mockReset().mockResolvedValue({
-      worktreeDir,
-      branch: 'feat/BRIG-1',
-      cacheDir: join(worktreeDir, '..', 'cache'),
-    });
+    prepareMock.mockReset().mockResolvedValue(fakeWorkspace(worktreeDir));
     cleanupMock.mockReset().mockResolvedValue(undefined);
     spawnGroupMock.mockReset();
   });
@@ -569,11 +582,7 @@ describe('ClaudeCliExecutor — workspace-setup environment (feature 015)', () =
   let worktreeDir: string;
   beforeEach(async () => {
     worktreeDir = await mkdtemp(join(tmpdir(), 'brigadir-setup-exec-test-'));
-    prepareMock.mockReset().mockResolvedValue({
-      worktreeDir,
-      branch: 'setup/a1b2c3d4',
-      cacheDir: join(worktreeDir, '..', 'cache'),
-    });
+    prepareMock.mockReset().mockResolvedValue(fakeWorkspace(worktreeDir, 'api', 'setup/a1b2c3d4'));
     cleanupMock.mockReset().mockResolvedValue(undefined);
     spawnGroupMock.mockReset();
   });
@@ -604,16 +613,18 @@ describe('ClaudeCliExecutor — workspace-setup environment (feature 015)', () =
       DEFAULT_REPO_RUN_ALLOWED_TOOLS.join(','),
     );
     // Ticketless worktree: branch identity setup/<first 8 chars of run id>.
+    // Feature 019 (research D5): a setup run keeps a ONE-element repo scope.
     expect(prepareMock).toHaveBeenCalledTimes(1);
-    const [repoArg, runIdArg, ticketKeyArg, prefixArg] = prepareMock.mock.calls[0];
-    expect(repoArg).toMatchObject({ name: 'api' });
+    const [reposArg, runIdArg, ticketKeyArg, prefixArg] = prepareMock.mock.calls[0];
+    expect(reposArg).toHaveLength(1);
+    expect(reposArg[0]).toMatchObject({ name: 'api' });
     expect(runIdArg).toBe('a1b2c3d4-e5f6-7890');
     expect(ticketKeyArg).toBe('a1b2c3d4');
     expect(prefixArg).toBe('setup');
-    // Cleanup rides the standard worktree path (keep flag falsy — success run).
+    // Cleanup rides the standard workspace path (keep flag falsy — success run).
     expect(cleanupMock).toHaveBeenCalledTimes(1);
-    expect(cleanupMock.mock.calls[0][1]).toBe(worktreeDir);
-    expect(cleanupMock.mock.calls[0][2].keep).toBeFalsy();
+    expect(cleanupMock.mock.calls[0][0]).toMatchObject({ parentDir: worktreeDir });
+    expect(cleanupMock.mock.calls[0][1].keep).toBeFalsy();
     expect(fallbackEvents(db)).toHaveLength(0); // no fallback warning
   });
 

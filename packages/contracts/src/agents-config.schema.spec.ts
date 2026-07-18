@@ -211,4 +211,73 @@ describe('AgentsConfigSchema', () => {
     const res = AgentsConfigSchema.safeParse(config);
     expect(res.success).toBe(true);
   });
+
+  // --- feature 019: agent repository scope (behavior.repositories) ---
+
+  const withTwoRepos = () => {
+    const config = withClaudeCli();
+    config.workspace.repositories!.push({
+      name: 'infra',
+      url: 'git@github.com:acme/infra.git',
+      default_branch: 'main',
+    });
+    return config;
+  };
+
+  it('feature 019: the executor-level `repository` is now optional (runtime-ignored legacy key)', () => {
+    const config = withClaudeCli();
+    delete (config.executors['coder'] as { repository?: string }).repository;
+    const res = AgentsConfigSchema.safeParse(config);
+    expect(res.success).toBe(true);
+  });
+
+  it('accepts behavior.repositories naming declared workspace repositories', () => {
+    const config = withTwoRepos();
+    config.agents[0].behavior!.repositories = ['infra', 'product'];
+    const res = AgentsConfigSchema.safeParse(config);
+    expect(res.success).toBe(true);
+  });
+
+  it('accepts the deprecated behavior.repository alongside repositories (list wins, no error)', () => {
+    const config = withTwoRepos();
+    config.agents[0].behavior!.repositories = ['infra'];
+    config.agents[0].behavior!.repository = 'product';
+    const res = AgentsConfigSchema.safeParse(config);
+    expect(res.success).toBe(true);
+  });
+
+  it('rejects an unknown name in behavior.repositories with the per-entry path', () => {
+    const config = withTwoRepos();
+    config.agents[0].behavior!.repositories = ['infra', 'ghost'];
+    const res = AgentsConfigSchema.safeParse(config);
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      const issue = res.error.issues.find(
+        (i) => i.path.join('.') === 'agents.0.behavior.repositories.1',
+      );
+      expect(issue).toBeDefined();
+      expect(issue?.message).toContain('ghost');
+    }
+  });
+
+  it('rejects an unknown deprecated behavior.repository with the field path', () => {
+    const config = withTwoRepos();
+    config.agents[0].behavior!.repository = 'ghost';
+    const res = AgentsConfigSchema.safeParse(config);
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(
+        res.error.issues.some((i) => i.path.join('.') === 'agents.0.behavior.repository'),
+      ).toBe(true);
+    }
+  });
+
+  it('skips the scope check when the workspace declares no repositories (repo-less workspaces stay valid)', () => {
+    const config = withClaudeCli();
+    delete (config.workspace as { repositories?: unknown }).repositories;
+    delete (config.executors['coder'] as { repository?: string }).repository;
+    config.agents[0].behavior!.repositories = ['anything'];
+    const res = AgentsConfigSchema.safeParse(config);
+    expect(res.success).toBe(true);
+  });
 });

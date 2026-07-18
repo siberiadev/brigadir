@@ -1,7 +1,7 @@
 import { and, desc, eq } from 'drizzle-orm';
 import { type BrigadirDb, schema } from '@brigadir/database';
 import type { JiraClient } from '@brigadir/jira';
-import type { AgentReport } from '@brigadir/contracts';
+import { normalizeReportArtifacts, type AgentReport } from '@brigadir/contracts';
 
 /**
  * Wrapper feature-context section (feature 004 US6, D5, FR-026). Compiles
@@ -16,9 +16,9 @@ const SUMMARY_MAX_CHARS = 80;
 const LINE_MAX_CHARS = 200;
 const SECTION_MAX_BYTES = 2048;
 
+/** Per-repo branch/PR lines from a linked issue's latest report (feature 019). */
 interface LinkedArtifacts {
-  branch?: string;
-  pr_url?: string;
+  entries: { repo?: string; branch?: string; pr_url?: string }[];
 }
 
 function truncate(value: string, max: number): string {
@@ -40,10 +40,13 @@ async function latestArtifacts(
 
   for (const row of rows) {
     const report = row.report as AgentReport | null;
-    const artifacts = report?.artifacts;
-    if (artifacts?.branch || artifacts?.pr_url) {
-      return { branch: artifacts.branch, pr_url: artifacts.pr_url };
-    }
+    if (!report) continue;
+    // Feature 019: the shared normalizer handles both the legacy flat form
+    // and artifacts.repos[] — a multi-repo prior run surfaces EVERY branch/PR.
+    const entries = normalizeReportArtifacts(report)
+      .filter((a) => a.branch || a.pr_url)
+      .map((a) => ({ repo: a.repo, branch: a.branch, pr_url: a.pr_url }));
+    if (entries.length > 0) return { entries };
   }
   return undefined;
 }
@@ -81,8 +84,12 @@ export async function buildFeatureContextSection(
         lines.push(`- ${issue.key} [${issue.status}] ${truncate(issue.summary, SUMMARY_MAX_CHARS)}`);
         if (includeArtifacts) {
           const artifacts = artifactsByKey.get(issue.key);
-          if (artifacts?.branch) lines.push(truncate(`  branch: ${artifacts.branch}`, LINE_MAX_CHARS));
-          if (artifacts?.pr_url) lines.push(truncate(`  PR: ${artifacts.pr_url}`, LINE_MAX_CHARS));
+          for (const entry of artifacts?.entries ?? []) {
+            // Feature 019: multi-repo entries are prefixed with the repo name.
+            const prefix = entry.repo ? `${entry.repo}: ` : '';
+            if (entry.branch) lines.push(truncate(`  branch: ${prefix}${entry.branch}`, LINE_MAX_CHARS));
+            if (entry.pr_url) lines.push(truncate(`  PR: ${prefix}${entry.pr_url}`, LINE_MAX_CHARS));
+          }
         }
       }
       if (droppedCount > 0) lines.push(`…and ${droppedCount} more`);
