@@ -15,9 +15,9 @@
 
 **Purpose**: make `scope-jql` importable from `libs/pipeline` without an import cycle (research R6) so the shared release service can live there.
 
-- [ ] T001 Move `libs/ingest/src/scope-jql.ts` file-wholesale (zero logic/comment edits — the HWM `since` comment is load-bearing) to `libs/jira/src/scope-jql.ts` and export `POLL_FIELDS`, `buildScopeJql`, `sinceClause`, `HWM_OVERLAP_MS` from `libs/jira/src/index.ts`; move its colocated unit spec alongside if one exists
-- [ ] T002 Update all imports of the moved module (`libs/ingest/src/poller.service.ts`, `libs/ingest/src/reconcile.service.ts`, any test importing from `@brigadir/ingest`/relative path) to `@brigadir/jira`; drop the old file and any stale re-export from `libs/ingest/src/index.ts`
-- [ ] T003 Baseline gate: `pnpm typecheck && pnpm lint && pnpm test` green; `test/integration/dependency-gate.spec.ts` and `test/integration/reconcile-catchup.spec.ts` pass unchanged
+- [X] T001 Move `libs/ingest/src/scope-jql.ts` file-wholesale (zero logic/comment edits — the HWM `since` comment is load-bearing) to `libs/jira/src/scope-jql.ts` and export `POLL_FIELDS`, `buildScopeJql`, `sinceClause`, `HWM_OVERLAP_MS` from `libs/jira/src/index.ts`; move its colocated unit spec alongside if one exists
+- [X] T002 Update all imports of the moved module (`libs/ingest/src/poller.service.ts`, `libs/ingest/src/reconcile.service.ts`, any test importing from `@brigadir/ingest`/relative path) to `@brigadir/jira`; drop the old file and any stale re-export from `libs/ingest/src/index.ts`
+- [X] T003 Baseline gate: `pnpm typecheck && pnpm lint && pnpm test` green; `test/integration/dependency-gate.spec.ts` and `test/integration/reconcile-catchup.spec.ts` pass unchanged
 
 ---
 
@@ -25,13 +25,13 @@
 
 **Purpose**: blocking prerequisites for every story — the four `tickets` columns, priority ingestion, waiting-state persistence, and the extracted `DependencyReleaseService`.
 
-- [ ] T004 [P] Add `priority?: { id: string; name: string }` to `JiraIssue['fields']` in `packages/contracts/src/jira.types.ts` (+ touch `jira.types.spec.ts` if it asserts field shape)
-- [ ] T005 [P] Add `priorityId` (int), `priorityName` (text), `blockedBy` (jsonb), `blockedState` (text) — all nullable — to `libs/database/src/schema/tickets.ts` and generate the checked-in migration in `drizzle/` (data-model.md §1)
-- [ ] T006 [P] Update `docs/architecture.md` §3 `tickets` DDL with the same four columns + comments (hard-won rule 5; DDL text prepared in data-model.md §1)
-- [ ] T007 Add `'priority'` to `POLL_FIELDS` in `libs/jira/src/scope-jql.ts`; in `libs/ingest/src/poller.service.ts` persist `priority_id` (parsed int of `fields.priority.id`, NULL on absence/unparseable) + `priority_name` on ticket insert and on the per-issue update; clear `blocked_by`/`blocked_state` whenever the observed status changes (the release pass re-establishes them if still applicable)
-- [ ] T008 Extract `DependencyReleaseService` into `libs/pipeline/src/dependency-release.service.ts`: move the body of `ReconcileService.reEvaluateDependencies` (candidate query, batched `key in` fetch with `POLL_FIELDS`, gate check, `RunTriggerService.trigger` loop) unchanged in behavior; register in `libs/pipeline/src/pipeline.module.ts`; `libs/ingest/src/reconcile.service.ts` step 2 delegates to it (same step name/logging posture)
-- [ ] T009 Waiting-state persistence (data-model.md §2): in `libs/pipeline/src/pipeline.service.ts` blocked-skip branch (`onStatusChanged`) write `blocked_by` = open blocker keys + `blocked_state='waiting'`; in `DependencyReleaseService` each pass update `blocked_by` from the fresh fetch, set `waiting` for still-blocked candidates, and clear both columns for tickets it releases
-- [ ] T010 Foundational tests: extend `test/integration/dependency-gate.spec.ts` — blocked trigger-status ticket gets `blocked_by`+`blocked_state='waiting'` persisted; state clears when the blocker completes and the run triggers; T057/T066 assertions unchanged
+- [X] T004 [P] Add `priority?: { id: string; name: string }` to `JiraIssue['fields']` in `packages/contracts/src/jira.types.ts` (+ touch `jira.types.spec.ts` if it asserts field shape)
+- [X] T005 [P] Add `priorityId` (int), `priorityName` (text), `blockedBy` (jsonb), `blockedState` (text) — all nullable — to `libs/database/src/schema/tickets.ts` and generate the checked-in migration in `drizzle/` (data-model.md §1)
+- [X] T006 [P] Update `docs/architecture.md` §3 `tickets` DDL with the same four columns + comments (hard-won rule 5; DDL text prepared in data-model.md §1)
+- [X] T007 Add `'priority'` to `POLL_FIELDS` in `libs/jira/src/scope-jql.ts`; in `libs/ingest/src/poller.service.ts` persist `priority_id` (parsed int of `fields.priority.id`, NULL on absence/unparseable) + `priority_name` on ticket insert and on the per-issue update; clear `blocked_by`/`blocked_state` whenever the observed status changes (the release pass re-establishes them if still applicable)
+- [X] T008 Extract `DependencyReleaseService` into `libs/pipeline/src/dependency-release.service.ts`: move the body of `ReconcileService.reEvaluateDependencies` (candidate query, batched `key in` fetch with `POLL_FIELDS`, gate check, `RunTriggerService.trigger` loop) unchanged in behavior; register in `libs/pipeline/src/pipeline.module.ts`; `libs/ingest/src/reconcile.service.ts` step 2 delegates to it (same step name/logging posture)
+- [X] T009 Waiting-state persistence (data-model.md §2): in `libs/pipeline/src/pipeline.service.ts` blocked-skip branch (`onStatusChanged`) write `blocked_by` = open blocker keys + `blocked_state='waiting'`; in `DependencyReleaseService` each pass update `blocked_by` from the fresh fetch, set `waiting` for still-blocked candidates, and clear both columns for tickets it releases
+- [X] T010 Foundational tests: extend `test/integration/dependency-gate.spec.ts` — blocked trigger-status ticket gets `blocked_by`+`blocked_state='waiting'` persisted; state clears when the blocker completes and the run triggers; T057/T066 assertions unchanged
 
 **Checkpoint**: schema live, priority flowing, waiting set persisted, release service extracted — all stories unblocked.
 
@@ -43,11 +43,11 @@
 
 **Independent Test**: quickstart Scenario 1 + 5 — chain E2E with run-success path and human-completion path; fast path releases without a reconcile pass; failure of the fast path never fails finalization.
 
-- [ ] T011 [US1] Add `releaseDependentsOf(workspaceId, blockerJiraKey)` to `libs/pipeline/src/dependency-release.service.ts`: narrow the candidate set to tickets whose `blocked_by` jsonb array contains the key (`@>` containment), then run the same fetch→gate→trigger pass (research R7)
-- [ ] T012 [US1] Fast-path call in `libs/pipeline/src/pipeline.service.ts` `onWorkerFinished` success branch: after `transitionTo(statusSuccess)` succeeds, call `releaseDependentsOf` in try/catch, log-and-continue on failure (guarantee remains the reconcile pass; FR-003)
-- [ ] T013 [US1] Integration test (extend `test/integration/dependency-gate.spec.ts` or new `test/integration/sprint-sequencing.spec.ts`): full chain A→B→C all in trigger status → exactly one run at a time in chain order, 3 runs total, zero duplicate runs (SC-001/SC-003; quickstart Scenario 1)
-- [ ] T014 [P] [US1] Integration test: human-completion path — blocker moved to Done directly in mock-jira (no run) → dependent triggers on the next release pass (spec US1 scenario 3)
-- [ ] T015 [US1] Integration test: fast path — after `onRunFinished` of the blocker's successful run, the dependent's run exists WITHOUT any explicit re-eval call; and with mock-jira failing the dependent fetch, finalization still completes and the dependent releases on the next pass (quickstart Scenario 5)
+- [X] T011 [US1] Add `releaseDependentsOf(workspaceId, blockerJiraKey)` to `libs/pipeline/src/dependency-release.service.ts`: narrow the candidate set to tickets whose `blocked_by` jsonb array contains the key (`@>` containment), then run the same fetch→gate→trigger pass (research R7)
+- [X] T012 [US1] Fast-path call in `libs/pipeline/src/pipeline.service.ts` `onWorkerFinished` success branch: after `transitionTo(statusSuccess)` succeeds, call `releaseDependentsOf` in try/catch, log-and-continue on failure (guarantee remains the reconcile pass; FR-003)
+- [X] T013 [US1] Integration test (extend `test/integration/dependency-gate.spec.ts` or new `test/integration/sprint-sequencing.spec.ts`): full chain A→B→C all in trigger status → exactly one run at a time in chain order, 3 runs total, zero duplicate runs (SC-001/SC-003; quickstart Scenario 1)
+- [X] T014 [P] [US1] Integration test: human-completion path — covered by the extended T066 assertions in test/integration/dependency-gate.spec.ts (moveBlocker → next pass fires exactly once, waiting cache cleared)
+- [X] T015 [US1] Integration test: fast path — after `onRunFinished` of the blocker's successful run, the dependent's run exists WITHOUT any explicit re-eval call; and with mock-jira failing the dependent fetch, finalization still completes and the dependent releases on the next pass (quickstart Scenario 5)
 
 **Checkpoint**: MVP — chained sprints self-execute end-to-end.
 

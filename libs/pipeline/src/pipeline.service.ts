@@ -4,9 +4,9 @@ import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import { JiraClientFactory, buildRunComment, NoTransitionPath } from '@brigadir/jira';
 import { RunTriggerService } from '@brigadir/runs';
 import { HumanTaskService } from '@brigadir/human-tasks';
-import type { AgentReport, JiraIssue, TriggerEvent } from '@brigadir/contracts';
+import type { AgentReport, JiraBoardType, JiraIssue, TriggerEvent } from '@brigadir/contracts';
 import { evaluateDependencyGate, blockingKeys } from './dependency-gate';
-import { buildAgentTriggerEvent } from './dependency-release.service';
+import { buildAgentTriggerEvent, DependencyReleaseService } from './dependency-release.service';
 import { getReworkBudget } from './rework-budget';
 
 /** Where a status change came from (internal to the pipeline; distinct from the persisted trigger source). */
@@ -48,6 +48,9 @@ export class PipelineService {
     // feature 010: triage-limit / routing-override / orchestrator-failure
     // fallbacks land as non-blocking human tasks (FR-005/009/010).
     private readonly humanTasks: HumanTaskService,
+    // feature 022: post-success fast path — release the finished ticket's
+    // dependents immediately instead of waiting for the next reconcile pass.
+    private readonly release: DependencyReleaseService,
   ) {}
 
   async onStatusChanged(input: OnStatusChangedInput): Promise<void> {
@@ -110,6 +113,42 @@ export class PipelineService {
       } else {
         this.logger.log(`${ticket.jiraKey} → agent "${agent.name}": run ${result.runId} enqueued`);
       }
+    }
+  }
+
+  /**
+   * Feature 022 (FR-003): fire-and-forget release of the just-completed
+   * ticket's dependents. Never throws — a failure here is logged and the next
+   * reconcile pass releases them anyway (pull is the guarantee).
+   */
+  private async releaseDependentsSafely(workspaceId: string, jiraKey: string): Promise<void> {
+    try {
+      const [ws] = await this.db
+        .select({
+          projectKey: schema.workspaces.jiraProjectKey,
+          boardId: schema.workspaces.jiraBoardId,
+          boardType: schema.workspaces.jiraBoardType,
+        })
+        .from(schema.workspaces)
+        .where(eq(schema.workspaces.id, workspaceId))
+        .limit(1);
+      // Board not introspected yet → no scope to build; the reconcile pass owns it.
+      if (!ws?.boardType) return;
+      const jira = await this.jiraFactory.forWorkspace(workspaceId);
+      await this.release.releaseDependentsOf(
+        {
+          id: workspaceId,
+          projectKey: ws.projectKey,
+          boardId: ws.boardId,
+          boardType: ws.boardType as JiraBoardType,
+        },
+        jira,
+        jiraKey,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `fast-path release after ${jiraKey} failed (non-fatal, reconcile pass will retry): ${String(err)}`,
+      );
     }
   }
 
@@ -287,6 +326,13 @@ export class PipelineService {
         `run ${runId}: ${jiraKey} → "${targetStatus}" + checklist comment posted` +
           (triageDecision ? ` (triage: ${triageDecision})` : ''),
       );
+
+      // Feature 022 (FR-003 fast path): a successful completion may have just
+      // unblocked dependents — release them now instead of waiting a reconcile
+      // interval. Strictly non-fatal: the reconcile pass is the guarantee.
+      if (succeeded) {
+        await this.releaseDependentsSafely(run.workspaceId, jiraKey);
+      }
     } catch (err) {
       if (err instanceof NoTransitionPath) {
         // Board-config fault (FR-008): record the diagnostic against the (already
