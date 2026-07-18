@@ -24,25 +24,42 @@ describe('BasicAuthJiraClient read surface (T134)', () => {
     expect(await client.getMyself()).toEqual({ displayName: 'BRIGADIR Bot' });
   });
 
-  it('getIssue returns summary and the raw ADF description', async () => {
+  it('getIssue returns summary, the raw ADF description, and component names', async () => {
     const adf = {
       version: 1,
       type: 'doc',
       content: [{ type: 'paragraph', content: [{ type: 'text', text: 'body' }] }],
     };
-    const spy = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(jsonResponse({ fields: { summary: 'Fix it', description: adf } }));
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      jsonResponse({
+        fields: {
+          summary: 'Fix it',
+          description: adf,
+          components: [{ id: '1', name: 'backend' }, { name: 'frontend' }],
+        },
+      }),
+    );
 
-    expect(await client.getIssue('BRIG-1')).toEqual({ summary: 'Fix it', description: adf });
+    expect(await client.getIssue('BRIG-1')).toEqual({
+      summary: 'Fix it',
+      description: adf,
+      components: ['backend', 'frontend'],
+    });
     expect(String(spy.mock.calls[0][0])).toBe(
-      'https://acme.atlassian.net/rest/api/3/issue/BRIG-1?fields=summary,description',
+      'https://acme.atlassian.net/rest/api/3/issue/BRIG-1?fields=summary,description,components',
     );
   });
 
-  it('getIssue tolerates a missing description and summary', async () => {
+  it('getIssue tolerates a missing description, summary, and components', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ fields: {} }));
-    expect(await client.getIssue('BRIG-2')).toEqual({ summary: null, description: null });
+    expect(await client.getIssue('BRIG-2')).toEqual({ summary: null, description: null, components: [] });
+  });
+
+  it('getIssue drops component entries without a usable name', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      jsonResponse({ fields: { components: [{ name: 'backend' }, { name: '' }, { id: '3' }, null] } }),
+    );
+    expect((await client.getIssue('BRIG-3')).components).toEqual(['backend']);
   });
 
   it('getProjectStatuses flattens statuses across issue types and de-dupes by id', async () => {

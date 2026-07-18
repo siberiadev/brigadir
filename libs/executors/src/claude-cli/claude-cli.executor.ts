@@ -36,6 +36,11 @@ import {
   type MultiPrepareResult,
 } from './worktree';
 import { spawnGroup } from './process-group';
+import {
+  narrowByTicketComponents,
+  RepositoryScopeUndeterminableError,
+  type NarrowResult,
+} from './scope-ticket';
 import { buildWrapperText } from './wrapper';
 import { writeMcpConfig, defaultMcpConfigRoot, type WrittenMcpConfig } from './mcp-config';
 import { buildFeatureContextSection } from './feature-context';
@@ -165,8 +170,8 @@ export class ClaudeCliExecutor implements AgentExecutor {
   ) {}
 
   async run(ctx: RunContext, signal: AbortSignal): Promise<ExecutorResult> {
-    const { runtimeConfig, repos, branchPrefix, workspaceId, auth, apiKey, noRepo, setupRun } =
-      await this.loadRunConfig(ctx.runId);
+    const { runtimeConfig, repos, excludedRepos, branchPrefix, workspaceId, auth, apiKey, noRepo, setupRun } =
+      await this.loadRunConfig(ctx);
 
     // The run's workspace dir: the parent `worktreeRoot/<runId>` holding one
     // worktree per repo (feature 019, research D3), or a scratch temp dir for
@@ -262,6 +267,8 @@ export class ClaudeCliExecutor implements AgentExecutor {
             defaultBranch: r.repo.defaultBranch,
             branch: workspace!.branch,
           })),
+          // Feature 020 (D4): non-empty only for ticket-narrowed runs.
+          onDemandRepos: excludedRepos.map((r) => ({ name: r.name, url: r.url })),
         }),
       );
     } catch (err) {
@@ -519,9 +526,11 @@ export class ClaudeCliExecutor implements AgentExecutor {
     });
   }
 
-  private async loadRunConfig(runId: string): Promise<{
+  private async loadRunConfig(ctx: RunContext): Promise<{
     runtimeConfig: ReturnType<typeof resolveClaudeCliConfig>;
     repos: WorktreeRepo[];
+    /** Feature 020 (D4): base-set repos excluded by ticket-component narrowing — wrapper escape hatch. */
+    excludedRepos: WorktreeRepo[];
     branchPrefix: string;
     workspaceId: string;
     auth: EffectiveAuth;
@@ -529,6 +538,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
     noRepo: boolean;
     setupRun: boolean;
   }> {
+    const runId = ctx.runId;
     const [row] = await this.db
       .select({
         executorConfig: schema.executors.config,
@@ -590,6 +600,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
     // else ALL of the run workspace's repositories (feature 019, research D1).
     // A no-repository run resolves none (skips clone/worktree entirely).
     let repos: WorktreeRepo[] = [];
+    let excludedRepos: WorktreeRepo[] = [];
     if (!noRepo) {
       if (setupRun) {
         // feature 015 (FR-017): a workspace with no repositories degrades to
@@ -600,7 +611,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
         // the setup protocol self-clones extras into .repos/<name>; the
         // all-repos default does not apply here.
         try {
-          repos = (await this.resolveRepositories(row.workspaceId, resolveRepositoryNames(behavior))).slice(0, 1);
+          repos = (await this.resolveRepositories(row.workspaceId, resolveRepositoryNames(behavior))).repos.slice(0, 1);
         } catch (err) {
           this.logger.warn(
             `setup run ${runId}: no repository available (${String(err)}) — proceeding without one (FR-017)`,
@@ -608,7 +619,45 @@ export class ClaudeCliExecutor implements AgentExecutor {
           noRepo = true;
         }
       } else {
-        repos = await this.resolveRepositories(row.workspaceId, resolveRepositoryNames(behavior));
+        const resolved = await this.resolveRepositories(row.workspaceId, resolveRepositoryNames(behavior));
+        // Feature 020: ticket Components narrow the base set (D1/D2/D3, gated
+        // per workspace by settings.ticket_scoping — D2b). Ticketless runs are
+        // exempt (FR-014); setup runs never reach this branch (D5). The gate
+        // runs BEFORE prepareAll, so a parked/failed scope costs no clone work.
+        const scopingEnabled = resolved.ticketScoping && ctx.ticket !== null;
+        const narrowed = narrowByTicketComponents({
+          baseRepos: resolved.repos,
+          components: ctx.ticket?.components ?? null,
+          workspaceRepoNames: resolved.workspaceRepoNames,
+          scopingEnabled,
+        });
+        if (scopingEnabled && ctx.ticket) {
+          await this.recordScopingEvent(runId, narrowed);
+          if (narrowed.kind === 'undeterminable') {
+            throw new RepositoryScopeUndeterminableError(
+              narrowed.case,
+              {
+                ticketKey: ctx.ticket.key,
+                components: ctx.ticket.components ?? [],
+                agentRepoNames: resolved.repos.map((r) => r.name),
+                workspaceRepoNames: resolved.workspaceRepoNames,
+              },
+              narrowed.decision,
+            );
+          }
+          if (narrowed.kind === 'components_unreadable') {
+            // R5: components are UNKNOWN (Jira fetch failed), not absent —
+            // fail closed rather than park with a misleading question or
+            // silently clone the full set.
+            throw new Error(
+              `ticket ${ctx.ticket.key}: components could not be read from Jira while ticket scoping is enabled — failing closed (feature 020)`,
+            );
+          }
+        }
+        repos = narrowed.kind === 'resolved' ? narrowed.repos : resolved.repos;
+        // D4: what narrowing left out stays reachable via the wrapper's
+        // on-demand `.repos/<name>` note (empty for non-narrowed runs).
+        excludedRepos = resolved.repos.filter((r) => !repos.includes(r));
       }
     }
 
@@ -649,6 +698,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
     return {
       runtimeConfig,
       repos,
+      excludedRepos,
       branchPrefix: behavior.branch_prefix ?? 'run',
       workspaceId: row.workspaceId,
       auth,
@@ -700,7 +750,10 @@ export class ClaudeCliExecutor implements AgentExecutor {
    * whose settings blob predates the wizard. Empty name list = ALL workspace
    * repositories in declaration order (feature 019, research D1).
    */
-  private async resolveRepositories(workspaceId: string, names: string[]): Promise<WorktreeRepo[]> {
+  private async resolveRepositories(
+    workspaceId: string,
+    names: string[],
+  ): Promise<{ repos: WorktreeRepo[]; ticketScoping: boolean; workspaceRepoNames: string[] }> {
     const [ws] = await this.db
       .select({ settings: schema.workspaces.settings })
       .from(schema.workspaces)
@@ -708,14 +761,42 @@ export class ClaudeCliExecutor implements AgentExecutor {
       .limit(1);
     const settings = (ws?.settings ?? {}) as {
       repositories?: { name: string; git_url: string; default_branch: string }[];
+      ticket_scoping?: boolean;
     };
+    const dbRepos = settings.repositories ?? [];
+    const yamlRepos = this.agentsConfig?.workspace.repositories ?? [];
 
-    return pickWorkspaceRepositories(
-      settings.repositories ?? [],
-      this.agentsConfig?.workspace.repositories ?? [],
-      names,
-      this.agentsConfig !== null,
-    );
+    return {
+      repos: pickWorkspaceRepositories(dbRepos, yamlRepos, names, this.agentsConfig !== null),
+      // Feature 020 (D2b): the scoping flag rides the same settings row —
+      // one runtime read, nothing at module composition.
+      ticketScoping: settings.ticket_scoping === true,
+      // ALL workspace repo names (same DB-wins precedence as the repo list) —
+      // needed to tell "component names no repo" from "names one outside the
+      // agent's scope" (D2 case 2 vs 3).
+      workspaceRepoNames: (dbRepos.length > 0 ? dbRepos : yamlRepos).map((r) => r.name),
+    };
+  }
+
+  /**
+   * Feature 020 (FR-015): one timeline event per scoping-active resolution so
+   * an operator can tell "scoped to 1 repo on purpose" from "scoping
+   * misfired". Same run_events precedent as setup-profile-fallback above.
+   */
+  private async recordScopingEvent(runId: string, result: NarrowResult): Promise<void> {
+    const d = result.decision;
+    const message =
+      d.gate === 'passed'
+        ? `ticket components narrowed the repository set to: ${d.effective.join(', ')}` +
+          (d.ignored.length > 0 ? ` (ignored non-repository components: ${d.ignored.join(', ')})` : '')
+        : d.gate === 'skipped_single_repo'
+          ? 'ticket scoping skipped — single-repository base set (components add no information)'
+          : d.gate === 'failed:components_unreadable'
+            ? 'ticket components could not be read from Jira — failing closed'
+            : `repository scope undeterminable (${d.gate.replace('parked:', '')}) — parking to the human queue`;
+    await this.db
+      .insert(schema.runEvents)
+      .values({ runId, type: 'log', payload: { source: 'repo-scoping', message, ...d } });
   }
 
   async healthCheck(): Promise<{ ok: boolean; detail?: string }> {

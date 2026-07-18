@@ -6,7 +6,14 @@ import { DRIZZLE, type BrigadirDb, schema, getBrigadirAgentTemplate } from '@bri
 import { BRIGADIR_JWT_SECRET } from '@brigadir/app-config';
 import { runQueueName, backoffStrategy } from '@brigadir/queues';
 import { RunsService, mapExitStatusToRunStatus } from '@brigadir/runs';
-import { ExecutorRegistry, type ExecutorResult, type RunContext } from '@brigadir/executors';
+import {
+  ExecutorRegistry,
+  RepositoryScopeUndeterminableError,
+  composeScopeQuestion,
+  type ExecutorResult,
+  type RunContext,
+} from '@brigadir/executors';
+import { HumanTaskService } from '@brigadir/human-tasks';
 import { PipelineService, buildHandoffSection } from '@brigadir/pipeline';
 import { signRunToken, type TriggerEvent } from '@brigadir/contracts';
 import { JiraClientFactory } from '@brigadir/jira';
@@ -80,6 +87,8 @@ export class ClaudeCliRunProcessor
     private readonly registry: ExecutorRegistry,
     private readonly pipeline: PipelineService,
     private readonly jiraFactory: JiraClientFactory,
+    // Feature 020: the repo-scoping gate parks undeterminable-scope runs.
+    private readonly humanTasks: HumanTaskService,
   ) {
     super();
   }
@@ -187,6 +196,15 @@ export class ClaudeCliRunProcessor
       const executor = this.registry.resolve(loaded.executorType);
       result = await executor.run(this.buildContext(loaded, detail, handoff), controller.signal);
     } catch (err) {
+      // Feature 020 (D2): an undeterminable repository scope parks the run to
+      // the human queue with a case-specific question — it is NOT a crash. The
+      // executor threw BEFORE any clone/worktree/spawn work; the guarded park
+      // (WHERE status='running') owns the run status from here, so this path
+      // finalizes nothing (CLAUDE.md rule 7). Falls through to the crashed
+      // mapping only if parking itself failed.
+      if (err instanceof RepositoryScopeUndeterminableError && (await this.parkForScope(runId, err))) {
+        return;
+      }
       result = {
         exitStatus: 'crashed',
         diagnostics: err instanceof Error ? err.message : String(err),
@@ -381,6 +399,35 @@ export class ClaudeCliRunProcessor
     };
   }
 
+  /**
+   * Feature 020 (D2): park a run whose repository scope the gate could not
+   * determine. Delegates to HumanTaskService.createFromRequest — guarded park
+   * (`running` → `awaiting_human` only), one-open-task dedup, Jira
+   * blocked-status transition + question comment through the per-issue write
+   * queue. Title/details are system-composed from display-safe fields only
+   * (ticket key + component/repository names — FR-009, feature-010 precedent).
+   * Returns false when parking itself failed, so the caller can fail the run
+   * loudly instead of leaving it running forever.
+   */
+  private async parkForScope(runId: string, err: RepositoryScopeUndeterminableError): Promise<boolean> {
+    const question = composeScopeQuestion(err.scopeCase, err.display);
+    this.logger.warn(
+      `run ${runId}: repository scope undeterminable for ${err.display.ticketKey} (${err.scopeCase}) — parking to the human queue`,
+    );
+    try {
+      await this.humanTasks.createFromRequest(runId, {
+        kind: 'blocker',
+        blocking: true,
+        title: question.title,
+        details: question.details,
+      });
+      return true;
+    } catch (parkErr) {
+      this.logger.error(`run ${runId}: scope-gate parking failed: ${String(parkErr)}`);
+      return false;
+    }
+  }
+
   private buildContext(loaded: LoadedRun, detail: TicketDetail | null, handoff: string): RunContext {
     const httpBaseUrl = process.env.BRIGADIR_CALLBACK_BASE_URL ?? DEFAULT_CALLBACK_BASE_URL;
     // Real per-run JWT only minted for callback-wired runs (contracts/run-jwt.md);
@@ -408,6 +455,7 @@ export class ClaudeCliRunProcessor
               summary: loaded.ticketSummary ?? '',
               description: detail?.description ?? '',
               url: detail?.url ?? '',
+              components: detail?.components ?? null,
             },
       instruction: this.assembleInstruction(loaded, handoff),
       workspaceDir: null,

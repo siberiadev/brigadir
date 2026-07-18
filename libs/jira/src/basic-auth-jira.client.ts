@@ -154,13 +154,23 @@ export class BasicAuthJiraClient implements JiraClient {
     return { epic, linked };
   }
 
-  async getIssue(issueKey: string): Promise<{ summary: string | null; description: ADFDoc | string | null }> {
+  async getIssue(
+    issueKey: string,
+  ): Promise<{ summary: string | null; description: ADFDoc | string | null; components: string[] }> {
     const issue = await this.request<{
-      fields?: { summary?: string | null; description?: ADFDoc | string | null };
-    }>('GET', `/rest/api/3/issue/${issueKey}?fields=summary,description`);
+      fields?: {
+        summary?: string | null;
+        description?: ADFDoc | string | null;
+        components?: Array<{ name?: string | null }> | null;
+      };
+    }>('GET', `/rest/api/3/issue/${issueKey}?fields=summary,description,components`);
     return {
       summary: issue.fields?.summary ?? null,
       description: issue.fields?.description ?? null,
+      // Feature 020: component NAMES only (repo-scoping input); absent field ⇒ [].
+      components: (issue.fields?.components ?? [])
+        .map((c) => c?.name)
+        .filter((n): n is string => typeof n === 'string' && n.length > 0),
     };
   }
 

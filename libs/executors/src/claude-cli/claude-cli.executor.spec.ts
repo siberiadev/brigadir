@@ -74,12 +74,16 @@ function makeGroup() {
   return { child, killGroup: vi.fn(), terminate };
 }
 
-function fakeDb(executorConfig: unknown, behavior: unknown) {
+function fakeDb(executorConfig: unknown, behavior: unknown, settings: Record<string, unknown> = {}) {
+  // run_events payloads captured for assertions (feature 020 repo-scoping event).
+  const insertedEvents: unknown[] = [];
   return {
+    insertedEvents,
     select: () => ({
       // Two select shapes: the run-config load (innerJoin chain) and the
-      // feature-005 workspace-settings read (plain where().limit() — returns
-      // empty settings so these tests keep resolving repos via the yaml path).
+      // feature-005 workspace-settings read (plain where().limit() — empty
+      // settings by default so these tests keep resolving repos via the yaml
+      // path; feature-020 scoping tests pass their own settings blob).
       from: () => ({
         innerJoin: () => ({
           innerJoin: () => ({
@@ -89,12 +93,15 @@ function fakeDb(executorConfig: unknown, behavior: unknown) {
           }),
         }),
         where: () => ({
-          limit: () => Promise.resolve([{ settings: {} }]),
+          limit: () => Promise.resolve([{ settings }]),
         }),
       }),
     }),
     insert: () => ({
-      values: () => Promise.resolve(),
+      values: (v: unknown) => {
+        insertedEvents.push(v);
+        return Promise.resolve();
+      },
     }),
     update: () => ({
       set: () => ({
@@ -129,7 +136,7 @@ const executorConfig = {
 function makeCtx(overrides: Partial<RunContext> = {}): RunContext {
   return {
     runId: 'run-1',
-    ticket: { key: 'BRIG-1', summary: 'Test ticket', description: '', url: '' },
+    ticket: { key: 'BRIG-1', summary: 'Test ticket', description: '', url: '', components: null },
     instruction: 'Implement the ticket.',
     workspaceDir: null,
     callback: { httpBaseUrl: 'http://x', runToken: 't' },
@@ -495,6 +502,8 @@ describe('ClaudeCliExecutor — workspace-setup environment (feature 015)', () =
     template?: unknown;
     setupProfile?: typeof setupProfileRow | null;
     repositories?: unknown[];
+    /** Feature 020: arm the workspace's ticket_scoping flag (D5 — setup runs must ignore it). */
+    ticketScoping?: boolean;
   }) {
     const runEventInserts: Record<string, unknown>[] = [];
     const db = {
@@ -527,7 +536,14 @@ describe('ClaudeCliExecutor — workspace-setup environment (feature 015)', () =
               if (keys.includes('secrets') || keys.includes('enabled')) {
                 return Promise.resolve(opts.setupProfile ? [opts.setupProfile] : []);
               }
-              return Promise.resolve([{ settings: { repositories: opts.repositories ?? [] } }]);
+              return Promise.resolve([
+                {
+                  settings: {
+                    repositories: opts.repositories ?? [],
+                    ...(opts.ticketScoping ? { ticket_scoping: true } : {}),
+                  },
+                },
+              ]);
             },
           }),
         }),
@@ -628,6 +644,28 @@ describe('ClaudeCliExecutor — workspace-setup environment (feature 015)', () =
     expect(fallbackEvents(db)).toHaveLength(0); // no fallback warning
   });
 
+  it('a workspace-setup run in a flag-ON workspace keeps its one-element scope — the gate never applies (feature 020, D5)', async () => {
+    const db = fakeSetupDb({
+      source: 'workspace-setup',
+      setupProfile: setupProfileRow,
+      repositories: [wsRepo, { name: 'extra', git_url: 'git@acme:extra.git', default_branch: 'main' }],
+      ticketScoping: true,
+    });
+    const executor = makeSetupExecutor(db);
+
+    const { result } = await drive(executor, makeCtx({ runId: 'a1b2c3d4-e5f6-7890', ticket: null }));
+
+    expect(result.exitStatus).toBe('completed');
+    // Deliberate one-element scope (feature 019, research D5) — untouched by scoping.
+    expect(prepareMock).toHaveBeenCalledTimes(1);
+    expect(prepareMock.mock.calls[0][0]).toHaveLength(1);
+    // No repo-scoping event: the gate structurally never runs for setup runs.
+    const scopingRows = db.runEventInserts.filter(
+      (e) => (e.payload as { source?: string } | undefined)?.source === 'repo-scoping',
+    );
+    expect(scopingRows).toHaveLength(0);
+  });
+
   it('a disabled setup executor falls back to the built-in profile and records a run-timeline warning (FR-018)', async () => {
     const db = fakeSetupDb({
       source: 'workspace-setup',
@@ -702,5 +740,138 @@ describe('ClaudeCliExecutor — workspace-setup environment (feature 015)', () =
     expect(result.diagnostics).toContain('ticketless run requires a no-repository agent');
     expect(prepareMock).not.toHaveBeenCalled();
     expect(spawnGroupMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('ClaudeCliExecutor ticket scoping (feature 020)', () => {
+  const wsRepos = [
+    { name: 'product', git_url: 'git@acme:product.git', default_branch: 'main' },
+    { name: 'platform', git_url: 'git@acme:platform.git', default_branch: 'main' },
+  ];
+
+  let worktreeDir: string;
+
+  beforeEach(async () => {
+    worktreeDir = await mkdtemp(join(tmpdir(), 'brigadir-executor-scope-'));
+    prepareMock.mockReset().mockResolvedValue(fakeWorkspace(worktreeDir));
+    cleanupMock.mockReset().mockResolvedValue(undefined);
+    spawnGroupMock.mockReset();
+  });
+
+  afterEach(async () => {
+    await rm(worktreeDir, { recursive: true, force: true });
+  });
+
+  const config = { ...executorConfig, repository: undefined };
+
+  function makeScopedExecutor(settings: Record<string, unknown>, behavior: Record<string, unknown> = {}) {
+    const db = fakeDb(config, behavior, settings);
+    const fakeJira = { getFeatureContext: vi.fn().mockResolvedValue({ linked: [] }) };
+    return { executor: new ClaudeCliExecutor(db as never, null, fakeJira as never), db };
+  }
+
+  function scopingEvents(db: { insertedEvents: unknown[] }) {
+    return (db.insertedEvents as Array<{ payload?: { source?: string } }>).filter(
+      (e) => e.payload?.source === 'repo-scoping',
+    );
+  }
+
+  async function driveToClose(executor: ClaudeCliExecutor, ctx: RunContext) {
+    const group = makeGroup();
+    spawnGroupMock.mockReturnValue(group);
+    const runPromise = executor.run(ctx, new AbortController().signal);
+    await waitForSpawn(spawnGroupMock);
+    group.child.emit('close', 0, null);
+    return runPromise;
+  }
+
+  it('flag ON: ticket components narrow the prepared repo set at the call site (D1)', async () => {
+    const { executor, db } = makeScopedExecutor({ repositories: wsRepos, ticket_scoping: true });
+
+    await driveToClose(
+      executor,
+      makeCtx({ ticket: { key: 'BRIG-1', summary: 's', description: '', url: '', components: ['platform', 'Design'] } }),
+    );
+
+    expect(prepareMock).toHaveBeenCalledTimes(1);
+    expect((prepareMock.mock.calls[0][0] as Array<{ name: string }>).map((r) => r.name)).toEqual(['platform']);
+    const events = scopingEvents(db);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      runId: 'run-1',
+      type: 'log',
+      payload: { source: 'repo-scoping', gate: 'passed', effective: ['platform'], ignored: ['Design'] },
+    });
+  });
+
+  it('flag ON + no components: typed error BEFORE any worktree work, parked event recorded', async () => {
+    const { executor, db } = makeScopedExecutor({ repositories: wsRepos, ticket_scoping: true });
+
+    await expect(
+      executor.run(
+        makeCtx({ ticket: { key: 'BRIG-2', summary: 's', description: '', url: '', components: [] } }),
+        new AbortController().signal,
+      ),
+    ).rejects.toMatchObject({ name: 'RepositoryScopeUndeterminableError', scopeCase: 'no_components' });
+
+    expect(prepareMock).not.toHaveBeenCalled();
+    expect(spawnGroupMock).not.toHaveBeenCalled();
+    expect(scopingEvents(db)[0]).toMatchObject({ payload: { gate: 'parked:no_components' } });
+  });
+
+  it('flag ON + unreadable components (fetch failed): plain fail-closed error, no clone (R5)', async () => {
+    const { executor } = makeScopedExecutor({ repositories: wsRepos, ticket_scoping: true });
+
+    await expect(
+      executor.run(
+        makeCtx({ ticket: { key: 'BRIG-3', summary: 's', description: '', url: '', components: null } }),
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow(/components could not be read from Jira.*failing closed/);
+
+    expect(prepareMock).not.toHaveBeenCalled();
+  });
+
+  it('flag OFF (default): components have no effect and no scoping event is recorded (D2b)', async () => {
+    const { executor, db } = makeScopedExecutor({ repositories: wsRepos });
+
+    await driveToClose(
+      executor,
+      makeCtx({ ticket: { key: 'BRIG-4', summary: 's', description: '', url: '', components: ['platform'] } }),
+    );
+
+    expect((prepareMock.mock.calls[0][0] as Array<{ name: string }>).map((r) => r.name)).toEqual([
+      'product',
+      'platform',
+    ]);
+    expect(scopingEvents(db)).toHaveLength(0);
+  });
+
+  it('flag ON + single-repo base set: gate skipped, run proceeds regardless of components (D2a)', async () => {
+    const { executor, db } = makeScopedExecutor(
+      { repositories: wsRepos, ticket_scoping: true },
+      { repositories: ['product'] },
+    );
+
+    await driveToClose(
+      executor,
+      makeCtx({ ticket: { key: 'BRIG-5', summary: 's', description: '', url: '', components: [] } }),
+    );
+
+    expect((prepareMock.mock.calls[0][0] as Array<{ name: string }>).map((r) => r.name)).toEqual(['product']);
+    expect(scopingEvents(db)[0]).toMatchObject({ payload: { gate: 'skipped_single_repo' } });
+  });
+
+  it('flag ON + ticketless no-repo run: scoping bypassed entirely (FR-014)', async () => {
+    const { executor, db } = makeScopedExecutor(
+      { repositories: wsRepos, ticket_scoping: true },
+      { workspace_mode: 'none' },
+    );
+
+    const result = await driveToClose(executor, makeCtx({ ticket: null }));
+
+    expect(result.exitStatus).toBe('crashed'); // no terminal event driven — irrelevant here
+    expect(prepareMock).not.toHaveBeenCalled();
+    expect(scopingEvents(db)).toHaveLength(0);
   });
 });

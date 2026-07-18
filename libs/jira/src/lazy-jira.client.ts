@@ -66,7 +66,9 @@ export class LazyJiraClient implements JiraClient {
   async getFeatureContext(issueKey: string): Promise<JiraFeatureContext> {
     return (await this.client()).getFeatureContext(issueKey);
   }
-  async getIssue(issueKey: string): Promise<{ summary: string | null; description: ADFDoc | string | null }> {
+  async getIssue(
+    issueKey: string,
+  ): Promise<{ summary: string | null; description: ADFDoc | string | null; components: string[] }> {
     return (await this.client()).getIssue(issueKey);
   }
   async getMyself(): Promise<{ displayName: string }> {

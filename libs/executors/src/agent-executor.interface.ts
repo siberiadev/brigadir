@@ -20,7 +20,10 @@ export interface RunContext {
   runId: string;
   // Null for ticketless workspace-setup runs (feature 011, D4) — the wrapper
   // renders a workspace-setup header instead of the ticket header.
-  ticket: { key: string; summary: string; description: string; url: string } | null;
+  // `components` (feature 020): the ticket's Jira component names, repo-scoping
+  // input. `null` ⇔ the dispatch-time Jira fetch failed (unknown), which an
+  // active scoping gate treats as undeterminable; `[]` ⇔ ticket has none.
+  ticket: { key: string; summary: string; description: string; url: string; components: string[] | null } | null;
   instruction: string;
   workspaceDir: string | null;
   callback: { httpBaseUrl: string; runToken: string; mcpStdioCmd?: string[] };

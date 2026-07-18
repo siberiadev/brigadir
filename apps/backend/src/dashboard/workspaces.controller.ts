@@ -414,6 +414,8 @@ export class WorkspacesController {
       scope_jql: settings.scope_jql ?? null,
       // Absent flag ⇒ enabled (data-model additive item 2; only `false` pauses).
       enabled: settings.enabled !== false,
+      // Feature 020 (D2b): absent ⇒ OFF — scoping is strictly opt-in.
+      ticket_scoping: settings.ticket_scoping === true,
       created_at: row.createdAt.toISOString(),
       updated_at: row.updatedAt.toISOString(),
     };

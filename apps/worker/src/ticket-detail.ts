@@ -5,6 +5,13 @@ import { type JiraClientFactory, jiraDescriptionToMarkdown } from '@brigadir/jir
 export interface TicketDetail {
   description: string;
   url: string;
+  /**
+   * Feature 020: the ticket's Jira component NAMES (repo-scoping input).
+   * `null` ⇔ the Jira fetch failed — load-bearing vs `[]` (ticket genuinely
+   * has no components): an active scoping gate treats `null` as
+   * "undeterminable → fail the run", never as "no components → park".
+   */
+  components: string[] | null;
 }
 
 /**
@@ -26,11 +33,11 @@ export async function fetchTicketDetail(
   try {
     const jira = await jiraFactory.forWorkspace(loaded.workspaceId);
     const issue = await jira.getIssue(loaded.ticketKey);
-    return { description: jiraDescriptionToMarkdown(issue.description), url };
+    return { description: jiraDescriptionToMarkdown(issue.description), url, components: issue.components };
   } catch (err) {
     logger.warn(
       `ticket detail fetch failed for run ${loaded.runId} (${loaded.ticketKey}): ${String(err)} — continuing with empty description`,
     );
-    return { description: '', url };
+    return { description: '', url, components: null };
   }
 }

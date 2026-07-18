@@ -7,6 +7,7 @@ import { RunsModule } from '@brigadir/runs';
 import { JiraModule } from '@brigadir/jira';
 import { PipelineModule } from '@brigadir/pipeline';
 import { IngestModule } from '@brigadir/ingest';
+import { HumanTaskService } from '@brigadir/human-tasks';
 import { ReconcileProcessor } from './reconcile.processor';
 import { ReconcileScheduler } from './reconcile.scheduler';
 import { RunProcessor } from './run.processor';
@@ -34,6 +35,12 @@ import { ClaudeCliRunProcessor } from './claude-cli-run.processor';
     PipelineModule,
     IngestModule,
   ],
-  providers: [RunProcessor, ClaudeCliRunProcessor, ReconcileProcessor, ReconcileScheduler],
+  // `HumanTaskService` is provided DIRECTLY (feature 020: the repo-scoping
+  // gate parks runs from the worker) rather than via HumanTasksModule — the
+  // module also carries ResolveController + the fail-fast dashboard-token
+  // provider, which the worker deliberately does not have (compose gives the
+  // worker no BRIGADIR_DASHBOARD_TOKEN). The service's own deps (DRIZZLE,
+  // JiraClientFactory) are already global here.
+  providers: [RunProcessor, ClaudeCliRunProcessor, ReconcileProcessor, ReconcileScheduler, HumanTaskService],
 })
 export class WorkerAppModule {}

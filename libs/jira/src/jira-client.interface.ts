@@ -26,12 +26,16 @@ export interface JiraClient {
   /** GET /issue/{key}?fields=parent,issuelinks — epic + linked issues, statuses only (feature 004, FR-026). */
   getFeatureContext(issueKey: string): Promise<JiraFeatureContext>;
   /**
-   * GET /issue/{key}?fields=summary,description — full issue text for the run
-   * wrapper. `description` is ADF on Jira Cloud v3; a plain string is tolerated
-   * defensively (Server / API v2). Conversion to markdown is the caller's
-   * concern (adf-to-markdown.ts) — the client returns Jira ground truth.
+   * GET /issue/{key}?fields=summary,description,components — full issue text
+   * for the run wrapper. `description` is ADF on Jira Cloud v3; a plain string
+   * is tolerated defensively (Server / API v2). Conversion to markdown is the
+   * caller's concern (adf-to-markdown.ts) — the client returns Jira ground
+   * truth. `components` (feature 020) are the ticket's component NAMES —
+   * repo-scoping input; absent field ⇒ [].
    */
-  getIssue(issueKey: string): Promise<{ summary: string | null; description: ADFDoc | string | null }>;
+  getIssue(
+    issueKey: string,
+  ): Promise<{ summary: string | null; description: ADFDoc | string | null; components: string[] }>;
   /** GET /rest/api/3/myself — the authenticated bot identity (feature 005, wizard Verify). */
   getMyself(): Promise<{ displayName: string }>;
   /**

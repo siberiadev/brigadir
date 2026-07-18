@@ -121,6 +121,10 @@ export const WorkspaceSettingsSchema = z
     // Per-workspace rework-cycle budget (feature 010, FR-006). ABSENT ⇒ default 2
     // via the getReworkMax accessor. No DDL — jsonb value only.
     rework_max: z.number().int().positive().optional(),
+    // Feature 020 (D2b): per-workspace opt-in for ticket repository scoping via
+    // Jira Components (narrowing + the fail-closed gate). ABSENT ⇒ OFF —
+    // byte-identical legacy behavior. No DDL — jsonb value only.
+    ticket_scoping: z.boolean().optional(),
     // iteration-1 seed leftovers (deprecated single-repo fields) tolerated:
     repo: z.string().optional(),
     default_branch: z.string().optional(),

@@ -137,6 +137,13 @@ function presentProgress(payload: unknown): Presented {
 
 function presentLog(payload: unknown): Presented {
   const rec = asRecord(payload) ?? {};
+  // Feature 020 (FR-015): the repo-scoping decision event carries a composed
+  // one-liner — surface it verbatim so an operator can tell "scoped on
+  // purpose" from "scoping misfired" without reading raw payloads.
+  const message = asString(rec.message);
+  if (rec.source === 'repo-scoping' && message) {
+    return { title: 'Repository scoping', body: message, percent: null };
+  }
   const parts: string[] = [];
   const model = asString(rec.model);
   if (model) parts.push(model);

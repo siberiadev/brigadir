@@ -1369,3 +1369,71 @@ web 256 (30 files), интеграционные 324/326 (81 файл; dockerd �
 `runs-cancel-all.spec.ts` (итерация 26), ПРЕДСУЩЕСТВУЮЩИЕ: воспроизводятся на
 чистом дереве без изменений 019 (проверено git stash), к фиче отношения не
 имеют — окружение/флейк bulk-stop, разбирать отдельной итерацией.
+
+## Iteration 28 — Per-ticket repository scoping через Jira Components (feature 020, 2026-07-18)
+
+Scope прогона стал ПО-ТИКЕТНЫМ: Components тикета пересекаются с базовым
+scope'ом агента (base = `behavior.repositories` > deprecated `repository` >
+все workspace-репо), и клонируется/монтируется только пересечение (D1 —
+intersection, never widen). Не-репозиторные компоненты («Design», «QA»)
+отфильтровываются молча (D3 — тикетные имена НЕ ходят через fail-loud ветку
+`pickWorkspaceRepositories`). Неопределимый scope — fail-CLOSED парковка в
+human queue (D2) с ТРЕМЯ различимыми вопросами: нет Components / ни один не
+мапится на репо / пересечение с scope'ом агента пусто (routing-дефект). Гейт
+пропускается при одноэлементном base set (D2a) и выключен по умолчанию:
+per-workspace флаг `settings.ticket_scoping` (D2b, jsonb, без DDL; OFF =
+байт-в-байт поведение 019 — components вообще не читаются в решение). Setup-
+прогоны не тронуты (D5). Escape hatch (D4): обёртка суженного прогона
+перечисляет исключённые репо (name + git URL) с нотой «клонируй в
+`.repos/<name>` по необходимости» — тот же приём, что в setup-протоколе;
+несуженная обёртка байт-идентична.
+
+Проводка: `getIssue` теперь тянет `components` (одним запросом с
+summary/description), `TicketDetail`/`RunContext.ticket` несут
+`components: string[] | null` — `null` = Jira-fетч упал (R5: при активном
+гейте прогон честно падает `failed`, НЕ паркуется с неверным вопросом и НЕ
+клонирует всё). Чистый резолвер `narrowByTicketComponents()`
+(`scope-ticket.ts`, decision table на 10 строк в
+contracts/scope-resolution.md; матчинг trim + case-insensitive, FR-016) +
+`composeScopeQuestion()` (system-composed тексты только из ключа тикета и
+имён — прецедент feature 010, скраббер не нужен). Вставка гейта — в
+`resolveClaudeCliConfig` ДО prepareAll (парковка не стоит ни одного клона);
+`undeterminable` → типизированный `RepositoryScopeUndeterminableError`,
+который processor ловит ДО generic-crashed маппинга и отдаёт в
+`HumanTaskService.createFromRequest` (guarded park `running`→`awaiting_human`,
+дедуп открытых задач, Jira blocked-transition + коммент через per-issue
+queue; правило 7 соблюдено конструктивно — при неудачной парковке fallback в
+crashed, где finalize-гварды no-op). В worker `HumanTaskService` заведён
+ПРЯМЫМ провайдером (не HumanTasksModule: модуль тащит ResolveController +
+fail-fast dashboard-token, которых у worker'а нет в env). Resume-петля
+закрыта существующим ResumeService: resolve → superseded + новый queued-прогон
+перечитывает Components с нуля. Observability (FR-015): один run_event
+`type:'log'` `{source:'repo-scoping', message, components/matched/ignored/
+effective/gate}` на каждое scoping-активное разрешение (gate: passed |
+skipped_single_repo | parked:<case> | failed:components_unreadable);
+presenter таймлайна рендерит его как «Repository scoping» с композитным
+сообщением. API/UI: `ticket_scoping` в WorkspaceSettingsRequest/Response
+(additive) + инлайновый el-switch на вкладке Settings (паттерн enable/pause
+из feature 006). Схема БД не менялась.
+
+Тесты той же итерацией: scope-ticket.spec (17: вся decision table, тексты
+вопросов, error-класс), executor.spec (+7: narrowing на call site, typed
+throw до prepareAll, флаг OFF без событий, D2a, FR-014 bypass, D5 setup при
+включённом флаге), wrapper.spec (+2: escape hatch, байт-идентичность),
+jira-client (+components маппинг/поля), dashboard.schema (+ticket_scoping),
+web presenter (+repo-scoping рендер) и workspace-settings (switch вне
+запрета на инпуты); интеграционные: НОВЫЙ claude-cli-scoping.spec (13:
+subset-клоны, silent ignore, never-widen, unscoped-агент, три парковки с
+различимыми текстами + zero clone work + rule-7, unreadable→failed,
+park→setComponents→resolve→rescope round trip через реальный resolve-эндпоинт,
+flag-OFF матрица + двух-workspace изоляция, D2a×2), workspace-settings-rotate
+(+round-trip/merge-patch/strict флага). mock-jira научился components
+(seedIssue/setComponents/GET issue).
+
+Gates green locally: typecheck (root+contracts+mcp-server+admin-mcp+web
+vue-tsc), lint, unit 297→322 root + 161 contracts, web 257 (30 файлов);
+интеграционные 337/340 (82 файла). Три падения в двух файлах —
+`runs-cancel-all.spec.ts` (задокументированный пре-существующий флейк
+итерации 26/27) и `serve-static.spec.ts` — ПРЕДСУЩЕСТВУЮЩИЕ: воспроизведены
+на чистом дереве без изменений 020 (git stash -u, идентичные 3 падения),
+к фиче отношения не имеют.
