@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
   resolveClaudeCliConfig,
@@ -23,8 +23,10 @@ const base: ClaudeCliExecutorConfig = {
 describe('resolveClaudeCliConfig (T076)', () => {
   it('resolves omitted optional fields to their documented defaults', () => {
     const runtime = resolveClaudeCliConfig(base, ['Read', 'Edit']);
-    expect(runtime.worktreeRoot).toBe(join(tmpdir(), 'brigadir', 'worktrees'));
-    expect(runtime.repoCacheRoot).toBe(join(tmpdir(), 'brigadir', 'repos'));
+    // Under ~/.brigadir, never $TMPDIR — the macOS reaper guts both roots there
+    // (incident 2026-07-18); see resolveClaudeCliConfig.
+    expect(runtime.worktreeRoot).toBe(join(homedir(), '.brigadir', 'worktrees'));
+    expect(runtime.repoCacheRoot).toBe(join(homedir(), '.brigadir', 'repos'));
     expect(runtime.allowedTools).toEqual(['Read', 'Edit']);
     expect(runtime.maxTurns).toBeUndefined();
   });
