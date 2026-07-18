@@ -70,14 +70,63 @@ async function git(args: string[], cwd?: string): Promise<string> {
   }
 }
 
-/** One cached local clone per repository (`repoCacheRoot/<repo.name>`), refreshed per run. */
+/** Does `cacheDir` hold a repository git itself will accept? */
+async function isHealthyRepo(cacheDir: string): Promise<boolean> {
+  try {
+    await execFileAsync('git', ['rev-parse', '--git-dir'], { cwd: cacheDir });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Can HEAD still be resolved to an object? Cheap probe for a gutted object store. */
+async function headResolves(cacheDir: string): Promise<boolean> {
+  try {
+    await execFileAsync('git', ['cat-file', '-e', 'HEAD'], { cwd: cacheDir });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * One cached local clone per repository (`repoCacheRoot/<repo.name>`), refreshed
+ * per run — self-healing since the live incident of 2026-07-18.
+ *
+ * The cache OUTLIVES a run, so anything may rot it between runs. macOS reaps
+ * files (not directories) older than ~3 days out of `$TMPDIR`, which leaves a
+ * skeleton: `.git/` present, `HEAD` and the refs gone. The old check asked
+ * `existsSync('.git')` — "has this been cloned?" — took the fetch branch and
+ * died with `fatal: not a git repository` on EVERY retry, permanently, because
+ * nothing ever reconsidered cloning. ST3-780 burned 5 attempts that way.
+ *
+ * So the question asked is "does git accept this?", not "does the path exist?",
+ * and a rotten cache is discarded and re-cloned. A fetch FAILURE is deliberately
+ * NOT treated as rot: it is usually the network or SSH auth, where nuking a good
+ * cache costs a full re-clone and fixes nothing (the clone needs the same
+ * network). Only when HEAD no longer resolves — a partially reaped object store,
+ * the same rot arriving by another route — do we discard and re-clone; otherwise
+ * the error propagates for the operator to see.
+ */
 async function ensureCache(repo: WorktreeRepo, repoCacheRoot: string): Promise<string> {
   const cacheDir = join(repoCacheRoot, repo.name);
-  if (existsSync(join(cacheDir, '.git'))) {
-    await git(['fetch', 'origin'], cacheDir);
+  if (existsSync(cacheDir) && !(await isHealthyRepo(cacheDir))) {
+    await rm(cacheDir, { recursive: true, force: true });
+  }
+
+  if (existsSync(cacheDir)) {
+    try {
+      await git(['fetch', 'origin'], cacheDir);
+    } catch (err) {
+      if (await headResolves(cacheDir)) throw err;
+      await rm(cacheDir, { recursive: true, force: true });
+      await git(['clone', repo.url, cacheDir]);
+    }
   } else {
     await git(['clone', repo.url, cacheDir]);
   }
+
   await git(['worktree', 'prune'], cacheDir);
   return cacheDir;
 }

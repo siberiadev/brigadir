@@ -1,4 +1,4 @@
-import { tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { ExecutorConfig } from '@brigadir/contracts';
 
@@ -137,9 +137,17 @@ export function applyAuthEnv(
 
 /**
  * Resolve the boot-validated `claude_cli` config branch into the runtime
- * shape (D9/contracts/executor-config.md). Pure — no I/O; `os.tmpdir()` is a
+ * shape (D9/contracts/executor-config.md). Pure — no I/O; `os.homedir()` is a
  * process-metadata read, not a filesystem/network call, and every default
  * here mirrors the contract's documented default column.
+ *
+ * Workspace roots default under `~/.brigadir/`, NOT `os.tmpdir()` (changed
+ * after the live incident of 2026-07-18). macOS periodically reaps files older
+ * than ~3 days out of `$TMPDIR`, which silently guts a cached clone — and both
+ * roots hold state that legitimately outlives a run: the per-repo cache across
+ * runs, and, under `keepFailedWorktrees`, a failed run's tree kept for days of
+ * human inspection. `ensureCache` now heals a rotted cache on its own; this
+ * keeps the rot from happening in the first place.
  */
 export function resolveClaudeCliConfig(
   raw: ClaudeCliExecutorConfigInput,
@@ -151,8 +159,8 @@ export function resolveClaudeCliConfig(
     allowedTools:
       raw.allowedTools && raw.allowedTools.length > 0 ? raw.allowedTools : [...agentAllowedTools],
     keepFailedWorktrees: raw.keepFailedWorktrees,
-    worktreeRoot: raw.worktreeRoot ?? join(tmpdir(), 'brigadir', 'worktrees'),
-    repoCacheRoot: raw.repoCacheRoot ?? join(tmpdir(), 'brigadir', 'repos'),
+    worktreeRoot: raw.worktreeRoot ?? join(homedir(), '.brigadir', 'worktrees'),
+    repoCacheRoot: raw.repoCacheRoot ?? join(homedir(), '.brigadir', 'repos'),
     maxTurns: raw.maxTurns,
     killGraceMs: raw.killGraceMs,
     cancelPollMs: raw.cancelPollMs,

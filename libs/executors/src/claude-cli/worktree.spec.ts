@@ -166,6 +166,58 @@ describe('worktree prepareAll/cleanupAll (T080, feature 019 multi-repo)', () => 
     expect(stdout).toContain('wip'); // continues the same branch, prior commit intact
   });
 
+  /**
+   * Live incident 2026-07-18 (ST3-780): the macOS `$TMPDIR` reaper deletes
+   * FILES older than ~3 days but leaves DIRECTORIES, gutting a cached clone
+   * into a skeleton — `.git/` still there, `HEAD` and refs gone. The old
+   * `existsSync('.git')` check read that as "already cloned", fetched into it,
+   * and died with `fatal: not a git repository` on every retry, forever.
+   */
+  describe('cache self-healing (incident 2026-07-18)', () => {
+    /** Break the cache the way the reaper did: keep `.git/`, remove `HEAD`. */
+    const gutHead = (cacheDir: string) => rm(join(cacheDir, '.git', 'HEAD'), { force: true });
+
+    /** Point the cache's origin at nothing, so `fetch` fails while `clone` still works. */
+    const breakOrigin = (cacheDir: string) =>
+      execFileAsync('git', ['-C', cacheDir, 'remote', 'set-url', 'origin', join(root, 'gone')]);
+
+    it('re-clones a cache the reaper gutted instead of failing forever', async () => {
+      const first = await prep([repo], 'run-rot-1', 'BRIG-90');
+      const cacheDir = first.repos[0].cacheDir;
+      await cleanupAll(first);
+      await gutHead(cacheDir);
+
+      const healed = await prep([repo], 'run-rot-2', 'BRIG-91');
+
+      expect(healed.repos[0].cacheDir).toBe(cacheDir);
+      expect(existsSync(join(cacheDir, '.git', 'HEAD'))).toBe(true);
+      expect(existsSync(join(healed.repos[0].worktreeDir, 'README.md'))).toBe(true);
+    });
+
+    it('re-clones when fetch fails AND HEAD no longer resolves (partially reaped object store)', async () => {
+      const first = await prep([repo], 'run-rot-3', 'BRIG-92');
+      const cacheDir = first.repos[0].cacheDir;
+      await cleanupAll(first);
+      await breakOrigin(cacheDir);
+      await rm(join(cacheDir, '.git', 'objects'), { recursive: true, force: true });
+
+      const healed = await prep([repo], 'run-rot-4', 'BRIG-93');
+
+      expect(existsSync(join(healed.repos[0].worktreeDir, 'README.md'))).toBe(true);
+    });
+
+    it('a fetch failure over a HEALTHY cache propagates and does NOT discard the cache (network/auth, not rot)', async () => {
+      const first = await prep([repo], 'run-net-1', 'BRIG-94');
+      const cacheDir = first.repos[0].cacheDir;
+      await cleanupAll(first);
+      await breakOrigin(cacheDir);
+
+      await expect(prep([repo], 'run-net-2', 'BRIG-95')).rejects.toThrow(WorktreePrepareError);
+      // The cache survived: re-cloning on a network blip costs a full clone and fixes nothing.
+      expect(existsSync(join(cacheDir, '.git', 'HEAD'))).toBe(true);
+    });
+  });
+
   describe('multi-repo (feature 019)', () => {
     let infra: WorktreeRepo;
 
