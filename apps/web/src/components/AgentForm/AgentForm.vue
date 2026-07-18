@@ -348,19 +348,16 @@ defineExpose({ submit, saving });
 
     <template v-if="!isOrchestrator">
       <el-form-item label="Trigger status" :error="errorFor('trigger_status')">
-        <el-select
-          v-model="form.trigger_status"
-          filterable
-          allow-create
-          :disabled="statusesUnavailable"
-          data-test="trigger-status-select"
-        >
-          <el-option v-for="s in boardStatuses" :key="s.id" :label="s.name" :value="s.name" />
-        </el-select>
-        <div v-if="errorFor('trigger_status')" class="field-error" data-test="trigger-status-error">
-          {{ errorFor('trigger_status') }}
-        </div>
-        <div class="preview-row">
+        <div class="input-with-action">
+          <el-select
+            v-model="form.trigger_status"
+            filterable
+            allow-create
+            :disabled="statusesUnavailable"
+            data-test="trigger-status-select"
+          >
+            <el-option v-for="s in boardStatuses" :key="s.id" :label="s.name" :value="s.name" />
+          </el-select>
           <el-button
             data-test="trigger-preview-button"
             :loading="ticketCount.isPending.value"
@@ -369,9 +366,12 @@ defineExpose({ submit, saving });
           >
             Preview matching tickets
           </el-button>
-          <span v-if="triggerPreviewResult" class="field-hint" data-test="trigger-preview-result">
-            {{ triggerPreviewResult }}
-          </span>
+        </div>
+        <div v-if="errorFor('trigger_status')" class="field-error" data-test="trigger-status-error">
+          {{ errorFor('trigger_status') }}
+        </div>
+        <div v-if="triggerPreviewResult" class="field-hint" data-test="trigger-preview-result">
+          {{ triggerPreviewResult }}
         </div>
       </el-form-item>
 
@@ -517,15 +517,18 @@ defineExpose({ submit, saving });
   color: var(--el-color-warning);
   margin-top: 4px;
 }
-.preview-row {
+.input-with-action {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 8px;
+}
+.input-with-action > .el-select {
+  flex: 1;
 }
 .field-hint {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+  margin-top: 4px;
 }
 .test-run {
   display: flex;

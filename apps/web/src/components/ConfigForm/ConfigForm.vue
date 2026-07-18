@@ -86,22 +86,23 @@ defineExpose({ submit, saving });
       </el-button>
     </el-divider>
     <el-form-item v-if="showAdvanced" label="Scope JQL (advanced)">
-      <el-input v-model="form.scope_jql" data-test="scope-jql" />
-      <div class="preview-row">
-        <el-button
-          data-test="scope-preview-button"
-          :loading="ticketCount.isPending.value"
-          :disabled="scopeDirty"
-          @click="previewCount"
-        >
-          Preview ticket count
-        </el-button>
-        <span v-if="scopeDirty" class="preview-hint" data-test="scope-preview-dirty">
-          Save to preview the new scope.
-        </span>
-        <span v-else-if="previewResult" class="preview-hint" data-test="scope-preview-result">
-          {{ previewResult }}
-        </span>
+      <el-input v-model="form.scope_jql" data-test="scope-jql">
+        <template #append>
+          <el-button
+            data-test="scope-preview-button"
+            :loading="ticketCount.isPending.value"
+            :disabled="scopeDirty"
+            @click="previewCount"
+          >
+            Preview ticket count
+          </el-button>
+        </template>
+      </el-input>
+      <div v-if="scopeDirty" class="preview-hint" data-test="scope-preview-dirty">
+        Save to preview the new scope.
+      </div>
+      <div v-else-if="previewResult" class="preview-hint" data-test="scope-preview-result">
+        {{ previewResult }}
       </div>
     </el-form-item>
 
@@ -133,14 +134,9 @@ defineExpose({ submit, saving });
   align-items: center;
   margin-bottom: 8px;
 }
-.preview-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-}
 .preview-hint {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+  margin-top: 4px;
 }
 </style>
