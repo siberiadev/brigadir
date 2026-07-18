@@ -1,11 +1,12 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import { JiraClientFactory, buildRunComment, NoTransitionPath } from '@brigadir/jira';
 import { RunTriggerService } from '@brigadir/runs';
 import { HumanTaskService } from '@brigadir/human-tasks';
 import type { AgentReport, JiraIssue, TriggerEvent } from '@brigadir/contracts';
 import { evaluateDependencyGate, blockingKeys } from './dependency-gate';
+import { buildAgentTriggerEvent } from './dependency-release.service';
 import { getReworkBudget } from './rework-budget';
 
 /** Where a status change came from (internal to the pipeline; distinct from the persisted trigger source). */
@@ -76,15 +77,29 @@ export class PipelineService {
           eq(schema.agents.enabled, true),
         ),
       );
-    if (agents.length === 0) return;
+    if (agents.length === 0) {
+      // Not a trigger status (anymore) — the ticket cannot be blocked-waiting
+      // (feature 022 FR-001 clear rule). Cheap guarded write: only rows that
+      // actually carry a waiting state are touched.
+      await this.clearWaitingState(ticketId);
+      return;
+    }
 
     if (evaluateDependencyGate(issue) === 'blocked') {
+      // Feature 022 (FR-001): persist the waiting state instead of dropping the
+      // event — the release pass keeps it current and the dashboard reads it.
+      const blockers = blockingKeys(issue);
+      await this.db
+        .update(schema.tickets)
+        .set({ blockedBy: blockers, blockedState: 'waiting' })
+        .where(eq(schema.tickets.id, ticketId));
       this.logger.log(
-        `${ticket.jiraKey} entered "${toStatus}" but is blocked by [${blockingKeys(issue).join(', ')}] — trigger skipped (${agents.length} agent(s))`,
+        `${ticket.jiraKey} entered "${toStatus}" but is blocked by [${blockers.join(', ')}] — waiting (${agents.length} agent(s))`,
       );
       return;
     }
 
+    await this.clearWaitingState(ticketId);
     for (const agent of agents) {
       const triggerEvent = buildAgentTriggerEvent(source, agent.behavior);
       const result = await this.runTrigger.trigger({ ticketId, agentId: agent.id, triggerEvent });
@@ -96,6 +111,14 @@ export class PipelineService {
         this.logger.log(`${ticket.jiraKey} → agent "${agent.name}": run ${result.runId} enqueued`);
       }
     }
+  }
+
+  /** Feature 022: drop the waiting cache for a ticket that is no longer blocked-waiting. */
+  private async clearWaitingState(ticketId: string): Promise<void> {
+    await this.db
+      .update(schema.tickets)
+      .set({ blockedBy: null, blockedState: null })
+      .where(and(eq(schema.tickets.id, ticketId), sql`${schema.tickets.blockedState} is not null`));
   }
 
   /**
@@ -601,22 +624,6 @@ function invalidRoutedReport(report: AgentReport): AgentReport {
     checks: report.checks,
     ...(report.artifacts ? { artifacts: report.artifacts } : {}),
   };
-}
-
-/**
- * Build the trigger event for an agent match. `mock_scenario` is threaded from
- * the agent's `behavior` blob when present so integration tests can drive the
- * full loop to each outcome; real executors ignore it (it stays inert in prod,
- * where agents carry no `mock_scenario`). Exported so the reconcile dependency
- * re-evaluation step produces identical trigger events.
- */
-export function buildAgentTriggerEvent(source: StatusChangeSource, behavior: unknown): TriggerEvent {
-  const b = (behavior ?? {}) as Record<string, unknown>;
-  const scenario = typeof b.mock_scenario === 'string' ? b.mock_scenario : undefined;
-  return {
-    source: source === 'webhook' ? 'webhook' : 'poll',
-    ...(scenario ? { mock_scenario: scenario } : {}),
-  } as TriggerEvent;
 }
 
 /** A run finalized without a structured report (timeout/crash) still gets a failure comment. */

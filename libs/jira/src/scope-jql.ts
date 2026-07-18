@@ -1,7 +1,10 @@
 import type { JiraBoardType } from '@brigadir/contracts';
 
-/** Poller `fields` (data-model.md): status drives the diff, issuelinks the gate. */
-export const POLL_FIELDS = ['status', 'summary', 'updated', 'issuelinks'] as const;
+/**
+ * Poller `fields` (data-model.md): status drives the diff, issuelinks the gate,
+ * priority the release order (feature 022).
+ */
+export const POLL_FIELDS = ['status', 'summary', 'updated', 'issuelinks', 'priority'] as const;
 
 /**
  * HWM overlap window. 26 HOURS, not seconds — two reasons (live incident 2026-07-13):

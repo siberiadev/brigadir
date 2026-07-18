@@ -8,7 +8,7 @@ import {
   getReconcileState,
   setReconcileState,
 } from '@brigadir/database';
-import { type JiraClient, POLL_FIELDS, buildScopeJql, sinceClause } from '@brigadir/jira';
+import { type JiraClient, POLL_FIELDS, buildScopeJql, sinceClause, parseJiraPriority } from '@brigadir/jira';
 import { PipelineService } from '@brigadir/pipeline';
 import type { JiraBoardType, JiraIssue } from '@brigadir/contracts';
 
@@ -139,7 +139,12 @@ export class PollerService {
         // so a failure re-processes the same transition next pass.
         await this.db
           .update(schema.tickets)
-          .set({ lastSeenStatus: toStatus, lastSeenUpdated: new Date(updatedIso), summary: issue.fields.summary })
+          .set({
+            lastSeenStatus: toStatus,
+            lastSeenUpdated: new Date(updatedIso),
+            summary: issue.fields.summary,
+            ...parseJiraPriority(issue),
+          })
           .where(eq(schema.tickets.id, ticketId));
       } catch (err) {
         this.logger.error(
@@ -172,6 +177,7 @@ export class PollerService {
         jiraKey: issue.key,
         jiraId: issue.id,
         summary: issue.fields.summary,
+        ...parseJiraPriority(issue),
       })
       .returning({ id: schema.tickets.id });
     return { ticketId: inserted.id, prevStatus: null };

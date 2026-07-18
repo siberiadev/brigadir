@@ -1,8 +1,9 @@
 import { sql } from 'drizzle-orm';
-import { pgTable, uuid, text, timestamp, unique } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, timestamp, unique, integer, jsonb } from 'drizzle-orm/pg-core';
 import { workspaces } from './workspaces';
 
-// architecture.md §3 — tickets (last_seen_* are a diff cache, NOT source of truth)
+// architecture.md §3 — tickets (last_seen_*, priority_*, blocked_* are a diff
+// cache of observed Jira data, NOT source of truth)
 export const tickets = pgTable(
   'tickets',
   {
@@ -17,6 +18,15 @@ export const tickets = pgTable(
     summary: text('summary'),
     lastSeenStatus: text('last_seen_status'),
     lastSeenUpdated: timestamp('last_seen_updated', { withTimezone: true }),
+    // feature 022: Jira priority cache — ascending id = more important
+    // (built-in scheme: 1 Highest … 5 Lowest); NULL = no/unparseable priority.
+    priorityId: integer('priority_id'),
+    priorityName: text('priority_name'),
+    // feature 022: sequencing waiting cache — open inward "is blocked by" keys
+    // (string[]) and the classification; both NULL when not blocked-waiting.
+    blockedBy: jsonb('blocked_by'),
+    // waiting | cycle | dead_end | out_of_scope
+    blockedState: text('blocked_state'),
   },
   (t) => [unique('tickets_workspace_key').on(t.workspaceId, t.jiraKey)],
 );

@@ -57,6 +57,13 @@
       "when": 1784215482960,
       "tag": "0007_agent_identity",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784374771417,
+      "tag": "0008_sprint_sequencing",
+      "breakpoints": true
     }
   ]
 }

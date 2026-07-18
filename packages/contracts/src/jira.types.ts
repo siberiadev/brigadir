@@ -48,6 +48,16 @@ export interface JiraIssueLink {
   outwardIssue?: JiraLinkedIssueRef;
 }
 
+/**
+ * Issue priority (feature 022). Jira's built-in scheme uses numeric string ids
+ * ordered Highest("1") → Lowest("5"); custom schemes may deviate — the ingest
+ * parses the id as an int and orders ascending (deterministic either way).
+ */
+export interface JiraPriority {
+  id: string;
+  name: string;
+}
+
 export interface JiraIssue {
   key: string;
   id: string;
@@ -56,6 +66,10 @@ export interface JiraIssue {
     status: JiraStatus;
     updated: string; // ISO 8601
     issuelinks?: JiraIssueLink[];
+    priority?: JiraPriority | null;
+    // Resolution is fetched ONLY by the sequencing blocker probe (feature 022);
+    // regular poll payloads omit it.
+    resolution?: { name: string } | null;
   };
 }
 
