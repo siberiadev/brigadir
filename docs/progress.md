@@ -1437,3 +1437,50 @@ vue-tsc), lint, unit 297→322 root + 161 contracts, web 257 (30 файлов);
 итерации 26/27) и `serve-static.spec.ts` — ПРЕДСУЩЕСТВУЮЩИЕ: воспроизведены
 на чистом дереве без изменений 020 (git stash -u, идентичные 3 падения),
 к фиче отношения не имеют.
+
+## Iteration 29 — Sprint sequencing: порядок исполнения blocked-by-цепочек (feature 022, 2026-07-18)
+
+- **Status**: ✅ Code complete — интеграционные прогоны в CI (в среде разработки не было Docker; юниты/typecheck/lint зелёные локально).
+- **Spec**: `specs/022-sprint-sequencing/` (022 — номер 021 зарезервирован за cross-project knowledge reading)
+- **Branch**: `claude/sprint-sequencing-blocked-by-natxlb`
+
+Ключевая коррекция вводной (research R1): pull-механизм разблокировки, который
+бриф считал отсутствующим, УЖЕ существовал — `ReconcileService.
+reEvaluateDependencies` (FR-036 фичи 001, покрыт T066/SC-010). Фича его не
+переписывает, а достраивает вокруг него недостающее.
+
+Что вошло: (1) детерминированный порядок волны — `priority` в POLL_FIELDS,
+`tickets.priority_id/priority_name` (кэш; миграция 0008 + REVIEW-0008 +
+синхронный апдейт architecture.md §3 по правилу 5), канонический компаратор
+priority_id ASC NULLS LAST → jira_key ASC в release-цикле и в SQL дашборда;
+(2) персистентное waiting-состояние — `tickets.blocked_by/blocked_state`
+(diff-кэш, принцип I), пишется на blocked-skip в pipeline и обновляется каждым
+release-проходом; (3) фастпас FR-003 — `DependencyReleaseService`
+(извлечён в libs/pipeline; scope-jql.ts переехал в libs/jira против цикла
+импортов) с `releaseDependentsOf(blocked_by @> key)`, вызывается небезусловно-
+нефатально из onWorkerFinished после transition в status_success — цепочка
+A→B→C проходит сама без единого reconcile-прохода; (4) диагностика —
+классификация cycle > out_of_scope > dead_end > waiting двумя батчевыми
+пробами (blocker fetch status+resolution без project-клаузы; scope-проба =
+scope JQL воркспейса, key in внутри скобок scope_jql, БЕЗ since),
+`findCycleTickets` (итеративный трёхцветный DFS, self-links); out_of_scope
+дополнительно поднимает ОДНУ run-less human task на тикет
+(`createTicketBlocked`, run_id NULL — колонка nullable с 011; пере-создаётся,
+если задачу закрыли без починки борды); (5) видимость — `GET /api/workspaces/
+:id/waiting` (конверт фабрики пагинации, канонический ORDER BY) + вкладка
+Waiting в workspace (state-теги el-tag, общий ListPagination, placeholderData).
+
+Тесты той же итерацией: юниты priority.spec (4), dependency-release.spec
+(компаратор 4 + циклы 5); интеграционные: dependency-gate.spec расширен
+waiting-кэш-ассертами (T057/T066 без изменений), НОВЫЙ sprint-sequencing.spec
+(цепочка E2E c нулём reconcile-проходов + дедуп + порядок; kill-switch
+фастпаса через arm500OnNextSearch → финализация цела, следующий проход
+доносит; волна приоритетов ×10 повторов; цикл; dead-end vs done-category
+control; out-of-scope: одна задача, дедуп, re-create, board-fix), НОВЫЙ
+waiting-endpoint.spec (конверт/порядок/drain/пагинация/404). mock-jira:
+priority/resolution в выдаче, project-клауза как key-prefix match,
+removeBlockedByLink, arm500OnNextSearch.
+
+Отложено решением clarify 2026-07-18: кап конкурентных прогонов на
+цепочку/эпик (кандидат — пер-агентный лимит активных прогонов, который заодно
+сериализует цепочки) — отдельной фичей при необходимости.

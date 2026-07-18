@@ -100,9 +100,9 @@
 
 ## Phase 7: Polish & Cross-Cutting
 
-- [ ] T028 [P] Guard-rail sweep: full `pnpm typecheck && pnpm lint && pnpm test && pnpm test:integration` — existing idempotency tests, `sinceClause` format tests, T057/T066 all unchanged; review migration SQL against `docs/architecture.md` §3 diff (rule 5)
-- [ ] T029 [P] Iteration entry in `docs/progress.md` (feature 022: what shipped, R1 correction of the brief's premise, deferred cap decision pointer)
-- [ ] T030 Manual smoke per quickstart "Full stack": `docker compose up --build`, lay a chain on a board, watch the Waiting tab drain
+- [X] T028 [P] Guard-rail sweep: `pnpm typecheck && pnpm lint && pnpm test` green (root 336, web 257); migration SQL reviewed against `docs/architecture.md` §3 in `drizzle/REVIEW-0008_sprint_sequencing.md` (rule 5). `pnpm test:integration` NOT executed in the implementation environment (no Docker for testcontainers) — must run in CI/locally before merge
+- [X] T029 [P] Iteration entry in `docs/progress.md` (feature 022: what shipped, R1 correction of the brief's premise, deferred cap decision pointer)
+- [ ] T030 Manual smoke per quickstart "Full stack": `docker compose up --build`, lay a chain on a board, watch the Waiting tab drain — BLOCKED in the implementation environment (no Docker); run locally before/after merge
 
 ---
 
