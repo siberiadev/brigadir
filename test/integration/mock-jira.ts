@@ -95,6 +95,8 @@ export interface MockJira {
   /** Arm a one-shot 500 on the next GET /issue/{key} (run-dispatch description fetch fallback). */
   arm500OnNextIssueGet(): void;
   addBlockedByLink(key: string, blockerKey: string): void;
+  /** feature 022: break a blocked-by link (a human fixes the board). */
+  removeBlockedByLink(key: string, blockerKey: string): void;
   /** feature 004 (T114): set this issue's epic (parent) key. */
   setEpic(key: string, epicKey: string): void;
   /** feature 004 (T114): add a generic issue link (both issues must already be seeded). */
@@ -165,6 +167,11 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
    * Everything else (project clause, ORDER BY) is ignored.
    */
   const matchesJql = (i: StoredIssue, jql: string): boolean => {
+    // feature 022: the scope probe relies on the project clause excluding
+    // cross-project blockers — mock it as a key-prefix match (like live Jira,
+    // where the key prefix IS the project key).
+    const project = jql.match(/project\s*=\s*"?([A-Za-z0-9]+)"?/i);
+    if (project && i.key.split('-')[0] !== project[1]) return false;
     const upd = jql.match(/updated\s*>=\s*"([^"]+)"/i);
     if (upd) {
       // Mirror LIVE Jira (incident 2026-07-13): JQL datetime literals accept ONLY
@@ -417,6 +424,10 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
       if (!issue) throw new Error(`seed the blocked issue before linking (${key})`);
       if (!issues.has(blockerKey)) throw new Error(`seed the blocker before linking (${blockerKey})`);
       issue.blockedBy.push(blockerKey);
+    },
+    removeBlockedByLink(key, blockerKey) {
+      const issue = issues.get(key);
+      if (issue) issue.blockedBy = issue.blockedBy.filter((k) => k !== blockerKey);
     },
     setEpic(key, epicKey) {
       const issue = issues.get(key);

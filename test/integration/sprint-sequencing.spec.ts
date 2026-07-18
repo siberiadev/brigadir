@@ -298,6 +298,116 @@ describe('sprint sequencing (feature 022)', () => {
     }
   }, 240_000);
 
+  it('US4: a blocked-by cycle starts nothing and both members are flagged (FR-009)', async () => {
+    const status = `Cycle Ready ${++counter}`;
+    await seedAgent(`cycle-worker-${counter}`, status);
+
+    const [keyX, keyY] = [`SEQ-${++counter}`, `SEQ-${++counter}`];
+    mock.seedIssue(keyX, { status });
+    mock.seedIssue(keyY, { status });
+    mock.addBlockedByLink(keyX, keyY);
+    mock.addBlockedByLink(keyY, keyX);
+    const ticketX = await seedTicket(keyX, status);
+    const ticketY = await seedTicket(keyY, status);
+
+    await reconcile.reEvaluateDependencies(ws, jira);
+
+    for (const ticketId of [ticketX, ticketY]) {
+      expect((await runsFor(ticketId)).length).toBe(0);
+      const [row] = await db.db
+        .select({ blockedState: schema.tickets.blockedState })
+        .from(schema.tickets)
+        .where(eq(schema.tickets.id, ticketId));
+      expect(row.blockedState).toBe('cycle');
+    }
+  });
+
+  it('US4: a blocker resolved OUTSIDE the done category flags a dead end; INTO the done category releases (FR-010)', async () => {
+    const status = `Dead Ready ${++counter}`;
+    await seedAgent(`dead-worker-${counter}`, status);
+
+    // Dead end: blocker closed as Won't Do into an indeterminate-category status.
+    const keyBlocker = `SEQ-${++counter}`;
+    const keyDep = `SEQ-${++counter}`;
+    mock.setCategory('Rejected', 'indeterminate');
+    mock.seedIssue(keyBlocker, { status: 'Rejected' });
+    mock.setResolution(keyBlocker, "Won't Do");
+    mock.seedIssue(keyDep, { status });
+    mock.addBlockedByLink(keyDep, keyBlocker);
+    const ticketDep = await seedTicket(keyDep, status);
+
+    await reconcile.reEvaluateDependencies(ws, jira);
+    expect((await runsFor(ticketDep)).length).toBe(0);
+    const [row] = await db.db
+      .select({ blockedState: schema.tickets.blockedState })
+      .from(schema.tickets)
+      .where(eq(schema.tickets.id, ticketDep));
+    expect(row.blockedState).toBe('dead_end');
+    // No human task for a dead end — it is a warning, not a task (research R5).
+    const tasks = await db.db
+      .select({ id: schema.humanTasks.id })
+      .from(schema.humanTasks)
+      .where(eq(schema.humanTasks.ticketId, ticketDep));
+    expect(tasks.length).toBe(0);
+
+    // Control: the same resolution INTO the done category is a normal completion.
+    mock.moveBlocker(keyBlocker, 'Done', 'done');
+    await reconcile.reEvaluateDependencies(ws, jira);
+    expect((await runsFor(ticketDep)).length).toBe(1);
+  });
+
+  it('US4: an out-of-scope blocker flags the ticket and raises exactly ONE run-less human task (FR-010)', async () => {
+    const status = `Scope Ready ${++counter}`;
+    await seedAgent(`scope-worker-${counter}`, status);
+
+    // The blocker lives in ANOTHER project — the scope probe (project = "SEQ")
+    // will not see it, while the blocker fetch (no project clause) will.
+    const keyBlocker = `OTHER-${++counter}`;
+    const keyDep = `SEQ-${++counter}`;
+    mock.seedIssue(keyBlocker, { status: 'In Progress' });
+    mock.seedIssue(keyDep, { status });
+    mock.addBlockedByLink(keyDep, keyBlocker);
+    const ticketDep = await seedTicket(keyDep, status);
+
+    await reconcile.reEvaluateDependencies(ws, jira);
+    const stateOf = async () =>
+      (
+        await db.db
+          .select({ blockedState: schema.tickets.blockedState })
+          .from(schema.tickets)
+          .where(eq(schema.tickets.id, ticketDep))
+      )[0].blockedState;
+    const openTasks = async () =>
+      db.db
+        .select({ id: schema.humanTasks.id, runId: schema.humanTasks.runId, status: schema.humanTasks.status })
+        .from(schema.humanTasks)
+        .where(and(eq(schema.humanTasks.ticketId, ticketDep), eq(schema.humanTasks.status, 'open')));
+
+    expect(await stateOf()).toBe('out_of_scope');
+    expect((await runsFor(ticketDep)).length).toBe(0);
+    const tasks1 = await openTasks();
+    expect(tasks1.length).toBe(1);
+    expect(tasks1[0].runId).toBeNull();
+
+    // Second pass: deduped — still exactly one open task.
+    await reconcile.reEvaluateDependencies(ws, jira);
+    expect((await openTasks()).length).toBe(1);
+
+    // Human resolves the task WITHOUT fixing the board → a later pass re-creates it.
+    await db.db
+      .update(schema.humanTasks)
+      .set({ status: 'resolved' })
+      .where(eq(schema.humanTasks.id, tasks1[0].id));
+    await reconcile.reEvaluateDependencies(ws, jira);
+    expect((await openTasks()).length).toBe(1);
+
+    // Human breaks the link on the board → state clears and the ticket releases.
+    mock.removeBlockedByLink(keyDep, keyBlocker);
+    await reconcile.reEvaluateDependencies(ws, jira);
+    expect(await stateOf()).toBeNull();
+    expect((await runsFor(ticketDep)).length).toBe(1);
+  });
+
   it('US1: waiting ticket shows its blocker keys while parked (FR-001)', async () => {
     const status = `Wait Ready ${++counter}`;
     await seedAgent(`wait-worker-${counter}`, status);

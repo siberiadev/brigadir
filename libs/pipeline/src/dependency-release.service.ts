@@ -1,9 +1,10 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { and, eq, sql } from 'drizzle-orm';
-import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
-import { type JiraClient, POLL_FIELDS, parseJiraPriority } from '@brigadir/jira';
+import { DRIZZLE, type BrigadirDb, schema, getScopeJql } from '@brigadir/database';
+import { type JiraClient, POLL_FIELDS, buildScopeJql, parseJiraPriority } from '@brigadir/jira';
 import { RunTriggerService } from '@brigadir/runs';
-import type { JiraBoardType, JiraIssue, TriggerEvent } from '@brigadir/contracts';
+import { HumanTaskService } from '@brigadir/human-tasks';
+import type { BlockedState, JiraBoardType, JiraIssue, TriggerEvent } from '@brigadir/contracts';
 import { evaluateDependencyGate, blockingKeys } from './dependency-gate';
 import type { StatusChangeSource } from './pipeline.service';
 
@@ -50,6 +51,8 @@ export class DependencyReleaseService {
   constructor(
     @Inject(DRIZZLE) private readonly db: BrigadirDb,
     private readonly runTrigger: RunTriggerService,
+    // feature 022 (FR-010): out-of-scope blockers raise a run-less human task.
+    private readonly humanTasks: HumanTaskService,
   ) {}
 
   /** Full per-workspace pass — reconcile step 2 delegates here. */
@@ -132,21 +135,16 @@ export class DependencyReleaseService {
       ),
     );
 
+    // Still-blocked tickets collected for classification (deduped per ticket —
+    // several agents may share a trigger status).
+    const waiting = new Map<string, { ticketId: string; issue: JiraIssue; blockers: string[] }>();
+
     for (const c of ordered) {
       const issue = byKey.get(c.ticketKey);
       if (!issue) continue;
 
       if (evaluateDependencyGate(issue) !== 'clear') {
-        // Still blocked: keep the waiting cache current (FR-001) — fresh blocker
-        // keys + priority from the fetch we already paid for.
-        await this.db
-          .update(schema.tickets)
-          .set({
-            blockedBy: blockingKeys(issue),
-            blockedState: 'waiting',
-            ...parseJiraPriority(issue),
-          })
-          .where(eq(schema.tickets.id, c.ticketId));
+        waiting.set(c.ticketKey, { ticketId: c.ticketId, issue, blockers: blockingKeys(issue) });
         continue;
       }
 
@@ -166,7 +164,149 @@ export class DependencyReleaseService {
         );
       }
     }
+
+    await this.classifyWaiting(ws, jira, waiting);
   }
+
+  /**
+   * Classification of the still-blocked tickets (FR-009/FR-010, research R4):
+   * cycle > out_of_scope > dead_end > waiting. Two batched probes over the
+   * distinct blocker keys, executed only when the waiting set is non-empty:
+   *
+   * 1. blocker fetch — `key in (…)` with status+resolution, NO project clause
+   *    (cross-project blockers must resolve): resolution set ∧ category ≠ done
+   *    ⇒ that blocker is a dead end;
+   * 2. scope probe — the workspace scope JQL (sprint for scrum, project for
+   *    kanban, + scope_jql filter; NO `since` clause — membership, not recency)
+   *    restricted to the blocker keys: absentees are outside the observed scope.
+   *
+   * Out-of-scope tickets additionally get ONE run-less human task (deduped in
+   * HumanTaskService.createTicketBlocked).
+   */
+  private async classifyWaiting(
+    ws: ReleaseScope,
+    jira: JiraClient,
+    waiting: Map<string, { ticketId: string; issue: JiraIssue; blockers: string[] }>,
+  ): Promise<void> {
+    if (waiting.size === 0) return;
+
+    const cycleTickets = findCycleTickets(
+      new Map([...waiting].map(([key, w]) => [key, w.blockers])),
+    );
+
+    const probeKeys = [
+      ...new Set(
+        [...waiting]
+          .filter(([key]) => !cycleTickets.has(key))
+          .flatMap(([, w]) => w.blockers),
+      ),
+    ];
+    let deadEndBlockers = new Set<string>();
+    let inScopeBlockers = new Set<string>();
+    if (probeKeys.length > 0) {
+      const keyList = probeKeys.join(', ');
+      const fetched = await jira.searchUpdated(`key in (${keyList})`, ['status', 'resolution']);
+      deadEndBlockers = new Set(
+        fetched
+          .filter(
+            (b) => b.fields.resolution != null && b.fields.status.statusCategory.key !== 'done',
+          )
+          .map((b) => b.key),
+      );
+
+      // The `key in` clause rides inside the scope_jql parens so the builder's
+      // trailing ORDER BY stays syntactically last (the `since` clause is
+      // deliberately absent — this is a membership probe).
+      const scopeJqlSetting = await getScopeJql(this.db, ws.id);
+      const sprintId =
+        ws.boardType === 'scrum' && ws.boardId != null ? await jira.getActiveSprintId(ws.boardId) : null;
+      const probeJql = buildScopeJql({
+        boardType: ws.boardType,
+        projectKey: ws.projectKey,
+        sprintId,
+        scopeJql: scopeJqlSetting ? `(${scopeJqlSetting}) AND key in (${keyList})` : `key in (${keyList})`,
+      });
+      inScopeBlockers = new Set((await jira.searchUpdated(probeJql, ['status'])).map((b) => b.key));
+    }
+
+    for (const [key, w] of waiting) {
+      let state: BlockedState = 'waiting';
+      if (cycleTickets.has(key)) state = 'cycle';
+      else if (w.blockers.some((b) => !inScopeBlockers.has(b))) state = 'out_of_scope';
+      else if (w.blockers.some((b) => deadEndBlockers.has(b))) state = 'dead_end';
+
+      await this.db
+        .update(schema.tickets)
+        .set({ blockedBy: w.blockers, blockedState: state, ...parseJiraPriority(w.issue) })
+        .where(eq(schema.tickets.id, w.ticketId));
+
+      if (state === 'cycle') {
+        this.logger.warn(
+          `sequencing: ${key} is part of a blocked-by CYCLE [${[...cycleTickets].join(', ')}] — no run will start until a human breaks it`,
+        );
+      } else if (state === 'dead_end') {
+        this.logger.warn(
+          `sequencing: ${key} waits on a dead-end blocker (resolved outside the done category) — needs human attention`,
+        );
+      } else if (state === 'out_of_scope') {
+        const outside = w.blockers.filter((b) => !inScopeBlockers.has(b));
+        this.logger.warn(
+          `sequencing: ${key} waits on out-of-scope blocker(s) [${outside.join(', ')}] — raising a human task`,
+        );
+        await this.humanTasks.createTicketBlocked(ws.id, w.ticketId, {
+          title: `${key} is blocked by ticket(s) outside this board's scope`,
+          details:
+            `${key} sits in a trigger status but waits on [${outside.join(', ')}], which the system does not observe on this board. ` +
+            'Bring the blocker(s) into the sprint/board scope, or break the link on the board.',
+        });
+      }
+    }
+  }
+}
+
+/**
+ * Tickets that are members of a blocked-by cycle (FR-009), including
+ * self-links. Edges: waiting ticket → its blockers, restricted to keys that
+ * are themselves waiting tickets (a blocker outside the waiting set cannot
+ * close a cycle through the board's trigger statuses). Iterative
+ * three-color DFS; every node on the cycle path is marked.
+ */
+export function findCycleTickets(edges: Map<string, string[]>): Set<string> {
+  const inCycle = new Set<string>();
+  const color = new Map<string, 'gray' | 'black'>();
+  const stack: string[] = [];
+
+  const visit = (start: string): void => {
+    const path: { node: string; nexts: string[] }[] = [
+      { node: start, nexts: (edges.get(start) ?? []).filter((n) => edges.has(n)) },
+    ];
+    color.set(start, 'gray');
+    stack.push(start);
+    while (path.length > 0) {
+      const frame = path[path.length - 1];
+      const next = frame.nexts.pop();
+      if (next === undefined) {
+        color.set(frame.node, 'black');
+        stack.pop();
+        path.pop();
+        continue;
+      }
+      if (color.get(next) === 'gray') {
+        // Back edge: everything from `next` to the stack top is on a cycle.
+        for (let i = stack.indexOf(next); i < stack.length; i += 1) inCycle.add(stack[i]);
+        continue;
+      }
+      if (color.get(next) === 'black') continue;
+      color.set(next, 'gray');
+      stack.push(next);
+      path.push({ node: next, nexts: (edges.get(next) ?? []).filter((n) => edges.has(n)) });
+    }
+  };
+
+  for (const node of edges.keys()) {
+    if (!color.has(node)) visit(node);
+  }
+  return inCycle;
 }
 
 /** Ticket slice the release-order comparator reads. */

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { compareReleaseOrder, type ReleaseOrderKey } from './dependency-release.service';
+import {
+  compareReleaseOrder,
+  findCycleTickets,
+  type ReleaseOrderKey,
+} from './dependency-release.service';
 
 const k = (priorityId: number | null, jiraKey: string): ReleaseOrderKey => ({ priorityId, jiraKey });
 
@@ -29,5 +33,37 @@ describe('compareReleaseOrder (feature 022, FR-006)', () => {
       const shuffled = [...items].sort(() => (i % 2 === 0 ? 1 : -1));
       expect(shuffled.sort(compareReleaseOrder).map((x) => x.jiraKey)).toEqual(expected);
     }
+  });
+});
+
+describe('findCycleTickets (feature 022, FR-009)', () => {
+  const edges = (pairs: [string, string[]][]) => new Map(pairs);
+
+  it('detects a 2-cycle', () => {
+    expect(findCycleTickets(edges([['A', ['B']], ['B', ['A']]]))).toEqual(new Set(['A', 'B']));
+  });
+
+  it('detects a 3-cycle and leaves a chained-in outsider out', () => {
+    const result = findCycleTickets(
+      edges([
+        ['A', ['B']],
+        ['B', ['C']],
+        ['C', ['A']],
+        ['D', ['A']], // waits on the cycle but is not part of it
+      ]),
+    );
+    expect(result).toEqual(new Set(['A', 'B', 'C']));
+  });
+
+  it('a plain chain has no cycle', () => {
+    expect(findCycleTickets(edges([['A', ['B']], ['B', ['C']], ['C', []]]))).toEqual(new Set());
+  });
+
+  it('detects a self-link', () => {
+    expect(findCycleTickets(edges([['A', ['A']]]))).toEqual(new Set(['A']));
+  });
+
+  it('ignores blockers outside the waiting set (they cannot close a cycle)', () => {
+    expect(findCycleTickets(edges([['A', ['X']], ['B', ['A']]]))).toEqual(new Set());
   });
 });

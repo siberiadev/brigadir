@@ -1,5 +1,5 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import { JiraClientFactory, buildHumanTaskComment } from '@brigadir/jira';
 import type { HumanTaskKind, AnswerOption } from '@brigadir/contracts';
@@ -57,6 +57,47 @@ export class HumanTaskService {
     input: { kind: HumanTaskKind; title: string; details?: string },
   ): Promise<CreateHumanTaskResult> {
     return this.createFromRequest(runId, { ...input, blocking: false });
+  }
+
+  /**
+   * Feature 022 (FR-010, research R5): run-less blocked-ticket task — a
+   * trigger-status ticket waits on a blocker outside the observed board scope,
+   * a condition the system can never resolve itself. No run exists (that is the
+   * point), so nothing is parked and no Jira write happens; the ticket stays in
+   * its trigger status. Dedup: at most one OPEN run-less task per ticket —
+   * repeated release passes are no-ops while the condition persists. If a human
+   * resolves the task without fixing the board, a later pass re-creates it
+   * (the condition genuinely still holds).
+   */
+  async createTicketBlocked(
+    workspaceId: string,
+    ticketId: string,
+    input: { title: string; details?: string },
+  ): Promise<{ created: boolean }> {
+    const existingOpen = await this.db
+      .select({ id: schema.humanTasks.id })
+      .from(schema.humanTasks)
+      .where(
+        and(
+          eq(schema.humanTasks.ticketId, ticketId),
+          isNull(schema.humanTasks.runId),
+          eq(schema.humanTasks.status, 'open'),
+        ),
+      )
+      .limit(1);
+    if (existingOpen.length > 0) return { created: false };
+
+    await this.db.insert(schema.humanTasks).values({
+      workspaceId,
+      runId: null,
+      ticketId,
+      kind: 'blocker',
+      title: input.title,
+      details: input.details ?? null,
+      blocking: false,
+      status: 'open',
+    });
+    return { created: true };
   }
 
   async createFromRequest(runId: string, input: CreateHumanTaskInput): Promise<CreateHumanTaskResult> {
