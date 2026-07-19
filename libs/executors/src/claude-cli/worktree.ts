@@ -57,19 +57,6 @@ export class WorktreePrepareError extends Error {
 }
 
 /**
- * Branch identity of a TICKETLESS workspace-setup run (feature 015, FR-020):
- * `setup/<first 8 chars of run id>`. Deterministic and collision-free (run ids
- * are unique; every resume creates a NEW setup run per feature 011).
- *
- * Since feature 023 this is a SUGGESTED name offered to the agent in the
- * wrapper, not a branch the system creates — the leftover policy it used to
- * fall under no longer exists. A setup run still never pushes (spec FR-015).
- */
-export function setupRunBranchIdentity(runId: string): { branchPrefix: string; ticketKey: string } {
-  return { branchPrefix: 'setup', ticketKey: runId.slice(0, 8) };
-}
-
-/**
  * Is `branch` present on the remote? Checked against `refs/remotes/origin/*`,
  * never `refs/heads/*`: a local head in the shared cache may be an inert
  * leftover from a pre-023 run and proves nothing about what a previous stage

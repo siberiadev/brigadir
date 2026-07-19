@@ -31,7 +31,6 @@ import { ClaudeStreamParser, type TerminalResult } from './stream-parser';
 import {
   prepareAll,
   cleanupAll,
-  setupRunBranchIdentity,
   type WorktreeRepo,
   type MultiPrepareResult,
 } from './worktree';
@@ -180,7 +179,6 @@ export class ClaudeCliExecutor implements AgentExecutor {
       runtimeConfig,
       repos,
       excludedRepos,
-      branchPrefix,
       workspaceId,
       ticketId,
       preferRunId,
@@ -195,7 +193,6 @@ export class ClaudeCliExecutor implements AgentExecutor {
     // no-repo runs. `workspace` stays null exactly for the scratch case.
     let workspaceDir: string;
     let workspace: MultiPrepareResult | null = null;
-    let suggestedBranch: string | undefined;
     if (noRepo) {
       // feature 010 (FR-018, Constitution V): a no-repository run (the
       // orchestrator's triage) runs from a scratch temp dir — no clone, no
@@ -208,17 +205,12 @@ export class ClaudeCliExecutor implements AgentExecutor {
       }
       // No `worktree_path` persisted — there is no repository worktree to inspect.
     } else {
-      // The system no longer creates branches (feature 023) — it only picks the
-      // commit each repo starts from and SUGGESTS a name for the agent to
-      // create. A ticketless repo run is a config error EXCEPT for
-      // workspace-setup runs (feature 015, FR-020): those are ticketless by
-      // design and suggest `setup/<runId8>` (never pushed — spec FR-015).
-      if (ctx.ticket) {
-        suggestedBranch = `${branchPrefix}/${ctx.ticket.key}`;
-      } else if (setupRun) {
-        const identity = setupRunBranchIdentity(ctx.runId);
-        suggestedBranch = `${identity.branchPrefix}/${identity.ticketKey}`;
-      } else {
+      // The system no longer creates OR names branches (feature 023 + 024) —
+      // it only picks the commit each repo starts from; the agent creates and
+      // reports its own branch. A repo run must be ticket-bound OR a
+      // workspace-setup run (feature 015, FR-020, ticketless by design); any
+      // other ticketless repo run is a config error.
+      if (!ctx.ticket && !setupRun) {
         return {
           exitStatus: 'crashed',
           diagnostics: 'ticketless run requires a no-repository agent (workspace_mode: none)',
@@ -294,7 +286,6 @@ export class ClaudeCliExecutor implements AgentExecutor {
             absPath: r.worktreeDir,
             defaultBranch: r.repo.defaultBranch,
             continueBranch: r.start.continueBranch,
-            suggestedBranch,
           })),
           // Feature 020 (D4): non-empty only for ticket-narrowed runs.
           onDemandRepos: excludedRepos.map((r) => ({ name: r.name, url: r.url })),
@@ -560,7 +551,6 @@ export class ClaudeCliExecutor implements AgentExecutor {
     repos: WorktreeRepo[];
     /** Feature 020 (D4): base-set repos excluded by ticket-component narrowing — wrapper escape hatch. */
     excludedRepos: WorktreeRepo[];
-    branchPrefix: string;
     workspaceId: string;
     /** Feature 023: anchors the "prior work on this ticket" lookup. Null for ticketless runs. */
     ticketId: string | null;
@@ -604,7 +594,6 @@ export class ClaudeCliExecutor implements AgentExecutor {
     let executorSecrets = row.executorSecrets;
     let behavior = (row.behavior ?? {}) as {
       allowed_tools?: string[];
-      branch_prefix?: string;
       repository?: string;
       repositories?: string[];
       workspace_mode?: string;
@@ -733,9 +722,6 @@ export class ClaudeCliExecutor implements AgentExecutor {
       runtimeConfig,
       repos,
       excludedRepos,
-      // Feature 023: no longer a git instruction — the name SUGGESTED to the
-      // agent in the wrapper when it has no prior branch to continue.
-      branchPrefix: behavior.branch_prefix ?? 'run',
       workspaceId: row.workspaceId,
       ticketId: row.ticketId,
       preferRunId: (row.triggerEvent as { failing_run_id?: string } | null)?.failing_run_id,

@@ -83,24 +83,30 @@ describe('buildWrapperText (T103, D6)', () => {
         name: 'lib',
         absPath: '/wt/run-1/lib',
         defaultBranch: 'main',
-        suggestedBranch: 'feat/BRIG-1',
       },
       {
         name: 'consumer',
         absPath: '/wt/run-1/consumer',
         defaultBranch: 'develop',
-        suggestedBranch: 'feat/BRIG-1',
       },
     ];
 
-    it('lists every prepared repo with absolute path, base branch and the name to create', () => {
+    // Feature 024 (US2): the wrapper no longer proposes a system-invented
+    // branch name — a first stage names its own branch (spec-kit convention).
+    it('lists every prepared repo with absolute path and base branch, and proposes no branch name', () => {
       const text = buildWrapperText(ctx, '/wt/run-1', { useCallbackChannel: true, repos });
       expect(text).toContain('## Repositories');
       expect(text).toContain('DETACHED HEAD');
-      expect(text).toContain('- lib: /wt/run-1/lib (no prior branch; at main — create feat/BRIG-1)');
-      expect(text).toContain(
-        '- consumer: /wt/run-1/consumer (no prior branch; at develop — create feat/BRIG-1)',
-      );
+      expect(text).toContain('- lib: /wt/run-1/lib (no prior branch; at main)');
+      expect(text).toContain('- consumer: /wt/run-1/consumer (no prior branch; at develop)');
+      // No system-suggested branch name anywhere in the section.
+      expect(text).not.toContain('create feat/BRIG-1');
+      expect(text).not.toMatch(/no prior branch; at \w+ — create/);
+    });
+
+    it('tells the agent to create a branch of its own choosing when there is no prior branch', () => {
+      const text = buildWrapperText(ctx, '/wt/run-1', { useCallbackChannel: true, repos });
+      expect(text).toContain('create a branch of your own choosing');
     });
 
     // Feature 023: the stage handoff. A repo whose branch a previous stage

@@ -63,15 +63,10 @@ export interface WrapperRepoInfo {
   /**
    * Feature 023: a branch a previous stage on this ticket pushed — the
    * worktree is parked at its tip. Absent ⇒ the worktree is at the default
-   * branch and there is no prior work to build on.
+   * branch and there is no prior work to build on, and the agent names its
+   * own branch (feature 024 dropped the system-suggested name).
    */
   continueBranch?: string;
-  /**
-   * Feature 023: the name to create if the agent branches — `branch_prefix`
-   * applied to the ticket key. A HINT, not an instruction to the system: the
-   * system no longer creates branches at all.
-   */
-  suggestedBranch?: string;
 }
 
 export interface WrapperOptions {
@@ -130,15 +125,15 @@ function repositoriesSection(
     ...repos.map((r) =>
       r.continueBranch
         ? `- ${r.name}: ${r.absPath} (continue branch ${r.continueBranch}, based on ${r.defaultBranch})`
-        : `- ${r.name}: ${r.absPath} (no prior branch; at ${r.defaultBranch}` +
-          `${r.suggestedBranch ? ` — create ${r.suggestedBranch}` : ''})`,
+        : `- ${r.name}: ${r.absPath} (no prior branch; at ${r.defaultBranch})`,
     ),
     'Rules for working across repositories:',
     '- Decide from the ticket which of these repositories actually need changes; leave the ' +
       'others completely untouched.',
-    '- Before your first commit in a repository you change, put yourself on a branch: ' +
-      '`git switch -C <branch>`, using the branch named above for that repository. Never ' +
-      'commit on the detached HEAD.',
+    '- Before your first commit in a repository you change, put yourself on a branch with ' +
+      '`git switch -C <branch>`: continue the branch listed above when there is one; otherwise ' +
+      'create a branch of your own choosing and report it. The system suggests no name and ' +
+      'creates no branch. Never commit on the detached HEAD.',
     '- A "continue branch" is prior work on this ticket by an earlier stage, and your worktree ' +
       'is already at its tip. Build on it; never start a competing branch.',
     '- Commit and push only in repositories you actually changed (`git push -u origin ' +
@@ -150,7 +145,8 @@ function repositoriesSection(
       '{repo, branch, pr_url, commits, files_changed} with schema_version: 2, using the ' +
       'repository names exactly as listed above. Do not report untouched repositories. The ' +
       'next stage on this ticket starts from the branch you report here, so a repository you ' +
-      'changed but did not report will be invisible to it.',
+      'changed but did not report will be invisible to it — and completing with local commits ' +
+      'in a repository you did not report is rejected: you will be asked to push and report it.',
     ...escapeHatch,
   ];
 }

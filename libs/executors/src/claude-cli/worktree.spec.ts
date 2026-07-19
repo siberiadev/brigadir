@@ -5,13 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import {
-  prepareAll,
-  cleanupAll,
-  setupRunBranchIdentity,
-  WorktreePrepareError,
-  type WorktreeRepo,
-} from './worktree';
+import { prepareAll, cleanupAll, WorktreePrepareError, type WorktreeRepo } from './worktree';
 
 const execFileAsync = promisify(execFile);
 
@@ -322,22 +316,7 @@ describe('worktree prepareAll/cleanupAll (T080, feature 019 multi-repo; 023 deta
   });
 });
 
-/**
- * Feature 015 (FR-020): a ticketless workspace-setup run identifies itself as
- * `setup/<first 8 chars of run id>`. Since feature 023 that is the name
- * SUGGESTED to the agent in the wrapper — the system creates no branch.
- */
-describe('setupRunBranchIdentity (feature 015)', () => {
-  it('derives setup/<runId8> from the run id', () => {
-    const id = setupRunBranchIdentity('a1b2c3d4-e5f6-7890-abcd-ef0123456789');
-    expect(id).toEqual({ branchPrefix: 'setup', ticketKey: 'a1b2c3d4' });
-    expect(`${id.branchPrefix}/${id.ticketKey}`).toBe('setup/a1b2c3d4');
-  });
-
-  it('is deterministic and collision-free across distinct run ids', () => {
-    const a = setupRunBranchIdentity('aaaaaaaa-1111');
-    const b = setupRunBranchIdentity('bbbbbbbb-2222');
-    expect(a).toEqual(setupRunBranchIdentity('aaaaaaaa-1111'));
-    expect(a.ticketKey).not.toBe(b.ticketKey);
-  });
-});
+// Feature 024 (US2): `setupRunBranchIdentity` was deleted — the wrapper no
+// longer suggests a branch name to any run, setup runs included. Its removal
+// is covered by the executor wrapper-text assertions (no `create …` line) and
+// the grep sweep in the tasks list.
