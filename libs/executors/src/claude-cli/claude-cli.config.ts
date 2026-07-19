@@ -1,9 +1,31 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { ExecutorConfig } from '@brigadir/contracts';
+import type { ExecutorType } from '../agent-executor.interface';
 
 /** The `claude_cli` branch of `ExecutorConfigSchema` (already zod-defaulted). */
 export type ClaudeCliExecutorConfig = Extract<ExecutorConfig, { type: 'claude_cli' }>;
+
+/**
+ * Moonshot's Anthropic-compatible endpoint (feature 025,
+ * specs/025-kimi-executor/contracts/kimi-provider-env.md). A module-scope
+ * constant read at composition time is permitted static structure
+ * (Constitution lazy-resolution carve-out): it is the identity of the `kimi`
+ * executor type, not a credential or connection — deliberately NOT
+ * operator-configurable, never persisted, never exposed via API/UI.
+ */
+export const MOONSHOT_ANTHROPIC_BASE_URL = 'https://api.moonshot.ai/anthropic';
+
+/**
+ * Provider preset (feature 025): fixed per DI-registered executor instance,
+ * outside any profile config — which is exactly why editing a profile can
+ * never re-point it at another provider. `claude_cli` gets no base URL
+ * (behavior byte-identical to pre-025); `kimi` gets the Moonshot constant.
+ */
+export interface ProviderPreset {
+  type: ExecutorType;
+  anthropicBaseUrl?: string;
+}
 
 /**
  * Platform default toolset for a REPO-MOUNTED run when neither the executor
@@ -132,6 +154,23 @@ export function applyAuthEnv(
       if (auth.awsProfile) env.AWS_PROFILE = auth.awsProfile;
       if (auth.caBundlePath) env.NODE_EXTRA_CA_CERTS = auth.caBundlePath;
       return;
+  }
+}
+
+/**
+ * Provider-endpoint injection (feature 025), applied strictly AFTER
+ * `buildChildEnv` and AFTER `applyAuthEnv` — same discipline as the auth
+ * injection above: the allowlist floor is untouched (`ANTHROPIC_BASE_URL` is
+ * never a member and never will be, so a host-level value cannot reach any
+ * run of any type), and the injected value comes from the DI-time preset
+ * constant, never from the worker's own process.env. For the `claude_cli`
+ * preset (no `anthropicBaseUrl`) this is a no-op and the env object stays
+ * byte-identical to pre-025. Pure (mutates only the passed env object) —
+ * unit-tested per preset.
+ */
+export function applyProviderEnv(env: Record<string, string>, preset: ProviderPreset): void {
+  if (preset.anthropicBaseUrl) {
+    env.ANTHROPIC_BASE_URL = preset.anthropicBaseUrl;
   }
 }
 

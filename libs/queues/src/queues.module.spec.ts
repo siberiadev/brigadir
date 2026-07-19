@@ -8,8 +8,10 @@ import { runQueueName, RECONCILE_QUEUE } from './queue.constants';
  * static structure QueuesModule.register() reads at composition time.
  */
 describe('run-queue registry (T129)', () => {
-  it('provisions run.mock + run.claude_cli + reconcile, independent of any config', () => {
+  it('provisions run.mock + run.claude_cli + run.kimi + reconcile, independent of any config', () => {
     const queues = [...RUN_QUEUE_EXECUTOR_TYPES.map(runQueueName), RECONCILE_QUEUE];
-    expect(new Set(queues)).toEqual(new Set(['run.mock', 'run.claude_cli', 'reconcile']));
+    expect(new Set(queues)).toEqual(
+      new Set(['run.mock', 'run.claude_cli', 'run.kimi', 'reconcile']),
+    );
   });
 });

@@ -1,4 +1,4 @@
-import { Injectable, Inject, Logger } from '@nestjs/common';
+import { Injectable, Inject, Logger, Optional } from '@nestjs/common';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,15 +15,22 @@ import {
 import { AGENTS_CONFIG } from '@brigadir/app-config';
 import { JIRA_CLIENT, type JiraClient } from '@brigadir/jira';
 import { ReportSchema, type AgentsConfig } from '@brigadir/contracts';
-import type { AgentExecutor, ExecutorResult, RunContext } from '../agent-executor.interface';
+import type {
+  AgentExecutor,
+  ExecutorResult,
+  ExecutorType,
+  RunContext,
+} from '../agent-executor.interface';
 import { openExecutorSecrets } from '../executor-secrets';
 import {
   resolveClaudeCliConfig,
   resolveEffectiveAuth,
   applyAuthEnv,
+  applyProviderEnv,
   DEFAULT_REPO_RUN_ALLOWED_TOOLS,
   type ClaudeCliExecutorConfigInput,
   type EffectiveAuth,
+  type ProviderPreset,
 } from './claude-cli.config';
 import { buildArgs } from './args';
 import { buildChildEnv } from './env-allowlist';
@@ -51,6 +58,14 @@ import {
 } from './prior-work';
 
 const STDERR_TAIL_BYTES = 16 * 1024;
+
+/**
+ * DI token for the harness's provider preset (feature 025). The bare class
+ * provider resolves it as absent (`@Optional`) and defaults to the
+ * `claude_cli` preset — byte-identical pre-025 behavior; the `kimi` instance
+ * is built by an explicit factory in ExecutorsModule with the Moonshot preset.
+ */
+export const CLAUDE_CLI_PROVIDER_PRESET = Symbol('CLAUDE_CLI_PROVIDER_PRESET');
 
 /**
  * Which repository NAMES a run asks for (feature 019, research D1). The
@@ -161,7 +176,13 @@ function runFailed(result: ExecutorResult): boolean {
  */
 @Injectable()
 export class ClaudeCliExecutor implements AgentExecutor {
-  readonly type = 'claude_cli' as const;
+  /**
+   * Feature 025: the type comes from the provider preset — the SAME class
+   * serves `claude_cli` (no endpoint override) and `kimi` (Moonshot base URL),
+   * registered as two DI instances. Absent preset ⇒ `claude_cli`.
+   */
+  readonly type: ExecutorType;
+  private readonly preset: ProviderPreset;
   private readonly logger = new Logger(ClaudeCliExecutor.name);
 
   constructor(
@@ -172,7 +193,11 @@ export class ClaudeCliExecutor implements AgentExecutor {
     // yaml throws a clear error rather than crashing at boot.
     @Inject(AGENTS_CONFIG) private readonly agentsConfig: AgentsConfig | null,
     @Inject(JIRA_CLIENT) private readonly jira: JiraClient,
-  ) {}
+    @Optional() @Inject(CLAUDE_CLI_PROVIDER_PRESET) preset?: ProviderPreset,
+  ) {
+    this.preset = preset ?? { type: 'claude_cli' };
+    this.type = this.preset.type;
+  }
 
   async run(ctx: RunContext, signal: AbortSignal): Promise<ExecutorResult> {
     const {
@@ -383,6 +408,10 @@ export class ClaudeCliExecutor implements AgentExecutor {
     // pass — the HOST's ANTHROPIC_API_KEY / AWS_* / CLAUDE_CODE_USE_BEDROCK /
     // NODE_EXTRA_CA_CERTS still can never leak through (none are allowlisted).
     applyAuthEnv(env, auth, apiKey);
+    // Provider-endpoint injection (feature 025): a no-op for the claude_cli
+    // preset; the kimi preset points the CLI at Moonshot. Same discipline —
+    // the host's ANTHROPIC_BASE_URL is not allowlisted and never passes.
+    applyProviderEnv(env, this.preset);
     const group = spawnGroup(runtimeConfig.cliPath, argv, { cwd: workspaceDir, env });
 
     // D7: `claude -p` REQUIRES a prompt on stdin (never argv — size/secrets).
@@ -592,7 +621,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
       .limit(1);
 
     if (!row) {
-      throw new Error(`run ${runId} not found while resolving claude_cli config`);
+      throw new Error(`run ${runId} not found while resolving ${this.type} config`);
     }
 
     // feature 015 (FR-013, D8): a workspace-setup run resolves its environment
@@ -710,7 +739,21 @@ export class ClaudeCliExecutor implements AgentExecutor {
     // Feature 018: effective auth mode — stored `auth` wins, else the legacy
     // defaulting (stored key → api_key, none → host_subscription). Legacy
     // rows land exactly where pre-018 behavior did.
-    const auth = resolveEffectiveAuth(rawConfig, executorSecrets != null);
+    // Feature 025: the kimi preset is implicitly api_key-only — there is no
+    // subscription or cloud-credential fallback against Moonshot, so a
+    // keyless profile fails fast here (normal failed-run path) instead of
+    // sliding into host_subscription via the defaulting chain.
+    let auth: EffectiveAuth;
+    if (this.preset.type === 'kimi') {
+      if (executorSecrets == null) {
+        throw new Error(
+          `kimi executor profile "${executorName}" has no stored API key — re-enter the Moonshot key in the profile`,
+        );
+      }
+      auth = { mode: 'api_key' };
+    } else {
+      auth = resolveEffectiveAuth(rawConfig, executorSecrets != null);
+    }
 
     // Profile API key (write-only at the API; only the runtime opens it) —
     // decrypted ONLY when the effective mode is api_key. There a blob that

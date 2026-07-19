@@ -5,6 +5,8 @@ import {
   resolveClaudeCliConfig,
   resolveEffectiveAuth,
   applyAuthEnv,
+  applyProviderEnv,
+  MOONSHOT_ANTHROPIC_BASE_URL,
   type ClaudeCliExecutorConfig,
 } from './claude-cli.config';
 
@@ -162,5 +164,57 @@ describe('applyAuthEnv (feature 018)', () => {
     const env = floor();
     applyAuthEnv(env, { mode: 'bedrock', awsRegion: 'eu-west-1' }, 'sk-should-be-inert');
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+});
+
+/**
+ * Feature 025 — provider-endpoint injection matrix (contracts/
+ * kimi-provider-env.md invariants 2 and 6; the integration half rides the
+ * fake-claude env dump). The env passed in is the ALREADY-allowlisted floor;
+ * applyProviderEnv may only add ANTHROPIC_BASE_URL from the preset, and for
+ * the claude_cli preset it must leave the object byte-identical.
+ */
+describe('applyProviderEnv (feature 025)', () => {
+  const floor = () => ({ HOME: '/home/op', PATH: '/usr/bin', USER: 'op' });
+
+  it('kimi preset injects exactly the Moonshot ANTHROPIC_BASE_URL constant', () => {
+    const env = floor();
+    applyProviderEnv(env, { type: 'kimi', anthropicBaseUrl: MOONSHOT_ANTHROPIC_BASE_URL });
+    expect(env).toEqual({ ...floor(), ANTHROPIC_BASE_URL: 'https://api.moonshot.ai/anthropic' });
+  });
+
+  it('claude_cli preset (no base URL) is a byte-identical no-op — the key is entirely absent', () => {
+    const env = floor();
+    applyProviderEnv(env, { type: 'claude_cli' });
+    expect(env).toEqual(floor());
+    expect('ANTHROPIC_BASE_URL' in env).toBe(false);
+  });
+
+  it('is pure — the value comes from the preset only, never from the host process.env', () => {
+    const original = process.env.ANTHROPIC_BASE_URL;
+    process.env.ANTHROPIC_BASE_URL = 'https://evil.example.com';
+    try {
+      const env = floor();
+      applyProviderEnv(env, { type: 'claude_cli' });
+      expect('ANTHROPIC_BASE_URL' in env).toBe(false);
+
+      const kimiEnv = floor();
+      applyProviderEnv(kimiEnv, { type: 'kimi', anthropicBaseUrl: MOONSHOT_ANTHROPIC_BASE_URL });
+      expect(kimiEnv.ANTHROPIC_BASE_URL).toBe(MOONSHOT_ANTHROPIC_BASE_URL);
+    } finally {
+      if (original === undefined) delete process.env.ANTHROPIC_BASE_URL;
+      else process.env.ANTHROPIC_BASE_URL = original;
+    }
+  });
+
+  it('stacks on top of api_key auth injection without touching it (kimi run order)', () => {
+    const env = floor();
+    applyAuthEnv(env, { mode: 'api_key' }, 'sk-moonshot-profile');
+    applyProviderEnv(env, { type: 'kimi', anthropicBaseUrl: MOONSHOT_ANTHROPIC_BASE_URL });
+    expect(env).toEqual({
+      ...floor(),
+      ANTHROPIC_API_KEY: 'sk-moonshot-profile',
+      ANTHROPIC_BASE_URL: MOONSHOT_ANTHROPIC_BASE_URL,
+    });
   });
 });
