@@ -100,6 +100,19 @@ describe('RunCard — report + diagnostics', () => {
     const kimi = mountCard();
     await flush();
     expect(kimi.find('[data-test="cost-indicative"]').exists()).toBe(true);
+
+    // A kimi run without a cost yet shows a bare "—", no caveat marker.
+    server.use(
+      http.get('/api/runs/:id', () =>
+        HttpResponse.json({
+          ...sampleRunCard,
+          run: { ...sampleRunCard.run, executor_type: 'kimi', cost_usd: null },
+        }),
+      ),
+    );
+    const kimiNoCost = mountCard();
+    await flush();
+    expect(kimiNoCost.find('[data-test="cost-indicative"]').exists()).toBe(false);
   });
 
   it('hides the report section entirely while there are no checks; the timeline still shows', async () => {

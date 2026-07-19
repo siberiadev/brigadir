@@ -194,7 +194,7 @@ async function stopAllRuns() {
           {{ formatCostUsd(row.cost_usd) ?? '—' }}
           <!-- feature 025: kimi cost is priced against Anthropic's list, indicative only -->
           <el-tooltip
-            v-if="row.executor_type === 'kimi'"
+            v-if="row.executor_type === 'kimi' && row.cost_usd != null"
             content="Indicative only — kimi runs are priced against Anthropic’s list, not Moonshot’s."
             placement="top"
           >

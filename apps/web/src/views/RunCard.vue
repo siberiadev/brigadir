@@ -110,8 +110,11 @@ const executorLabel = computed(() => {
 });
 
 // Feature 025: kimi runs report cost priced against Anthropic's list, not
-// Moonshot's — the figure is indicative only, so flag it wherever it shows.
-const costIsIndicative = computed(() => run.value?.executor_type === 'kimi');
+// Moonshot's — the figure is indicative only, so flag it wherever a real
+// value shows (a bare "—" needs no caveat).
+const costIsIndicative = computed(
+  () => run.value?.executor_type === 'kimi' && run.value?.cost_usd != null,
+);
 const INDICATIVE_COST_TIP =
   'Indicative only — kimi runs are priced against Anthropic’s list, not Moonshot’s.';
 
