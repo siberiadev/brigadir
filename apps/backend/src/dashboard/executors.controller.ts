@@ -97,7 +97,11 @@ export class ExecutorsController {
     // Feature 018 (FR-007): explicit api_key mode must end the save WITH a
     // key — either provided now or already stored. The schema owns the
     // create-time variant; this one needs row state, so it lives here.
-    if (req.type === 'claude_cli' && req.auth === 'api_key' && typeof req.api_key !== 'string') {
+    // Feature 025: same rule for kimi, unconditionally — kimi is implicitly
+    // api_key-only and a keyless profile can never run.
+    const requiresEndKey =
+      (req.type === 'claude_cli' && req.auth === 'api_key') || req.type === 'kimi';
+    if (requiresEndKey && typeof req.api_key !== 'string') {
       const [existing] = await this.db
         .select({ secrets: schema.executors.secrets })
         .from(schema.executors)
@@ -109,7 +113,10 @@ export class ExecutorsController {
           {
             path: ['api_key'],
             code: 'custom',
-            message: 'auth "api_key" requires a stored or provided key.',
+            message:
+              req.type === 'kimi'
+                ? 'kimi requires a stored or provided api_key.'
+                : 'auth "api_key" requires a stored or provided key.',
             level: 'error' as const,
           },
         ]);
@@ -120,7 +127,8 @@ export class ExecutorsController {
     // api_key tri-state (write-only): omitted → keep the stored blob;
     // string → replace; explicit null → clear. Switching auth mode away from
     // "api_key" deliberately does NOT clear — the blob stays inert (FR-009).
-    const apiKey = req.type === 'claude_cli' ? req.api_key : undefined;
+    // (kimi `null` never reaches here keyless — the guard above 422s it.)
+    const apiKey = req.type === 'claude_cli' || req.type === 'kimi' ? req.api_key : undefined;
     const secretsPatch =
       apiKey === undefined ? {} : { secrets: apiKey === null ? null : sealExecutorSecrets({ api_key: apiKey }) };
     let rows: ExecutorRow[];
@@ -204,7 +212,18 @@ function toInsertValues(req: ExecutorCreateRequest) {
           ...(req.aws_profile !== undefined ? { awsProfile: req.aws_profile } : {}),
           ...(req.ca_bundle_path !== undefined ? { caBundlePath: req.ca_bundle_path } : {}),
         }
-      : {};
+      : req.type === 'kimi'
+        ? {
+            // Feature 025: the harness knobs only — no auth block (implicitly
+            // api_key-only), no AWS fields, and no endpoint anywhere: the
+            // Moonshot base URL is a code constant mapped from the type.
+            model: req.model,
+            cliPath: req.cli_path,
+            useCallbackChannel: req.use_callback_channel,
+            keepFailedWorktrees: req.keep_failed_worktrees,
+            maxTurns: req.max_turns,
+          }
+        : {};
   return {
     type: req.type,
     name: req.name,
@@ -215,7 +234,7 @@ function toInsertValues(req: ExecutorCreateRequest) {
 
 /** create-time api_key seal: string → sealed blob; absent/null → undefined (no key). */
 function sealApiKey(req: ExecutorCreateRequest): Buffer | undefined {
-  if (req.type !== 'claude_cli' || req.api_key == null) return undefined;
+  if ((req.type !== 'claude_cli' && req.type !== 'kimi') || req.api_key == null) return undefined;
   return sealExecutorSecrets({ api_key: req.api_key });
 }
 
@@ -246,7 +265,17 @@ function toExecutorResponse(row: ExecutorRow): ExecutorResponse {
           ...(stored.awsProfile !== undefined ? { aws_profile: stored.awsProfile } : {}),
           ...(stored.caBundlePath !== undefined ? { ca_bundle_path: stored.caBundlePath } : {}),
         }
-      : {};
+      : row.type === 'kimi'
+        ? {
+            // Feature 025: no `auth` computed for kimi (implicitly
+            // api_key-only) and never any endpoint field.
+            model: stored.model,
+            cli_path: stored.cliPath,
+            use_callback_channel: stored.useCallbackChannel,
+            keep_failed_worktrees: stored.keepFailedWorktrees,
+            max_turns: stored.maxTurns,
+          }
+        : {};
   return {
     id: row.id,
     type: row.type as ExecutorResponse['type'],

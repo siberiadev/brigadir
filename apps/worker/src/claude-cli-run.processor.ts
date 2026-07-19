@@ -77,7 +77,15 @@ export class ClaudeCliRunProcessor
   extends WorkerHost
   implements OnApplicationBootstrap, OnModuleDestroy
 {
-  private readonly logger = new Logger(ClaudeCliRunProcessor.name);
+  /**
+   * Which executor profiles feed this processor's concurrency budget
+   * (feature 025): the kimi subclass overrides this to 'kimi'. Everything
+   * else — gate, finalization branches, guards — is shared verbatim; the
+   * registry already resolves the right executor per run from the run row's
+   * own `executor_type`.
+   */
+  protected readonly executorType: string = 'claude_cli';
+  private readonly logger = new Logger(this.constructor.name);
   private reapplyTimer?: NodeJS.Timeout;
 
   constructor(
@@ -94,10 +102,10 @@ export class ClaudeCliRunProcessor
   }
 
   async onApplicationBootstrap(): Promise<void> {
-    await applyExecutorConcurrency(this.db, this.worker, 'claude_cli', this.logger);
+    await applyExecutorConcurrency(this.db, this.worker, this.executorType, this.logger);
     // Live re-apply (FR-025): max_parallel_runs edits take effect ≤ ~15 s with
     // no restart; DB read on each tick (lazy resolution, never at composition).
-    this.reapplyTimer = startConcurrencyReapply(this.db, this.worker, 'claude_cli', this.logger);
+    this.reapplyTimer = startConcurrencyReapply(this.db, this.worker, this.executorType, this.logger);
   }
 
   onModuleDestroy(): void {
