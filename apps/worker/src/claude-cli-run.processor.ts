@@ -42,6 +42,25 @@ interface LoadedRun {
 /** research D5/architecture §4: 5h subscription reset isn't programmatically
  * knowable, so absent a fresher signal we fall back to this heuristic. */
 const DEFAULT_RATE_LIMIT_TTL_MS = 15 * 60_000;
+/**
+ * Floor for a park window (incident 2026-07-19, kimi/Moonshot). `retry_delay_ms`
+ * is whatever the CLI puts in its `api_retry` event, and that is NOT always a
+ * provider-supplied Retry-After: against Moonshot the CLI reports its OWN
+ * client-side jittered backoff — a sub-second FLOAT (e.g. 577.7599559849516).
+ * Two ways that broke us, both fixed by sanitizing here:
+ *   1. A float reached `worker.rateLimit()` → BullMQ issues `SET ... PX <float>`
+ *      → Redis replies "ERR value is not an integer or out of range". That
+ *      ReplyError is thrown INSTEAD of `Worker.RateLimitError()`, so the park
+ *      never happens, the attempt IS burned (spec §0.5 promises it is not), and
+ *      the run row is left in 'running' forever with the job in `failed`.
+ *   2. Even valid, a ~0.5s park is not a park: the job requeues immediately and
+ *      re-does the whole workspace preparation (~17s of clone/worktree work per
+ *      cycle) only to hit the same limit — a hot loop that burns provider quota.
+ * A park exists to wait out a limit, so it must dominate the requeue cost. The
+ * explicit operator/test override is deliberately NOT clamped — it is exact by
+ * construction (see integration `rate_limit_ttl_ms` fixtures).
+ */
+const MIN_RATE_LIMIT_TTL_MS = 60_000;
 const DEFAULT_CANCEL_POLL_MS = 3000;
 /**
  * Natural-exit grace after a callback finalize (succeeded/failed) before the
@@ -55,6 +74,19 @@ const DEFAULT_POST_FINALIZE_GRACE_MS = 30_000;
 /** Run-token TTL grace beyond the run's own timeout (contracts/run-jwt.md, plan.md). */
 const RUN_TOKEN_GRACE_SECONDS = 300;
 const DEFAULT_CALLBACK_BASE_URL = 'http://localhost:3000/api/callbacks';
+
+/**
+ * Pure: CLI-reported `retry_delay_ms` → a park TTL safe to hand to BullMQ.
+ * Non-numeric/non-finite (absent event, malformed payload) falls back to the
+ * §4 heuristic rather than parking for a nonsense duration.
+ */
+export function sanitizeRateLimitTtl(reported: unknown): number {
+  if (typeof reported !== 'number' || !Number.isFinite(reported)) {
+    return DEFAULT_RATE_LIMIT_TTL_MS;
+  }
+  // Integer for Redis `PX`, floored so a park always outlasts a requeue.
+  return Math.max(Math.ceil(reported), MIN_RATE_LIMIT_TTL_MS);
+}
 
 /**
  * ClaudeCliRunProcessor (T083) — consumes `run.claude_cli` jobs. A near-copy
@@ -335,6 +367,7 @@ export class ClaudeCliRunProcessor
    * heuristic for a subscription window whose reset isn't programmatically
    * knowable. `ExecutorResult` is frozen and has no slot for this value, so
    * it necessarily round-trips through the row the executor already wrote.
+   * The CLI-reported value is untrusted input — see `MIN_RATE_LIMIT_TTL_MS`.
    */
   private async resolveRateLimitTtl(runId: string, triggerEvent: unknown): Promise<number> {
     const override = (triggerEvent as { rate_limit_ttl_ms?: number } | null)?.rate_limit_ttl_ms;
@@ -348,7 +381,7 @@ export class ClaudeCliRunProcessor
       .limit(1);
 
     const payload = row?.payload as { retry_delay_ms?: number } | undefined;
-    return payload?.retry_delay_ms ?? DEFAULT_RATE_LIMIT_TTL_MS;
+    return sanitizeRateLimitTtl(payload?.retry_delay_ms);
   }
 
   private async load(runId: string): Promise<LoadedRun | undefined> {
