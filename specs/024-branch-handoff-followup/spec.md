@@ -26,6 +26,7 @@ Out of scope here (unchanged from 023's deferrals): a `run_repo_artifacts` table
 
 - Q: What happens to the `run/<TICKET>` branch-name suggestion in the wrapper (gap 2)? → A: Drop the suggestion entirely. The wrapper tells a first stage to create a branch of its own choosing and report it; no system-invented name is offered. `branch_prefix` stays in schemas/API/UI as an inert stored field (no migration), but no longer feeds the wrapper.
 - Q: When the unreported-work backstop (gap 3) detects moved HEAD with no report entry — fail the run or record an event? → A: Fail the run loudly. An event-only breadcrumb would leave the next stage silently starting from the default branch anyway, reproducing the false-success failure mode with better logging. Consistent with 023's D4: visible crash beats invisible wrong success.
+- Q: Where does the backstop check run? The 023 sketch ("compare HEAD before `cleanupWorkspace`, fail the run") cannot be a control: `complete_task` finalizes the run and enqueues the Jira transition at callback time, while the agent process exits later — by exit time the run is already `succeeded`, the ticket has moved, and the rule-7 guard makes a fail a no-op. → A: Gate the completion itself. A `complete_task` whose report omits a repository with locally advanced work is rejected (the run stays active, the agent corrects and re-completes — the same posture as invalid team reports); an agent that ends the session without a valid completion falls into the existing fail-closed path, so the terminal state of an uncorrected violation is a `failed` run with the violation diagnostic on the timeline. A false success is impossible by construction; the run/ticket ordering is never disturbed.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -66,19 +67,21 @@ A ticket enters the pipeline; the first (planning) stage has no prior branch to 
 
 ### User Story 3 - Work the agent pushed but did not report fails the run instead of vanishing (Priority: P3)
 
-A developer agent commits and pushes, then returns a report with no artifact entry for that repository (empty `artifacts`, or `repos[]` missing that repo). Instead of letting the next stage silently start from the default branch and "succeed" on an empty diff, the system detects — deterministically, from the worktree state it already holds — that the agent did work it did not report, fails the run loudly with a message naming the repository, and records what it observed.
+A developer agent commits work in a repository, then tries to finish with a report that has no artifact entry for that repository (empty `artifacts`, or `repos[]` missing that repo). Instead of letting that completion stand — and the next stage silently start from the default branch and "succeed" on an empty diff — the system detects, deterministically from the worktree state it already holds, that the agent did work it did not report, and refuses the completion with a message naming the repository. The run stays active so the agent can correct the report (push and name the branch) and complete again; an agent that ends its session without a valid completion becomes a `failed` run through the existing fail-closed path, with the violation recorded on the run's timeline. Either way a false success is impossible.
 
-**Why this priority**: Deferred from 023 as its "largest residual risk"; promotes the honesty of the handoff from "we asked the model nicely in the wrapper" to a deterministic check. P3 because it extends run-finalization logic (interaction with completion, statuses and the finalization guard rules) and is the riskiest of the three to get wrong.
+**Why this priority**: Deferred from 023 as its "largest residual risk"; promotes the honesty of the handoff from "we asked the model nicely in the wrapper" to a deterministic check. P3 because it extends the completion contract (the riskiest of the three to get wrong) — the check gates `complete_task` itself, since by process-exit time the run is already finalized and the ticket transition already enqueued (see Clarifications).
 
-**Independent Test**: Simulate a run whose worktree HEAD moved past the recorded start ref for a repo absent from the report; verify the run fails with a diagnostic naming that repo. Simulate HEAD unmoved or a matching report entry; verify no interference.
+**Independent Test**: Submit a completion for a run whose worktree HEAD moved past the recorded start commit in a repo absent from the report; verify the completion is rejected with a diagnostic naming that repo and the run stays active. Submit a corrected report naming the branch; verify it is accepted. Submit reports for unmoved-HEAD and matching-entry cases; verify no interference.
 
 **Acceptance Scenarios**:
 
-1. **Given** a completed agent process whose worktree HEAD in repo R moved past R's recorded start ref, **And** the run's report names no branch for R, **When** the run finalizes, **Then** the run fails with a diagnostic naming R and both commits, and the detection is durably recorded on the run's timeline.
-2. **Given** HEAD moved in R **and** the report names a branch for R, **When** the run finalizes, **Then** the run completes normally (reported work is the expected case).
-3. **Given** HEAD did not move in any repo and the report names nothing, **When** the run finalizes, **Then** the run completes normally (a read-only stage — reviewer, triage — legitimately reports no artifacts).
-4. **Given** a run that ends by a path where worktree state is unavailable or already cleaned up, **When** finalization runs, **Then** the check degrades silently rather than failing the run on missing evidence (the check must not create false failures — hard-won rule 7: process-outcome writes never clobber callback state).
-5. **Given** a run parked `awaiting_human` (agent process exits legitimately without a final report), **When** the process ends, **Then** the backstop does not fire (the run is not finalizing; prior work will be picked up on resume).
+1. **Given** a run whose worktree HEAD in repo R has moved past R's recorded start commit, **When** the agent completes with a report carrying no artifact entry for R, **Then** the completion is rejected with a diagnostic naming R and both commits, the run stays active, and the violation is durably recorded on the run's timeline.
+2. **Given** the same run, **When** the agent corrects the report to include an entry for R and completes again, **Then** the completion is accepted and the run finalizes normally.
+3. **Given** a rejected completion, **When** the agent ends its session without a further valid completion, **Then** the run becomes `failed` through the existing exit-without-completion path, and the recorded violation explains why on the timeline.
+4. **Given** HEAD moved in R **and** the report carries an artifact entry for R, **When** the agent completes, **Then** the completion is accepted (reported work is the expected case).
+5. **Given** HEAD did not move in any repo and the report names no artifacts, **When** the agent completes, **Then** the completion is accepted (a read-only stage — reviewer, triage — legitimately reports no artifacts).
+6. **Given** the worktree evidence is unavailable (a run with no mounted repositories, a start record that was never written, or the local state cannot be read), **When** the agent completes, **Then** the check degrades silently and the completion proceeds — absence of evidence must never create false rejections.
+7. **Given** a run parked `awaiting_human` (agent exits legitimately via a blocking question, no completion submitted), **When** the process ends, **Then** the backstop does not fire (nothing was completed; prior work is picked up on resume).
 
 ---
 
@@ -101,8 +104,8 @@ A developer agent commits and pushes, then returns a report with no artifact ent
 - **FR-005**: Handoff assembly MUST remain best-effort and size-bounded (feature 010 contract): missing or empty artifact data degrades to no line, never throws, never fails the run; free text keeps its truncation budgets.
 - **FR-006**: The wrapper MUST NOT propose a system-invented branch name to a stage that has no continuation branch; it MUST instruct the agent to create a branch of its own choosing and report it. The continuation-branch instruction path is unchanged.
 - **FR-007**: `branch_prefix` MUST remain valid in stored agent/workspace configuration, API responses, and the settings UI (inert field, no migration); it MUST no longer influence wrapper content.
-- **FR-008**: At run finalization, for each repository whose worktree HEAD differs from its recorded start ref and for which the run's report names no branch, the system MUST fail the run with a diagnostic naming the repository and both refs, and MUST durably record the detection on the run's timeline.
-- **FR-009**: The backstop MUST NOT fire when the report names a branch for the moved repo, when HEAD is unmoved, when the run is parking `awaiting_human`, or when the evidence (worktree, start-ref record) is unavailable — absence of evidence degrades silently. Backstop writes obey the existing finalization guard (only a still-`running` run may be failed by it).
+- **FR-008**: A completion whose report omits an artifact entry for a repository whose worktree HEAD differs from that repository's recorded start commit MUST be rejected before the run finalizes: the run stays active, the agent receives a diagnostic naming the repository and both commits, and the violation is durably recorded on the run's timeline. An uncorrected violation ends as a `failed` run via the existing exit-without-completion path — never as a success.
+- **FR-009**: The backstop MUST NOT reject when the report carries an artifact entry for every moved repository, when no HEAD moved, or when the evidence is unavailable (no mounted repositories, missing start record, unreadable local state) — absence of evidence degrades silently to the current behavior. The check MUST NOT alter run/ticket ordering: an accepted completion finalizes exactly as today, and no state written after finalization may be clobbered (hard-won rule 7 untouched).
 - **FR-010**: All three behaviors MUST ship with automated tests in the same change (Constitution VI — this is pipeline logic): prompt-assembly unit tests for FR-001..005, wrapper tests for FR-006..007, and executor-lifecycle tests for FR-008..009.
 
 ### Key Entities
@@ -120,12 +123,12 @@ A developer agent commits and pushes, then returns a report with no artifact ent
 - **SC-002**: Zero change in rendering for v1 flat reports — all pre-existing handoff assertions pass unmodified.
 - **SC-003**: A first stage receives exactly one branch-naming instruction (its own workflow's), not two conflicting ones; no system-proposed branch name appears in any wrapper.
 - **SC-004**: Zero stored-configuration breakage: every existing agent/workspace config with `branch_prefix` set loads and round-trips unchanged.
-- **SC-005**: A run that pushes commits and reports no artifacts for that repository finishes `failed` with a diagnostic naming the repository — never `succeeded` — while read-only runs (no pushes, no artifacts) are unaffected.
+- **SC-005**: A run with locally advanced work and no artifact entry for that repository can never finish `succeeded`: its completion is rejected with a diagnostic naming the repository, and it ends either with a corrected report or as `failed`. Read-only runs (no local changes, no artifacts) are unaffected.
 
 ## Assumptions
 
 - The three work items ship as one feature (independently testable stories) on the branch this session was assigned; priority order 1→2→3 mirrors the handoff's ordering.
 - The pre-existing integration-test failures (item 4 of the handoff) are excluded: they predate 023, need a Docker daemon (unavailable in this session), and belong to a separate maintenance effort.
 - `branch_prefix` is kept as an inert stored field rather than removed, to avoid schema/API migrations (per the accepted option (a)).
-- The backstop compares exact refs (`HEAD != recorded start ref`), using only state already in hand at finalization — no new network calls, no `ls-remote` discovery (still out of scope per 023).
+- The backstop compares exact commits (`HEAD != recorded start commit`), using only local state already in hand at completion time — no new network calls, no `ls-remote` discovery (still out of scope per 023).
 - End-to-end verification against a live pipeline (real Jira, real agent runs) cannot happen in this session and is handed back to the user's stand; unit/contract coverage is the in-session verification bar.
