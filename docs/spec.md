@@ -21,7 +21,7 @@ workspace:
   project_key: BRIG
   board_id: 42            # Jira board; тип (kanban/scrum) система определит сама
   scope_jql: 'labels = ai-pipeline'   # опционально: глобальный фильтр скоупа (AND к поллеру)
-  branch_prefix: feat     # предлагаемое агенту имя ветки; агент может переопределить (feature 023)
+  branch_prefix: feat     # ИНЕРТНО с feature 024: хранится/валидируется, но обёртке не передаётся (агент именует ветку сам)
   repositories:           # первый — дефолтный
     - name: product
       url: git@github.com:acme/product.git
@@ -49,7 +49,7 @@ agents:
     max_budget_usd: 3
     max_attempts: 2
     behavior:
-      branch_prefix: feat
+      branch_prefix: feat   # инертно с feature 024 (агент именует ветку сам)
       allowed_tools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash(git *)", "Bash(pnpm *)"]
       required_checks: [tests_pass, lint_pass]
     instruction: |

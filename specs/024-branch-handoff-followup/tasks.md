@@ -107,10 +107,10 @@ No foundational tasks — the three stories share no new infrastructure (no migr
 
 ## Phase 6: Polish & Cross-Cutting
 
-- [ ] T025 [P] Update `docs/architecture.md` §5 (callback protocol): `x-brigadir-observed-heads` header + completion gate + rejection semantics; §start-ref note about `startSha` and the post-prepare write; note that the wrapper no longer proposes branch names.
-- [ ] T026 [P] Update `docs/spec.md`: `branch_prefix` comment (~24, ~52) — field is stored but inert since 024 (suggestion removed); adjust the agent-config example comment in `agents.example.yaml` (~44, ~57) the same way.
-- [ ] T027 Append the iteration entry to `docs/progress.md`: what shipped (three stories), the D3 ordering discovery (exit-time sketch abandoned, gate at complete_task, operator-confirmed), explicit statement that `pnpm test:integration` was NOT run in the authoring session (no Docker) and which suites the stand must run, plus the pre-existing 6 integration failures remaining out of scope.
-- [ ] T028 Final gate: `pnpm typecheck && pnpm lint && pnpm test` green on the full tree; re-run the quickstart.md unit commands verbatim; verify `git status` clean after commit.
+- [X] T025 [P] Update `docs/architecture.md` §5 (callback protocol): `x-brigadir-observed-heads` header + completion gate + rejection semantics; §start-ref note about `startSha` and the post-prepare write; note that the wrapper no longer proposes branch names.
+- [X] T026 [P] Update `docs/spec.md`: `branch_prefix` comment (~24, ~52) — field is stored but inert since 024 (suggestion removed); adjust the agent-config example comment in `agents.example.yaml` (~44, ~57) the same way.
+- [X] T027 Append the iteration entry to `docs/progress.md`: what shipped (three stories), the D3 ordering discovery (exit-time sketch abandoned, gate at complete_task, operator-confirmed), explicit statement that `pnpm test:integration` was NOT run in the authoring session (no Docker) and which suites the stand must run, plus the pre-existing 6 integration failures remaining out of scope.
+- [X] T028 Final gate: `pnpm typecheck && pnpm lint && pnpm test` green on the full tree; re-run the quickstart.md unit commands verbatim; verify `git status` clean after commit.
 
 ---
 

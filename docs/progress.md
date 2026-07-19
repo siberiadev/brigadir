@@ -1618,3 +1618,62 @@ Gates green locally: typecheck (root+contracts+mcp-server+admin-mcp), lint, unit
 ST3-780 разблокируется перезапуском ревьюера уже на новой механике: ветка
 `run/ST3-780` запушена на origin, работа разработчика в сохранности, руками трогать
 ничего не нужно.
+
+## Iteration 32 — Follow-up к передаче ветки: v2-handoff, снятие suggestion, completion-gate (feature 024, 2026-07-19)
+
+Три хвоста после feature 023 (спека — `specs/024-branch-handoff-followup/`), тремя
+user story по приоритету.
+
+**US1 (P1, живой баг).** Секции handoff (`libs/pipeline/src/handoff.ts`,
+`failureLines` для triage/answer-triage и `buildReworkSection` для rework) читали
+только плоские v1-поля `artifacts.branch`/`pr_url` и обходили
+`normalizeReportArtifacts` — единственную реализацию precedence (feature 019). Агенты
+этого воркспейса репортят v2 (`artifacts.repos[]`), поэтому rework/triage-агент НЕ
+получал строки «Continue on: …»/«Artifacts: …» вообще — не знал, где лежит код.
+Оба места пущены через нормализатор: v2 рендерит блок с одной строкой на репо, v1
+(один нормализованный элемент без `repo`) — прежнюю однострочную форму байт-в-байт
+(старые ассерты не тронуты). Forward-compat v1 сохранён навсегда.
+
+**US2 (P2).** 023 перестал СОЗДАВАТЬ ветки, но продолжал ИМЕНОВАТЬ их: первой стадии
+обёртка предлагала `run/<TICKET>` (хардкод `behavior.branch_prefix ?? 'run'` — никто
+не выбирал `run/*`), что конфликтовало со spec-kit-конвенцией планировщика
+(`016-st3-780-…`). По решению оператора (вариант a) suggestion убран целиком:
+удалены `WrapperRepoInfo.suggestedBranch`, `setupRunBranchIdentity`, дефолт `'run'`;
+обёртка теперь говорит «заведи ветку своего выбора и заявь её». `branch_prefix`
+оставлен инертным хранимым полем в схемах/API/UI (миграций не потребовалось) —
+интеграционные фикстуры с ним теперь доказывают инертность.
+
+**US3 (P3) — completion-gate, крупнейший остаточный риск 023.** «Агент закоммитил, но
+не заявил ветку» → следующая стадия тихо стартует с дефолтной ветки и репортит
+success на пустом дифе. Набросок 023 («сравнить HEAD перед `cleanupWorkspace`,
+зафейлить прогон») оказался НЕ контролем: `complete_task` финализирует прогон и ставит
+Jira-transition в очередь ДО выхода процесса (`callback.service.ts`), поэтому к exit-
+проверке прогон уже `succeeded`, а гвард правила 7 (`WHERE status='running'`) сделал
+бы fail no-op'ом. Правильное место — сам `complete_task` (оператор подтвердил):
+- executor резолвит `RepoStart.startSha` при подготовке; событие `start-ref` пишется
+  ПОСЛЕ `prepareAll` и несёт `startSha` (база гейта); `BRIGADIR_REPO_DIRS`
+  (repo→worktree-dir) доставляется в 0600 env-блоке tool-сервера (Принцип V).
+- mcp-сервер на `complete_task` снимает `git rev-parse HEAD` по каждому воркти
+  (инъектируемо для тестов; репо с ошибкой rev-parse опускается) и шлёт заголовок
+  `x-brigadir-observed-heads` (тело POST — неизменный `ReportSchema.strict()`;
+  заголовок ставит сам tool-сервер, вне input-схемы тулзы).
+- бэкенд (`libs/callback/src/completion-gate.ts` — чистая функция + парсер заголовка,
+  плюс гейт в `callback.service.ts` ДО финализации) сравнивает наблюдённые HEAD со
+  `startSha` точным неравенством; репо сдвинулся И отчёт не называет для него ветку
+  (`normalizeReportArtifacts`, v1-плоский атрибутируется единственному репо) ⇒
+  отклонение как validation-failure (прогон остаётся `running`, агент чинит и
+  повторяет — как невалидный team-отчёт) + событие `handoff-violation`. Молчит при
+  отсутствии доказательств (нет заголовка/`start-ref`-базы/наблюдения репо).
+  Неисправленное нарушение приходит к `failed` штатным fail-closed путём — ложный
+  success невозможен по построению.
+
+**Гейты.** `pnpm typecheck && pnpm lint && pnpm test` — зелёные (376 юнитов, +23 к
+baseline 353; mcp-server 17). **`pnpm test:integration` НЕ запускался** — в облачной
+сессии не было Docker-демона (прецедент итерации 29). Интеграционный тест гейта
+написан (`test/integration/completion-gate.spec.ts`, reject→correct→accept + read-only
++ honest happy-path; фейковый CLI дополнен наблюдением HEAD как у mcp-сервера и шагом
+`commit`), но выполняется только на стенде оператора. Также вне скоупа остаются 6
+предсуществующих интеграционных фейлов (`runs-cancel-all`, `serve-static`,
+`dependency-gate`, `sprint-sequencing`, флейк `callback-completion`) — они старше 023.
+Напоминание оператору: пересборка `dist/` не влияет на уже запущенный node-процесс —
+после деплоя рестартовать worker и backend.
