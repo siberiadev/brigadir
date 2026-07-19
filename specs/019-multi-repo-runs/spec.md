@@ -4,7 +4,16 @@
 
 **Created**: 2026-07-18
 
-**Status**: Draft
+**Status**: Draft — **branch model PARTIALLY SUPERSEDED by [023-branch-handoff](../023-branch-handoff/spec.md)**
+
+> **Superseded (2026-07-18):** everything below describing a single shared branch
+> `<branchPrefix>/<ticketKey>` across repos, the per-repo leftover-branch policy
+> (zero-commit reclaim / with-commits fail-loud) and `reuseBranch` no longer holds.
+> The system creates no branches: each repo's worktree is DETACHED at its own start
+> ref — the branch a previous stage reported for that repo, else its default branch.
+> The multi-repo layout, scope resolution, all-or-nothing prepare, cleanup and
+> `artifacts.repos[]` are unaffected. See feature 023 for why the shared-branch model
+> made every pipeline stage after a committing stage fail.
 
 **Input**: User description: "Multi-repository runs — give an agent all of its workspace's repositories in a single run. A run prepares worktrees for all repositories available to the agent, the agent's working directory is a parent directory containing one sub-worktree per repo, and the agent decides from the ticket text which repositories actually need changes. Delivery (branch push / PR) and reporting happen per touched repo. Legacy single-repo agents keep behaving exactly as before."
 

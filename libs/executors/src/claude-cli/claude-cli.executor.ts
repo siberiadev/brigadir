@@ -44,6 +44,12 @@ import {
 import { buildWrapperText } from './wrapper';
 import { writeMcpConfig, defaultMcpConfigRoot, type WrittenMcpConfig } from './mcp-config';
 import { buildFeatureContextSection } from './feature-context';
+import {
+  getPriorWork,
+  matchReportedBranches,
+  type PriorWork,
+  type BranchMatch,
+} from './prior-work';
 
 const STDERR_TAIL_BYTES = 16 * 1024;
 
@@ -170,14 +176,26 @@ export class ClaudeCliExecutor implements AgentExecutor {
   ) {}
 
   async run(ctx: RunContext, signal: AbortSignal): Promise<ExecutorResult> {
-    const { runtimeConfig, repos, excludedRepos, branchPrefix, workspaceId, auth, apiKey, noRepo, setupRun } =
-      await this.loadRunConfig(ctx);
+    const {
+      runtimeConfig,
+      repos,
+      excludedRepos,
+      branchPrefix,
+      workspaceId,
+      ticketId,
+      preferRunId,
+      auth,
+      apiKey,
+      noRepo,
+      setupRun,
+    } = await this.loadRunConfig(ctx);
 
     // The run's workspace dir: the parent `worktreeRoot/<runId>` holding one
     // worktree per repo (feature 019, research D3), or a scratch temp dir for
     // no-repo runs. `workspace` stays null exactly for the scratch case.
     let workspaceDir: string;
     let workspace: MultiPrepareResult | null = null;
+    let suggestedBranch: string | undefined;
     if (noRepo) {
       // feature 010 (FR-018, Constitution V): a no-repository run (the
       // orchestrator's triage) runs from a scratch temp dir — no clone, no
@@ -190,22 +208,16 @@ export class ClaudeCliExecutor implements AgentExecutor {
       }
       // No `worktree_path` persisted — there is no repository worktree to inspect.
     } else {
-      // Repository worktrees are branch-named after the ticket. A ticketless
-      // repo run is a config error EXCEPT for workspace-setup runs (feature
-      // 015, FR-020): those are ticketless by design and get a local-only
-      // `setup/<runId8>` branch instead (never pushed — spec FR-015).
-      let branchIdentity: { ticketKey: string; prefix: string; reuse: boolean };
+      // The system no longer creates branches (feature 023) — it only picks the
+      // commit each repo starts from and SUGGESTS a name for the agent to
+      // create. A ticketless repo run is a config error EXCEPT for
+      // workspace-setup runs (feature 015, FR-020): those are ticketless by
+      // design and suggest `setup/<runId8>` (never pushed — spec FR-015).
       if (ctx.ticket) {
-        branchIdentity = {
-          ticketKey: ctx.ticket.key,
-          prefix: branchPrefix,
-          reuse: ctx.isResumedAttempt === true,
-        };
+        suggestedBranch = `${branchPrefix}/${ctx.ticket.key}`;
       } else if (setupRun) {
-        // A resumed setup question spawns a NEW run (new id, feature 011) —
-        // there is never a prior setup branch to reuse.
         const identity = setupRunBranchIdentity(ctx.runId);
-        branchIdentity = { ticketKey: identity.ticketKey, prefix: identity.branchPrefix, reuse: false };
+        suggestedBranch = `${identity.branchPrefix}/${identity.ticketKey}`;
       } else {
         return {
           exitStatus: 'crashed',
@@ -213,14 +225,30 @@ export class ClaudeCliExecutor implements AgentExecutor {
         };
       }
       try {
+        // Where the previous stage on this ticket left the code. Deliberately
+        // NOT best-effort: a failed read means we cannot tell whether prior
+        // work exists, and silently starting from the default branch is the
+        // false-success mode this feature exists to prevent. Setup runs are
+        // ticketless — there is no chain to continue.
+        let continueBranches: Record<string, string> = {};
+        if (ctx.ticket && ticketId) {
+          const prior = await getPriorWork(this.db, {
+            ticketId,
+            currentRunId: ctx.runId,
+            preferRunId,
+          });
+          const matched = prior
+            ? matchReportedBranches(prior.entries, repos)
+            : { continueBranches: {}, unmatched: [] };
+          continueBranches = matched.continueBranches;
+          await this.recordStartRefEvent(ctx.runId, repos, prior, matched);
+        }
         workspace = await prepareAll(
           repos,
           ctx.runId,
-          branchIdentity.ticketKey,
-          branchIdentity.prefix,
           runtimeConfig.worktreeRoot,
           runtimeConfig.repoCacheRoot,
-          { reuseBranch: branchIdentity.reuse },
+          { continueBranches },
         );
       } catch (err) {
         return { exitStatus: 'crashed', diagnostics: err instanceof Error ? err.message : String(err) };
@@ -265,7 +293,8 @@ export class ClaudeCliExecutor implements AgentExecutor {
             name: r.repo.name,
             absPath: r.worktreeDir,
             defaultBranch: r.repo.defaultBranch,
-            branch: workspace!.branch,
+            continueBranch: r.start.continueBranch,
+            suggestedBranch,
           })),
           // Feature 020 (D4): non-empty only for ticket-narrowed runs.
           onDemandRepos: excludedRepos.map((r) => ({ name: r.name, url: r.url })),
@@ -533,6 +562,10 @@ export class ClaudeCliExecutor implements AgentExecutor {
     excludedRepos: WorktreeRepo[];
     branchPrefix: string;
     workspaceId: string;
+    /** Feature 023: anchors the "prior work on this ticket" lookup. Null for ticketless runs. */
+    ticketId: string | null;
+    /** Feature 023: the run a rework / human-resume / triage handoff names, if any. */
+    preferRunId: string | undefined;
     auth: EffectiveAuth;
     apiKey: string | undefined;
     noRepo: boolean;
@@ -546,6 +579,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
         executorSecrets: schema.executors.secrets,
         behavior: schema.agents.behavior,
         workspaceId: schema.runs.workspaceId,
+        ticketId: schema.runs.ticketId,
         triggerEvent: schema.runs.triggerEvent,
       })
       .from(schema.runs)
@@ -699,8 +733,12 @@ export class ClaudeCliExecutor implements AgentExecutor {
       runtimeConfig,
       repos,
       excludedRepos,
+      // Feature 023: no longer a git instruction — the name SUGGESTED to the
+      // agent in the wrapper when it has no prior branch to continue.
       branchPrefix: behavior.branch_prefix ?? 'run',
       workspaceId: row.workspaceId,
+      ticketId: row.ticketId,
+      preferRunId: (row.triggerEvent as { failing_run_id?: string } | null)?.failing_run_id,
       auth,
       apiKey,
       noRepo,
@@ -797,6 +835,44 @@ export class ClaudeCliExecutor implements AgentExecutor {
     await this.db
       .insert(schema.runEvents)
       .values({ runId, type: 'log', payload: { source: 'repo-scoping', message, ...d } });
+  }
+
+  /**
+   * Feature 023: one timeline event PER MOUNTED REPO recording which ref this
+   * run started from and why, so "where did this stage begin?" is answerable
+   * from the run timeline alone, without logs. Written unconditionally —
+   * including the boring `default_branch` case, which is exactly the one
+   * needed when reconstructing an incident, and which doubles as the durable
+   * record of which repos a run actually mounted. Same run_events precedent
+   * as scoping above.
+   */
+  private async recordStartRefEvent(
+    runId: string,
+    repos: WorktreeRepo[],
+    prior: PriorWork | undefined,
+    matched: BranchMatch,
+  ): Promise<void> {
+    const rows = repos.map((repo) => {
+      const continueBranch = matched.continueBranches[repo.name];
+      const decision = continueBranch ? 'report_confirmed' : 'default_branch';
+      const message = continueBranch
+        ? `${repo.name}: continuing branch ${continueBranch}, reported by run ${prior?.runId}`
+        : `${repo.name}: no branch reported by prior work — starting from ${repo.defaultBranch}`;
+      return {
+        runId,
+        type: 'log' as const,
+        payload: {
+          source: 'start-ref',
+          message,
+          repo: repo.name,
+          decision,
+          continueBranch: continueBranch ?? null,
+          reportedByRunId: prior?.runId ?? null,
+          unmatchedReportedRepos: matched.unmatched,
+        },
+      };
+    });
+    if (rows.length > 0) await this.db.insert(schema.runEvents).values(rows);
   }
 
   async healthCheck(): Promise<{ ok: boolean; detail?: string }> {

@@ -79,15 +79,46 @@ describe('buildWrapperText (T103, D6)', () => {
   // Feature 019 (spec FR-013, research D9): the Repositories section.
   describe('repositories section (feature 019)', () => {
     const repos = [
-      { name: 'lib', absPath: '/wt/run-1/lib', defaultBranch: 'main', branch: 'feat/BRIG-1' },
-      { name: 'consumer', absPath: '/wt/run-1/consumer', defaultBranch: 'develop', branch: 'feat/BRIG-1' },
+      {
+        name: 'lib',
+        absPath: '/wt/run-1/lib',
+        defaultBranch: 'main',
+        suggestedBranch: 'feat/BRIG-1',
+      },
+      {
+        name: 'consumer',
+        absPath: '/wt/run-1/consumer',
+        defaultBranch: 'develop',
+        suggestedBranch: 'feat/BRIG-1',
+      },
     ];
 
-    it('lists every prepared repo with absolute path, branch and base branch', () => {
+    it('lists every prepared repo with absolute path, base branch and the name to create', () => {
       const text = buildWrapperText(ctx, '/wt/run-1', { useCallbackChannel: true, repos });
       expect(text).toContain('## Repositories');
-      expect(text).toContain('- lib: /wt/run-1/lib (branch feat/BRIG-1, based on main)');
-      expect(text).toContain('- consumer: /wt/run-1/consumer (branch feat/BRIG-1, based on develop)');
+      expect(text).toContain('DETACHED HEAD');
+      expect(text).toContain('- lib: /wt/run-1/lib (no prior branch; at main — create feat/BRIG-1)');
+      expect(text).toContain(
+        '- consumer: /wt/run-1/consumer (no prior branch; at develop — create feat/BRIG-1)',
+      );
+    });
+
+    // Feature 023: the stage handoff. A repo whose branch a previous stage
+    // reported is presented as work to continue, not as a fresh start.
+    it('presents a continue branch when a previous stage reported one', () => {
+      const text = buildWrapperText(ctx, '/wt/run-1', {
+        useCallbackChannel: true,
+        repos: [{ ...repos[0], continueBranch: 'run/BRIG-1' }],
+      });
+      expect(text).toContain('- lib: /wt/run-1/lib (continue branch run/BRIG-1, based on main)');
+      expect(text).toContain('never start a competing branch');
+    });
+
+    it('tells the agent to branch before committing and that the next stage reads its report', () => {
+      const text = buildWrapperText(ctx, '/wt/run-1', { useCallbackChannel: true, repos });
+      expect(text).toContain('`git switch -C <branch>`');
+      expect(text).toContain('Never commit on the detached HEAD');
+      expect(text).toContain('The next stage on this ticket starts from the branch you report here');
     });
 
     it('carries the four FR-013 conduct rules + touched-repos-only checks', () => {

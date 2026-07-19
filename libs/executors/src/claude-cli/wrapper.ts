@@ -60,7 +60,18 @@ export interface WrapperRepoInfo {
   name: string;
   absPath: string;
   defaultBranch: string;
-  branch: string;
+  /**
+   * Feature 023: a branch a previous stage on this ticket pushed — the
+   * worktree is parked at its tip. Absent ⇒ the worktree is at the default
+   * branch and there is no prior work to build on.
+   */
+  continueBranch?: string;
+  /**
+   * Feature 023: the name to create if the agent branches — `branch_prefix`
+   * applied to the ticket key. A HINT, not an instruction to the system: the
+   * system no longer creates branches at all.
+   */
+  suggestedBranch?: string;
 }
 
 export interface WrapperOptions {
@@ -113,22 +124,33 @@ function repositoriesSection(
       : [];
   return [
     '## Repositories',
-    'Your workspace directory contains one sub-directory per repository, each already ' +
-      'checked out on its own working branch:',
-    ...repos.map(
-      (r) => `- ${r.name}: ${r.absPath} (branch ${r.branch}, based on ${r.defaultBranch})`,
+    'Your workspace directory contains one sub-directory per repository. Each is checked out ' +
+      'in DETACHED HEAD at the commit this run must start from — creating and pushing branches ' +
+      'is your job, not the system\'s:',
+    ...repos.map((r) =>
+      r.continueBranch
+        ? `- ${r.name}: ${r.absPath} (continue branch ${r.continueBranch}, based on ${r.defaultBranch})`
+        : `- ${r.name}: ${r.absPath} (no prior branch; at ${r.defaultBranch}` +
+          `${r.suggestedBranch ? ` — create ${r.suggestedBranch}` : ''})`,
     ),
     'Rules for working across repositories:',
     '- Decide from the ticket which of these repositories actually need changes; leave the ' +
       'others completely untouched.',
-    '- Commit and push only in repositories you actually changed. Never commit, push, or open ' +
-      'a PR in a repository you did not change.',
+    '- Before your first commit in a repository you change, put yourself on a branch: ' +
+      '`git switch -C <branch>`, using the branch named above for that repository. Never ' +
+      'commit on the detached HEAD.',
+    '- A "continue branch" is prior work on this ticket by an earlier stage, and your worktree ' +
+      'is already at its tip. Build on it; never start a competing branch.',
+    '- Commit and push only in repositories you actually changed (`git push -u origin ' +
+      '<branch>`). Never commit, push, or open a PR in a repository you did not change.',
     '- If your changes in different repositories depend on each other, open a separate PR per ' +
       'repository and reference each dependent PR in the other PR\'s description.',
     '- Run the required checks/tests inside each repository you changed (and only there).',
     `- Report exactly one entry per CHANGED repository in ${reportTarget} — ` +
-      '{repo, branch, pr_url, commits, files_changed} with schema_version: 2. Do not report ' +
-      'untouched repositories.',
+      '{repo, branch, pr_url, commits, files_changed} with schema_version: 2, using the ' +
+      'repository names exactly as listed above. Do not report untouched repositories. The ' +
+      'next stage on this ticket starts from the branch you report here, so a repository you ' +
+      'changed but did not report will be invisible to it.',
     ...escapeHatch,
   ];
 }

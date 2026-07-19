@@ -31,18 +31,27 @@ Repository source of truth unchanged: `workspaces.settings.repositories` (DB) fi
 ```
 worktreeRoot/<runId>/                  ← parent dir; agent cwd; runs.worktree_path
 ├── .brigadir/wrapper.txt              ← instruction wrapper (outside any repo tree)
-├── <repoA.name>/                      ← git worktree of repoA cache, branch <prefix>/<ticket>
-└── <repoB.name>/                      ← git worktree of repoB cache, same branch
+├── <repoA.name>/                      ← git worktree of repoA cache, DETACHED at its start ref
+└── <repoB.name>/                      ← git worktree of repoB cache, own start ref
 ```
 
-- Branch identity: `<branchPrefix>/<ticketKey>` in EVERY repo; ticketless setup runs:
-  `setup/<runId[0:8]>` (unchanged).
-- Clone caches unchanged: `repoCacheRoot/<repo.name>` (one per repo, shared across runs).
+> **SUPERSEDED by feature 023** — the three bullets on branch identity, the leftover
+> policy and `reuseBranch` below are historical. Current model: the system creates no
+> branch; each repo is detached at `origin/<continueBranch>` (the branch a previous
+> stage reported for THAT repo) or `origin/<defaultBranch>`. Repos diverge
+> independently — there is no run-level branch.
+
+- ~~Branch identity: `<branchPrefix>/<ticketKey>` in EVERY repo~~; ticketless setup runs
+  suggest `setup/<runId[0:8]>` to the agent (feature 023 — no longer created).
+- Clone caches unchanged: `repoCacheRoot/<repo.name>` (one per repo, shared across runs);
+  since 023 the refresh fetch prunes deleted remote-tracking refs.
 - Lifecycle: `prepareAll` (all-or-nothing; partial failure unwinds created worktrees
   and removes the parent) → run → `cleanupAll` (worktree remove per repo + parent rm),
-  skipped entirely when `keepFailedWorktrees` && run failed.
-- Leftover-branch policy per repo, unchanged: 0 commits beyond base → delete+recreate;
-  >0 commits → fail loud. Resume (`reuseBranch`): attach if branch exists, else create.
+  skipped entirely when `keepFailedWorktrees` && run failed. **Unaffected by 023.**
+- ~~Leftover-branch policy per repo: 0 commits beyond base → delete+recreate; >0 commits →
+  fail loud. Resume (`reuseBranch`): attach if branch exists, else create.~~ Retired: with
+  detached worktrees the system owns no branch name to collide with, and `git branch -D`
+  left the codebase — no code path can discard prior work.
 
 ## 3. Report artifacts (`runs.report` jsonb — ReportSchema v2)
 

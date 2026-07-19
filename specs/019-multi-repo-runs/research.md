@@ -82,6 +82,12 @@ logic conditional).
 
 ## D4 — prepare/cleanup orchestration and partial-failure policy
 
+> **D3/D4 branch semantics SUPERSEDED by feature 023** (2026-07-18). The signature and
+> the leftover/`reuseBranch` policy below are historical: `prepareAll` no longer takes
+> `ticketKey`/`branchPrefix`/`reuseBranch` but a per-repo `continueBranches` map, and
+> checks out DETACHED. The sequential loop, all-or-nothing unwind and `cleanupAll` are
+> unchanged and still normative.
+
 **Decision**: `worktree.ts` keeps the existing single-repo `prepare()` (renamed
 internally to prepare one repo into an explicit target dir) and gains:
 

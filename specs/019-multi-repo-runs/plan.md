@@ -9,8 +9,9 @@
 A run prepares one git worktree per repository in the agent's scope
 (`behavior.repositories[]`, deprecated `behavior.repository` = one-element list,
 absent = all workspace repos), laid out as `worktreeRoot/<runId>/<repo.name>/` with
-the agent cwd at the parent; all worktrees share the branch
-`<branchPrefix>/<ticketKey>`. The agent decides from the ticket which repos to change;
+the agent cwd at the parent; ~~all worktrees share the branch
+`<branchPrefix>/<ticketKey>`~~ (superseded by feature 023 — each worktree is detached
+at its own start ref; the agent owns branch naming). The agent decides from the ticket which repos to change;
 delivery and reporting are per touched repo via a new `artifacts.repos[]` list in
 ReportSchema v2 (flat fields stay valid; `schema_version` becomes a `1|2` union).
 One shared `normalizeReportArtifacts` helper feeds all four consumers (scrubber,

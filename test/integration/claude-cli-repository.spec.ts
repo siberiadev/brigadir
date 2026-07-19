@@ -123,29 +123,20 @@ describe('claude_cli repository resolution (repositories[] → repository → al
     }
   }
 
-  /** The ticket branch a run created in a cache repo, if any. */
-  async function branchInCache(cacheName: string, ticketKey: string): Promise<boolean> {
-    const cacheDir = join(env.repoCacheRoot, cacheName);
-    if (!existsSync(cacheDir)) return false;
-    const { stdout } = await execFileAsync('git', [
-      '-C',
-      cacheDir,
-      'branch',
-      '--list',
-      `run/${ticketKey}`,
-    ]);
-    return stdout.trim() !== '';
-  }
-
-  /** Ticket key of the run's own ticket row (branch name = run/<key>). */
-  async function ticketKeyOf(runId: string): Promise<string> {
-    const [row] = await db.db
-      .select({ key: schema.tickets.jiraKey })
-      .from(schema.runs)
-      .innerJoin(schema.tickets, eq(schema.runs.ticketId, schema.tickets.id))
-      .where(eq(schema.runs.id, runId))
-      .limit(1);
-    return row!.key;
+  /**
+   * Was `repoName` mounted for this run? Feature 023 removed the
+   * system-created `run/<ticket>` branch that used to be the discriminator;
+   * the per-repo `start-ref` timeline event is the durable per-run record,
+   * written before the worktree that cleanup later removes.
+   */
+  async function mountedInRun(runId: string, repoName: string): Promise<boolean> {
+    const rows = await db.db
+      .select()
+      .from(schema.runEvents)
+      .where(eq(schema.runEvents.runId, runId));
+    return rows
+      .map((r) => r.payload as Record<string, unknown>)
+      .some((p) => p?.source === 'start-ref' && p?.repo === repoName);
   }
 
   it('deprecated behavior.repository wins: the run clones ONLY the named repo (US2 legacy path)', async () => {
@@ -163,7 +154,7 @@ describe('claude_cli repository resolution (repositories[] → repository → al
     expect(row.worktreePath).toBe(join(env.worktreeRoot, runId));
   });
 
-  it('absent scope → ALL workspace repositories, every worktree on the same ticket branch (feature 019, D1)', async () => {
+  it('absent scope → ALL workspace repositories mounted (feature 019, D1)', async () => {
     const runId = await triggerRun({
       workspaceSettings: { repositories: repositories() },
     });
@@ -172,24 +163,22 @@ describe('claude_cli repository resolution (repositories[] → repository → al
     // BOTH repos cloned (pre-019 this case resolved only the default/first).
     expect(existsSync(join(env.repoCacheRoot, 'product'))).toBe(true);
     expect(existsSync(join(env.repoCacheRoot, 'infra'))).toBe(true);
-    // Same branch↔ticket identity in every repo (worktrees are cleaned up
-    // after the run; the branches remain in the caches).
-    const key = await ticketKeyOf(runId);
-    expect(await branchInCache('product', key)).toBe(true);
-    expect(await branchInCache('infra', key)).toBe(true);
+    // Feature 023: every repo got its own detached worktree at its own start
+    // ref — recorded per repo on the run timeline.
+    expect(await mountedInRun(runId, 'product')).toBe(true);
+    expect(await mountedInRun(runId, 'infra')).toBe(true);
     expect(row.worktreePath).toBe(join(env.worktreeRoot, runId));
   });
 
-  it('behavior.repositories subset: only the named repos get worktrees/branches (US3)', async () => {
+  it('behavior.repositories subset: only the named repos get worktrees (US3)', async () => {
     const runId = await triggerRun({
       behavior: { repositories: ['infra'] },
       workspaceSettings: { repositories: repositories() },
     });
     const row = await pollRun(runId);
     expect(row.status).toBe('succeeded');
-    const key = await ticketKeyOf(runId);
-    expect(await branchInCache('infra', key)).toBe(true);
-    expect(await branchInCache('product', key)).toBe(false);
+    expect(await mountedInRun(runId, 'infra')).toBe(true);
+    expect(await mountedInRun(runId, 'product')).toBe(false);
   });
 
   it('an unknown name in behavior.repositories fails the run with a clear error (defense behind config validation)', async () => {
