@@ -65,7 +65,8 @@ async function onDeleteExecutor(ex: ExecutorResponse) {
     >
       <el-table-column label="Type" width="110">
         <template #default="{ row }">
-          <el-tag size="small" :type="row.type === 'claude_cli' ? 'primary' : 'info'">
+          <!-- Real backends (claude_cli, kimi) read as first-class; mock stays muted. -->
+          <el-tag size="small" :type="row.type === 'mock' ? 'info' : 'primary'">
             {{ row.type }}
           </el-tag>
         </template>
