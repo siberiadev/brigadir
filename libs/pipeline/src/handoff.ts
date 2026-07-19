@@ -1,6 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import { type BrigadirDb, schema, getWorkspaceSetupInstruction } from '@brigadir/database';
-import type { AgentReport, TriggerEvent } from '@brigadir/contracts';
+import { type AgentReport, type TriggerEvent, normalizeReportArtifacts } from '@brigadir/contracts';
 import { getReworkBudget } from './rework-budget';
 
 /**
@@ -64,6 +64,44 @@ function trunc(value: string, budget: number): string {
   return value.length <= budget ? value : `${value.slice(0, budget)}…`;
 }
 
+/**
+ * Artifact lines for a handoff section (feature 024, US1). Routes through the
+ * ONE flat-vs-plural precedence rule (`normalizeReportArtifacts`, feature 019)
+ * — this site must never re-derive it. Two shapes, by design:
+ *  - A legacy flat (v1) report normalizes to a single entry with `repo`
+ *    undefined and renders the pre-024 single inline line
+ *    (`<label>: branch X, PR Y`) BYTE-FOR-BYTE, keeping v1 valid forever.
+ *  - A v2 report (`artifacts.repos[]`) renders a `<label>:` header followed by
+ *    one `- <repo>: branch X, PR Y` line per repo, so a rework/triage agent is
+ *    told where every repo's code lives.
+ * An entry with neither branch nor PR is skipped; nothing to show ⇒ no lines
+ * (best-effort, FR-013 of feature 010 — never throws, never a stray header).
+ */
+function artifactLines(report: AgentReport | null, label: string): string[] {
+  const entries = normalizeReportArtifacts(report ?? { artifacts: undefined });
+  if (entries.length === 0) return [];
+
+  const partsOf = (e: (typeof entries)[number]): string => {
+    const parts: string[] = [];
+    if (e.branch) parts.push(`branch ${e.branch}`);
+    if (e.pr_url) parts.push(`PR ${e.pr_url}`);
+    return parts.join(', ');
+  };
+
+  // v1 flat form: exactly one entry, no repo name → inline single line.
+  if (entries.length === 1 && entries[0].repo === undefined) {
+    const parts = partsOf(entries[0]);
+    return parts ? [`${label}: ${parts}`] : [];
+  }
+
+  // v2 form: header + one bulleted line per repo that has something to show.
+  const bulleted = entries
+    .map((e) => ({ repo: e.repo, parts: partsOf(e) }))
+    .filter((e) => e.parts.length > 0)
+    .map((e) => `- ${e.repo}: ${e.parts}`);
+  return bulleted.length > 0 ? [`${label}:`, ...bulleted] : [];
+}
+
 interface FailingRunFacts {
   workspaceId: string;
   // Null when the referenced run is ticketless (feature 011) — the roster/budget
@@ -109,13 +147,7 @@ function failureLines(report: AgentReport | null, opts: { includeWarnings: boole
       lines.push(`- ${c.name}: ${c.status}${c.reason ? ` — ${trunc(c.reason, REASON_BUDGET)}` : ''}`);
     }
   }
-  const artifacts = report?.artifacts;
-  if (artifacts?.branch || artifacts?.pr_url) {
-    const parts: string[] = [];
-    if (artifacts.branch) parts.push(`branch ${artifacts.branch}`);
-    if (artifacts.pr_url) parts.push(`PR ${artifacts.pr_url}`);
-    lines.push(`Artifacts: ${parts.join(', ')}`);
-  }
+  lines.push(...artifactLines(report, 'Artifacts'));
   return lines;
 }
 
@@ -260,13 +292,7 @@ async function buildReworkSection(triggerEvent: TriggerEvent, db: BrigadirDb): P
       lines.push(`- ${c.name}: fail${c.reason ? ` — ${trunc(c.reason, REASON_BUDGET)}` : ''}`);
     }
   }
-  const artifacts = report?.artifacts;
-  if (artifacts?.branch || artifacts?.pr_url) {
-    const parts: string[] = [];
-    if (artifacts.branch) parts.push(`branch ${artifacts.branch}`);
-    if (artifacts.pr_url) parts.push(`PR ${artifacts.pr_url}`);
-    lines.push(`Continue on: ${parts.join(', ')}`);
-  }
+  lines.push(...artifactLines(report, 'Continue on'));
 
   return lines.join('\n');
 }

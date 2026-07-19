@@ -19,7 +19,7 @@
 
 **Purpose**: Confirm a clean baseline so every later failure is attributable to this feature.
 
-- [ ] T001 Run `pnpm typecheck && pnpm lint && pnpm test` on the unmodified branch and record the baseline result (all green expected; any pre-existing failure gets noted in specs/024-branch-handoff-followup/tasks.md next to this task before proceeding)
+- [X] T001 Run `pnpm typecheck && pnpm lint && pnpm test` on the unmodified branch and record the baseline result (all green expected; any pre-existing failure gets noted in specs/024-branch-handoff-followup/tasks.md next to this task before proceeding)
 
 ---
 
@@ -39,12 +39,12 @@ No foundational tasks — the three stories share no new infrastructure (no migr
 
 ### Tests for User Story 1 (write first, must fail) ⚠️
 
-- [ ] T002 [US1] Extend `libs/pipeline/src/handoff.spec.ts` with failing cases per the contract: (a) rework section with `artifacts.repos: [{repo, branch, pr_url}, {repo, branch}]` renders a `Continue on:` block with one `- <repo>: …` line each; (b) triage and answer-triage sections render the same shape under `Artifacts:`; (c) report with BOTH flat fields and `repos[]` renders only `repos[]` (no double-render); (d) `repos: []` and absent artifacts render no block; (e) v2 entry with only `pr_url` renders the PR part alone. Do NOT touch existing v1 assertions.
+- [X] T002 [US1] Extend `libs/pipeline/src/handoff.spec.ts` with failing cases per the contract: (a) rework section with `artifacts.repos: [{repo, branch, pr_url}, {repo, branch}]` renders a `Continue on:` block with one `- <repo>: …` line each; (b) triage and answer-triage sections render the same shape under `Artifacts:`; (c) report with BOTH flat fields and `repos[]` renders only `repos[]` (no double-render); (d) `repos: []` and absent artifacts render no block; (e) v2 entry with only `pr_url` renders the PR part alone. Do NOT touch existing v1 assertions.
 
 ### Implementation for User Story 1
 
-- [ ] T003 [US1] In `libs/pipeline/src/handoff.ts`, replace the flat-field reads in `failureLines` (~112–118) and `buildReworkSection` (~263–269) with a shared local renderer over `normalizeReportArtifacts(report)` (import from `@brigadir/contracts`): single normalized entry with `repo === undefined` ⇒ today's single-line form byte-for-byte; entries with `repo` ⇒ header line (`Artifacts:` / `Continue on:`) + one `- <repo>: branch <b>, PR <p>` line per entry, omitting absent parts, skipping entries with neither. Preserve the try/catch best-effort contract and all truncation budgets.
-- [ ] T004 [US1] Run `pnpm vitest run libs/pipeline/src/handoff.spec.ts` until green, then `pnpm typecheck && pnpm lint`.
+- [X] T003 [US1] In `libs/pipeline/src/handoff.ts`, replace the flat-field reads in `failureLines` (~112–118) and `buildReworkSection` (~263–269) with a shared local renderer over `normalizeReportArtifacts(report)` (import from `@brigadir/contracts`): single normalized entry with `repo === undefined` ⇒ today's single-line form byte-for-byte; entries with `repo` ⇒ header line (`Artifacts:` / `Continue on:`) + one `- <repo>: branch <b>, PR <p>` line per entry, omitting absent parts, skipping entries with neither. Preserve the try/catch best-effort contract and all truncation budgets.
+- [X] T004 [US1] Run `pnpm vitest run libs/pipeline/src/handoff.spec.ts` until green, then `pnpm typecheck && pnpm lint`.
 
 **Checkpoint**: US1 shippable alone — the live bug is fixed.
 

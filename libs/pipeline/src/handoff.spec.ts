@@ -164,6 +164,115 @@ describe('buildHandoffSection', () => {
     });
   });
 
+  // Feature 024 (US1): the handoff artifact lines now route through
+  // normalizeReportArtifacts, so v2 per-repo reports render one line per repo
+  // instead of silently rendering nothing. v1 flat reports (asserted above,
+  // lines 102 & 163) must keep their exact single-line form.
+  describe('v2 per-repo artifacts (feature 024, US1)', () => {
+    const v2Report: AgentReport = {
+      schema_version: 2,
+      outcome: 'failure',
+      summary: 'Multi-repo change; one repo still failing.',
+      checks: [{ name: 'tests_pass', status: 'fail', reason: 'boom' }],
+      artifacts: {
+        repos: [
+          { repo: 'product', branch: 'run/T', pr_url: 'https://github.com/x/product/pull/1' },
+          { repo: 'infra', branch: 'run/T-infra' },
+        ],
+      },
+    };
+
+    it('rework renders a Continue on: block with one line per reported repo', async () => {
+      const db = makeDb({
+        failingRun: { workspaceId: 'ws-1', ticketId: 'tk-1', report: v2Report },
+      });
+      const out = await buildHandoffSection(
+        { source: 'rework', failing_run_id: FAILING_RUN_ID, task: 'Fix infra.' } as TriggerEvent,
+        db,
+      );
+      expect(out).toContain('Continue on:');
+      expect(out).toContain('- product: branch run/T, PR https://github.com/x/product/pull/1');
+      expect(out).toContain('- infra: branch run/T-infra');
+      // Not the flat single-line form.
+      expect(out).not.toContain('Continue on: branch');
+    });
+
+    it('triage renders an Artifacts: block with one line per reported repo', async () => {
+      const db = makeDb({
+        failingRun: { workspaceId: 'ws-1', ticketId: 'tk-1', report: v2Report },
+        roster: [{ key: 'developer', name: 'Developer', role: null, description: null }],
+        cycleCount: 0,
+      });
+      const out = await buildHandoffSection(
+        { source: 'triage', failing_run_id: FAILING_RUN_ID } as TriggerEvent,
+        db,
+      );
+      expect(out).toContain('Artifacts:');
+      expect(out).toContain('- product: branch run/T, PR https://github.com/x/product/pull/1');
+      expect(out).toContain('- infra: branch run/T-infra');
+      expect(out).not.toContain('Artifacts: branch');
+    });
+
+    it('renders only repos[] when both flat fields and repos[] are present', async () => {
+      const both: AgentReport = {
+        schema_version: 2,
+        outcome: 'failure',
+        summary: 's',
+        checks: [],
+        artifacts: {
+          branch: 'FLAT-SHOULD-NOT-APPEAR',
+          pr_url: 'https://flat.example/should-not-appear',
+          repos: [{ repo: 'product', branch: 'run/T' }],
+        },
+      };
+      const db = makeDb({ failingRun: { workspaceId: 'ws-1', ticketId: 'tk-1', report: both } });
+      const out = await buildHandoffSection(
+        { source: 'rework', failing_run_id: FAILING_RUN_ID } as TriggerEvent,
+        db,
+      );
+      expect(out).toContain('- product: branch run/T');
+      expect(out).not.toContain('FLAT-SHOULD-NOT-APPEAR');
+      expect(out).not.toContain('should-not-appear');
+    });
+
+    it('renders no artifact line for empty repos[] or absent artifacts', async () => {
+      for (const artifacts of [{ repos: [] }, undefined] as const) {
+        const rep: AgentReport = {
+          schema_version: 2,
+          outcome: 'failure',
+          summary: 's',
+          checks: [],
+          ...(artifacts ? { artifacts } : {}),
+        };
+        const db = makeDb({ failingRun: { workspaceId: 'ws-1', ticketId: 'tk-1', report: rep } });
+        const out = await buildHandoffSection(
+          { source: 'rework', failing_run_id: FAILING_RUN_ID } as TriggerEvent,
+          db,
+        );
+        expect(out).not.toContain('Continue on:');
+        expect(out).not.toContain('- '); // no bulleted artifact line
+      }
+    });
+
+    it('renders whichever parts exist for a partial v2 entry (pr_url only)', async () => {
+      const prOnly: AgentReport = {
+        schema_version: 2,
+        outcome: 'failure',
+        summary: 's',
+        checks: [],
+        artifacts: { repos: [{ repo: 'product', pr_url: 'https://github.com/x/product/pull/9' }] },
+      };
+      const db = makeDb({ failingRun: { workspaceId: 'ws-1', ticketId: 'tk-1', report: prOnly } });
+      const out = await buildHandoffSection(
+        { source: 'rework', failing_run_id: FAILING_RUN_ID } as TriggerEvent,
+        db,
+      );
+      expect(out).toContain('- product: PR https://github.com/x/product/pull/9');
+      // The product line carries no branch part (only a PR was reported).
+      expect(out).not.toMatch(/- product:.*branch/);
+    });
+  });
+
   it('truncates an oversized summary to the budget', async () => {
     const huge = 'x'.repeat(5000);
     const db = makeDb({
