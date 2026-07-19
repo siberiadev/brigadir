@@ -8,6 +8,13 @@
 
 **Input**: User description: "First-class kimi executor type (Moonshot AI backend) reusing the Claude CLI harness — a new executor type `kimi` whose implementation is the existing Claude CLI harness parameterized by a provider preset (Moonshot's Anthropic-compatible endpoint + profile-stored API key), with its own run queue, immutable run attribution, api_key-only auth, and no user-facing base-URL field."
 
+## Clarifications
+
+### Session 2026-07-19
+
+- Q: Seed a default kimi profile (keyless, disabled until a key is entered), or ship create/update support only? → A: No seeding — operators create kimi profiles manually via the form/API; a keyless seed would contradict the key-required invariant (FR-004) and need a special-case path for a profile that cannot run.
+- Q: How is the indicative-cost caveat for kimi runs surfaced — docs only, or also in the UI? → A: Both — the dashboard marks cost values on kimi runs as indicative (marker/tooltip) and the docs record the caveat; a bare number would be misread as trustworthy when comparing providers.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Runs execute on Moonshot Kimi models, configured entirely from the dashboard (Priority: P1)
@@ -97,7 +104,7 @@ An operator creating or editing an executor profile sees "kimi" in the type sele
 - The Moonshot key stored in the profile is invalid or revoked → the run fails at the provider with diagnostics captured through the normal failed-run path; the platform does not pre-validate keys against Moonshot at save time.
 - A model name Moonshot does not recognize → fails at the provider at run time; the platform does not maintain a Moonshot model catalog and does not block save on model format.
 - Moonshot-side rate limiting → handled by the same rate-limit handling path the shared harness already implements; behavior identical to the Claude CLI type.
-- Cost figures on kimi runs → the harness prices tokens against Anthropic's price list, so reported cost for kimi runs is not trustworthy as an absolute value; it is surfaced as indicative and documented as such. Recalculation against Moonshot pricing is out of scope.
+- Cost figures on kimi runs → the harness prices tokens against Anthropic's price list, so reported cost for kimi runs is not trustworthy as an absolute value; the dashboard marks it as indicative (marker/tooltip) and the docs record the caveat. Recalculation against Moonshot pricing is out of scope.
 - Concurrency limit (`max_parallel_runs`) lowered on a kimi profile while runs are queued → the per-profile concurrency gate re-applies the new limit live, same as the existing executor gate behavior.
 - Two profiles of type kimi with different models/keys → each is an independent profile with its own key, limit, and gate; runs attribute to the same type "kimi".
 - Host shell exports an endpoint-override variable → it is stripped for every executor type, always; the variable must never be added to the environment allowlist.
@@ -119,7 +126,7 @@ An operator creating or editing an executor profile sees "kimi" in the type sele
 - **FR-011**: The kimi run queue MUST enforce the per-profile concurrency gate with live re-application of a changed parallel-run limit, matching the existing executor-gate behavior.
 - **FR-012**: API responses for kimi profiles MUST never echo the stored key; key presence MUST be signaled by the existing boolean convention. Create and update contracts MUST enforce the key-required rule (FR-004) and the strict field set (FR-002).
 - **FR-013**: The dashboard executor form MUST offer "kimi" in the type selector and, when selected, show exactly the kimi field set (model, API key, parallel-run limit, harness knobs) with no URL field and no auth-mode selector.
-- **FR-014**: Reported cost for kimi runs MUST be surfaced as indicative (documented caveat): token pricing is computed against Anthropic's price list and does not reflect Moonshot pricing. No recalculation is performed this iteration.
+- **FR-014**: Reported cost for kimi runs MUST be surfaced as indicative in the dashboard (a visible marker/tooltip wherever a kimi run's cost is displayed) and documented as such: token pricing is computed against Anthropic's price list and does not reflect Moonshot pricing. No recalculation is performed this iteration.
 - **FR-015**: The feature MUST require no database schema change: the executor type is stored as text and configuration as a flexible document, following the precedent of the previous auth-mode addition which shipped with zero DDL.
 - **FR-016**: Documentation MUST be updated in the same iteration: the architecture document's executor-type table gains a kimi row (implemented; transport: Claude CLI harness against Moonshot's Anthropic-compatible endpoint, including the cost caveat), and the progress journal gains the iteration entry.
 - **FR-017**: Tests MUST ship in the same iteration (Constitution VI): configuration accept/reject matrices for the kimi branch (rejects auth mode, rejects missing key on create, rejects cloud fields), endpoint-injection behavior per type (present for kimi, absent for Claude CLI, host value never leaks), registration/resolution of both executor instances, and an end-to-end kimi run through the kimi queue against real infrastructure asserting the child environment (endpoint + profile key present, host pollution absent) and identical success/rate-limit/crash behavior to the Claude CLI type, reusing the existing stream fixtures.
@@ -149,11 +156,12 @@ An operator creating or editing an executor profile sees "kimi" in the type sele
 - Operators obtain Moonshot API keys out of band; the platform does not manage Moonshot accounts or validate keys at save time.
 - The existing encrypted-secret storage, write-only key semantics, and key-presence boolean are reused as-is for the kimi key.
 - Queue provisioning derives from the executor-type registry, so registering the new type is sufficient for the kimi queue to exist; no separate infrastructure work is needed.
-- A seeded default kimi profile (disabled until a key is entered) is optional; full create/update support via API and form is the required minimum.
+- No default kimi profile is seeded (clarified 2026-07-19): operators create kimi profiles manually via the form/API. This keeps the key-required-on-create invariant (FR-004) unconditional — no special-case path for a keyless, non-runnable seed row.
 - The implementation shape is decided (parameterized shared executor, second registered instance, near-copy/shared-base queue processor) and recorded in the feature input for the planning phase; this spec constrains behavior, not internals.
 
 ## Out of Scope
 
+- Seeding a default kimi executor profile (clarified 2026-07-19: manual creation only).
 - Adopting Moonshot's native kimi-cli binary as the transport (possible future change under the same "kimi" type name — explicitly designed for).
 - OpenAI-compatible API loop or direct-API executor implementations (anthropic_api, deepseek_api, etc.).
 - Cost recalculation against Moonshot pricing; per-provider price tables.
