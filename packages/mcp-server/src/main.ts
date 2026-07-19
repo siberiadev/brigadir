@@ -29,7 +29,37 @@ const callbackUrl = requireEnv('BRIGADIR_CALLBACK_URL');
 const runToken = requireEnv('BRIGADIR_RUN_TOKEN');
 const markerPath = requireEnv('BRIGADIR_MARKER_PATH');
 
-const handlers = createToolHandlers({ callbackUrl, runId, runToken, markerPath });
+/**
+ * Feature 024: optional repo name → worktree dir map for the completion gate's
+ * HEAD probe. Absent for no-repo runs; a malformed value is treated as absent
+ * (logged to stderr) so a bad env never blocks a completion.
+ */
+function parseRepoDirs(): Record<string, string> | undefined {
+  const raw = process.env.BRIGADIR_REPO_DIRS;
+  if (!raw) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('not a JSON object');
+    }
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === 'string') out[k] = v;
+    }
+    return out;
+  } catch (err) {
+    console.error(`brigadir-mcp: ignoring malformed BRIGADIR_REPO_DIRS: ${String(err)}`);
+    return undefined;
+  }
+}
+
+const handlers = createToolHandlers({
+  callbackUrl,
+  runId,
+  runToken,
+  markerPath,
+  repoDirs: parseRepoDirs(),
+});
 
 const TOOL_DEFS = [
   {

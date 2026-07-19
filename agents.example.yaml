@@ -41,7 +41,7 @@ agents:
     max_budget_usd: 3
     max_attempts: 2
     behavior:
-      branch_prefix: feat
+      branch_prefix: feat   # inert since feature 024 — the agent names its own branch
       allowed_tools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash(git *)"]
       required_checks: [tests_pass, lint_pass]
     instruction: |
@@ -54,7 +54,7 @@ agents:
     max_budget_usd: 5
     max_attempts: 2
     behavior:
-      branch_prefix: feat
+      branch_prefix: feat   # inert since feature 024 — the agent names its own branch
       allowed_tools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash(git *)", "Bash(pnpm *)"]
       required_checks: [tests_pass, lint_pass]
     instruction: |

@@ -9,8 +9,7 @@ import type { AgentsConfig } from '@brigadir/contracts';
 import type { RunContext } from '../agent-executor.interface';
 
 vi.mock('./worktree', async (importOriginal) => ({
-  // Keep the real setupRunBranchIdentity (pure) — only the git-touching
-  // functions are faked.
+  // Only the git-touching functions are faked; the rest are real.
   ...(await importOriginal<typeof import('./worktree')>()),
   prepareAll: vi.fn(),
   cleanupAll: vi.fn(),
@@ -38,9 +37,10 @@ function fakeWorkspace(parentDir: string, repoName = 'product', continueBranch?:
         worktreeDir: join(parentDir, repoName),
         cacheDir: join(parentDir, '..', 'cache', repoName),
         // Feature 023: per-repo start ref; no run-level branch any more.
+        // Feature 024: startSha is the gate baseline (fixed fake SHA).
         start: continueBranch
-          ? { startRef: `origin/${continueBranch}`, continueBranch }
-          : { startRef: 'origin/main' },
+          ? { startRef: `origin/${continueBranch}`, continueBranch, startSha: 'a'.repeat(40) }
+          : { startRef: 'origin/main', startSha: 'a'.repeat(40) },
       },
     ],
   };
@@ -218,6 +218,57 @@ describe('ClaudeCliExecutor.run (T082)', () => {
     );
     // The child process runs from the PARENT dir (spec FR-005).
     expect(spawnGroupMock.mock.calls[0][2]).toMatchObject({ cwd: worktreeDir });
+  });
+
+  // Feature 024 (US2): branch_prefix is an inert stored field — present in
+  // behavior, it is accepted (no throw) and produces NO wrapper suggestion.
+  it('branch_prefix in behavior is accepted and ignored — no suggested branch in the wrapper', async () => {
+    const group = makeGroup();
+    spawnGroupMock.mockReturnValue(group);
+    const executor = makeExecutor(executorConfig, { branch_prefix: 'feat' });
+
+    const runPromise = executor.run(makeCtx(), new AbortController().signal);
+    await waitForSpawn(spawnGroupMock);
+    const wrapperText = await readFile(join(worktreeDir, '.brigadir', 'wrapper.txt'), 'utf8');
+    expect(wrapperText).toContain('- product:');
+    expect(wrapperText).toContain('(no prior branch; at main)');
+    expect(wrapperText).not.toContain('create feat');
+    expect(wrapperText).not.toMatch(/— create /);
+
+    for (const line of readFixtureLines('stream-success')) group.child.stdout.write(line + '\n');
+    await flush();
+    group.child.emit('close', 0, null);
+    const result = await runPromise;
+    expect(result.exitStatus).toBe('completed');
+  });
+
+  // Feature 024 (US3): start-ref events are written AFTER prepare and carry
+  // the resolved startSha (the completion gate's baseline).
+  it('records a start-ref run_event per repo with the resolved startSha', async () => {
+    const group = makeGroup();
+    spawnGroupMock.mockReturnValue(group);
+    const db = fakeDb(executorConfig, {});
+    const fakeJira = { getFeatureContext: vi.fn().mockResolvedValue({ linked: [] }) };
+    const executor = new ClaudeCliExecutor(db as never, agentsConfig, fakeJira as never);
+
+    const runPromise = executor.run(makeCtx(), new AbortController().signal);
+    await waitForSpawn(spawnGroupMock);
+    for (const line of readFixtureLines('stream-success')) group.child.stdout.write(line + '\n');
+    await flush();
+    group.child.emit('close', 0, null);
+    await runPromise;
+
+    const startRef = (db.insertedEvents as unknown[])
+      .flatMap((v) => (Array.isArray(v) ? v : [v]))
+      .find((e) => (e as { payload?: { source?: string } })?.payload?.source === 'start-ref') as
+      | { payload: Record<string, unknown> }
+      | undefined;
+    expect(startRef).toBeDefined();
+    expect(startRef!.payload).toMatchObject({
+      repo: 'product',
+      startSha: 'a'.repeat(40),
+      decision: 'default_branch',
+    });
   });
 
   it('invalid report: completed with no report and a diagnostic', async () => {
@@ -645,11 +696,12 @@ describe('ClaudeCliExecutor — workspace-setup environment (feature 015)', () =
     expect(reposArg).toHaveLength(1);
     expect(reposArg[0]).toMatchObject({ name: 'api' });
     expect(runIdArg).toBe('a1b2c3d4-e5f6-7890');
-    // Feature 023: a ticketless setup run has no chain to continue — the
-    // system creates no branch, it only SUGGESTS setup/<runId8> to the agent.
+    // Feature 023: a ticketless setup run has no chain to continue.
     expect(optsArg.continueBranches).toEqual({});
     const wrapperText = await readFile(join(worktreeDir, '.brigadir', 'wrapper.txt'), 'utf8');
-    expect(wrapperText).toContain('create setup/a1b2c3d4');
+    // Feature 024 (US2): no system-suggested branch name for any run.
+    expect(wrapperText).not.toContain('create setup');
+    expect(wrapperText).not.toMatch(/— create /);
     // Cleanup rides the standard workspace path (keep flag falsy — success run).
     expect(cleanupMock).toHaveBeenCalledTimes(1);
     expect(cleanupMock.mock.calls[0][0]).toMatchObject({ parentDir: worktreeDir });

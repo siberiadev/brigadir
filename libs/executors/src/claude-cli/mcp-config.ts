@@ -15,6 +15,13 @@ export interface McpConfigInput {
   runToken: string;
   /** Absolute path to the built `packages/mcp-server/dist/main.js`. */
   mcpServerEntryPath: string;
+  /**
+   * Feature 024: map of repo name → absolute worktree dir for this run. The
+   * tool server reads it (`BRIGADIR_REPO_DIRS`) to observe each repo's HEAD at
+   * `complete_task` time (the completion gate). Absent/empty for no-repo runs
+   * ⇒ the env var is not written and the gate stays silent.
+   */
+  repoDirs?: Record<string, string>;
 }
 
 export interface WrittenMcpConfig {
@@ -40,6 +47,7 @@ export async function writeMcpConfig(input: McpConfigInput, configRoot: string):
   const markerPath = join(configRoot, `${input.runId}.marker`);
   const stopHookEntryPath = input.mcpServerEntryPath.replace(/main\.js$/, 'stop-hook.js');
 
+  const hasRepoDirs = input.repoDirs !== undefined && Object.keys(input.repoDirs).length > 0;
   const mcpConfig = {
     mcpServers: {
       brigadir: {
@@ -51,6 +59,9 @@ export async function writeMcpConfig(input: McpConfigInput, configRoot: string):
           // LITERAL value — never `${BRIGADIR_RUN_TOKEN}` (Constitution V, D1).
           BRIGADIR_RUN_TOKEN: input.runToken,
           BRIGADIR_MARKER_PATH: markerPath,
+          // Feature 024: worktree dirs for the completion gate's HEAD probe.
+          // Omitted entirely for no-repo runs so the gate stays silent there.
+          ...(hasRepoDirs ? { BRIGADIR_REPO_DIRS: JSON.stringify(input.repoDirs) } : {}),
         },
       },
     },

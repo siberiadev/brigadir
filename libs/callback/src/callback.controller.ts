@@ -3,6 +3,7 @@ import {
   ConflictException,
   Controller,
   Get,
+  Headers,
   HttpCode,
   Param,
   Post,
@@ -51,8 +52,14 @@ export class CallbackController {
 
   @Post('complete')
   @HttpCode(200)
-  async complete(@Param('runId') runId: string, @Body() body: unknown): Promise<unknown> {
-    const result = await this.callback.complete(runId, body);
+  async complete(
+    @Param('runId') runId: string,
+    @Body() body: unknown,
+    // Feature 024 (US3): observed worktree HEADs, attached by the tool server
+    // (never by the agent's tool input). Absent for non-repo/legacy callers.
+    @Headers('x-brigadir-observed-heads') observedHeads: string | undefined,
+  ): Promise<unknown> {
+    const result = await this.callback.complete(runId, body, observedHeads);
     if ('kind' in result) {
       if (result.kind === 'validation') {
         throw new UnprocessableEntityException({ ok: false, errors: result.errors });

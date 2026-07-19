@@ -5,13 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import {
-  prepareAll,
-  cleanupAll,
-  setupRunBranchIdentity,
-  WorktreePrepareError,
-  type WorktreeRepo,
-} from './worktree';
+import { prepareAll, cleanupAll, WorktreePrepareError, type WorktreeRepo } from './worktree';
 
 const execFileAsync = promisify(execFile);
 
@@ -95,7 +89,10 @@ describe('worktree prepareAll/cleanupAll (T080, feature 019 multi-repo; 023 deta
     const wt = result.repos[0];
     expect(wt.worktreeDir).toBe(join(result.parentDir, 'product'));
     expect(existsSync(join(wt.worktreeDir, 'README.md'))).toBe(true);
-    expect(wt.start).toEqual({ startRef: 'origin/main' });
+    expect(wt.start.startRef).toBe('origin/main');
+    expect(wt.start.continueBranch).toBeUndefined();
+    // Feature 024 (US3): the resolved start SHA is the gate's baseline.
+    expect(wt.start.startSha).toBe(await revParse(wt.worktreeDir, 'HEAD'));
 
     expect(await isDetached(wt.worktreeDir)).toBe(true);
     expect(await revParse(wt.worktreeDir, 'HEAD')).toBe(await revParse(wt.cacheDir, 'origin/main'));
@@ -131,7 +128,11 @@ describe('worktree prepareAll/cleanupAll (T080, feature 019 multi-repo; 023 deta
 
     const second = await prep([repo], 'run-2', { continueBranches: { product: 'run/BRIG-7' } });
     const wt = second.repos[0];
-    expect(wt.start).toEqual({ startRef: 'origin/run/BRIG-7', continueBranch: 'run/BRIG-7' });
+    expect(wt.start.startRef).toBe('origin/run/BRIG-7');
+    expect(wt.start.continueBranch).toBe('run/BRIG-7');
+    // Feature 024 (US3): startSha is the tip of the continued branch.
+    expect(wt.start.startSha).toBe(await revParse(wt.worktreeDir, 'HEAD'));
+    expect(wt.start.startSha).toBe(await revParse(wt.cacheDir, 'origin/run/BRIG-7'));
     expect(await isDetached(wt.worktreeDir)).toBe(true);
     expect(existsSync(join(wt.worktreeDir, 'work.txt'))).toBe(true);
   });
@@ -265,7 +266,9 @@ describe('worktree prepareAll/cleanupAll (T080, feature 019 multi-repo; 023 deta
         join(worktreeRoot, 'run-m1', 'infra'),
       ]);
       for (const r of result.repos) {
-        expect(r.start).toEqual({ startRef: 'origin/main' });
+        expect(r.start.startRef).toBe('origin/main');
+        expect(r.start.continueBranch).toBeUndefined();
+        expect(r.start.startSha).toBe(await revParse(r.worktreeDir, 'HEAD'));
         expect(await isDetached(r.worktreeDir)).toBe(true);
       }
       // Independent caches, one per repo name.
@@ -286,7 +289,8 @@ describe('worktree prepareAll/cleanupAll (T080, feature 019 multi-repo; 023 deta
       });
       expect(next.repos[0].start.continueBranch).toBe('run/BRIG-24');
       expect(existsSync(join(next.repos[0].worktreeDir, 'work.txt'))).toBe(true);
-      expect(next.repos[1].start).toEqual({ startRef: 'origin/main' });
+      expect(next.repos[1].start.startRef).toBe('origin/main');
+      expect(next.repos[1].start.continueBranch).toBeUndefined();
     });
 
     it('partial failure unwinds already-created worktrees and removes the parent dir (SC-006)', async () => {
@@ -322,22 +326,7 @@ describe('worktree prepareAll/cleanupAll (T080, feature 019 multi-repo; 023 deta
   });
 });
 
-/**
- * Feature 015 (FR-020): a ticketless workspace-setup run identifies itself as
- * `setup/<first 8 chars of run id>`. Since feature 023 that is the name
- * SUGGESTED to the agent in the wrapper — the system creates no branch.
- */
-describe('setupRunBranchIdentity (feature 015)', () => {
-  it('derives setup/<runId8> from the run id', () => {
-    const id = setupRunBranchIdentity('a1b2c3d4-e5f6-7890-abcd-ef0123456789');
-    expect(id).toEqual({ branchPrefix: 'setup', ticketKey: 'a1b2c3d4' });
-    expect(`${id.branchPrefix}/${id.ticketKey}`).toBe('setup/a1b2c3d4');
-  });
-
-  it('is deterministic and collision-free across distinct run ids', () => {
-    const a = setupRunBranchIdentity('aaaaaaaa-1111');
-    const b = setupRunBranchIdentity('bbbbbbbb-2222');
-    expect(a).toEqual(setupRunBranchIdentity('aaaaaaaa-1111'));
-    expect(a.ticketKey).not.toBe(b.ticketKey);
-  });
-});
+// Feature 024 (US2): `setupRunBranchIdentity` was deleted — the wrapper no
+// longer suggests a branch name to any run, setup runs included. Its removal
+// is covered by the executor wrapper-text assertions (no `create …` line) and
+// the grep sweep in the tasks list.

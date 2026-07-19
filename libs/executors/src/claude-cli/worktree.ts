@@ -21,6 +21,12 @@ export interface RepoStart {
   /** The commit-ish the worktree is detached at. */
   startRef: string;
   /**
+   * The concrete commit `startRef` resolved to in the fresh worktree (feature
+   * 024). The completion gate's baseline: a worktree HEAD that has moved past
+   * this SHA is unreported work if the report names no branch for the repo.
+   */
+  startSha: string;
+  /**
    * Branch a previous stage on this ticket reported, verified present on
    * origin. Absent ⇒ this repo starts from its default branch.
    */
@@ -54,19 +60,6 @@ export class WorktreePrepareError extends Error {
     super(message);
     this.name = 'WorktreePrepareError';
   }
-}
-
-/**
- * Branch identity of a TICKETLESS workspace-setup run (feature 015, FR-020):
- * `setup/<first 8 chars of run id>`. Deterministic and collision-free (run ids
- * are unique; every resume creates a NEW setup run per feature 011).
- *
- * Since feature 023 this is a SUGGESTED name offered to the agent in the
- * wrapper, not a branch the system creates — the leftover policy it used to
- * fall under no longer exists. A setup run still never pushes (spec FR-015).
- */
-export function setupRunBranchIdentity(runId: string): { branchPrefix: string; ticketKey: string } {
-  return { branchPrefix: 'setup', ticketKey: runId.slice(0, 8) };
 }
 
 /**
@@ -206,7 +199,8 @@ async function addRepoWorktree(
   worktreeDir: string,
   continueBranch: string | undefined,
 ): Promise<RepoStart> {
-  let start: RepoStart = { startRef: `origin/${repo.defaultBranch}` };
+  let startRef = `origin/${repo.defaultBranch}`;
+  let matchedContinue: string | undefined;
   if (continueBranch !== undefined) {
     await assertSafeBranchName(continueBranch);
     if (!(await remoteBranchExists(cacheDir, continueBranch))) {
@@ -215,17 +209,19 @@ async function addRepoWorktree(
           `push it or clear the stale report, then retry`,
       );
     }
-    start = { startRef: `origin/${continueBranch}`, continueBranch };
+    startRef = `origin/${continueBranch}`;
+    matchedContinue = continueBranch;
   }
   try {
-    await git(['worktree', 'add', '--detach', worktreeDir, start.startRef], cacheDir);
+    await git(['worktree', 'add', '--detach', worktreeDir, startRef], cacheDir);
   } catch (err) {
     if (err instanceof WorktreePrepareError) throw err;
-    throw new WorktreePrepareError(
-      `cannot create worktree at "${start.startRef}": ${(err as Error).message}`,
-    );
+    throw new WorktreePrepareError(`cannot create worktree at "${startRef}": ${(err as Error).message}`);
   }
-  return start;
+  // Feature 024: pin the concrete commit the worktree started at — the gate's
+  // baseline. Resolved in the worktree itself (== startRef, but as a SHA).
+  const startSha = (await git(['rev-parse', 'HEAD'], worktreeDir)).trim();
+  return { startRef, startSha, continueBranch: matchedContinue };
 }
 
 /**

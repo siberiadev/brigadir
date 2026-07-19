@@ -31,7 +31,6 @@ import { ClaudeStreamParser, type TerminalResult } from './stream-parser';
 import {
   prepareAll,
   cleanupAll,
-  setupRunBranchIdentity,
   type WorktreeRepo,
   type MultiPrepareResult,
 } from './worktree';
@@ -180,7 +179,6 @@ export class ClaudeCliExecutor implements AgentExecutor {
       runtimeConfig,
       repos,
       excludedRepos,
-      branchPrefix,
       workspaceId,
       ticketId,
       preferRunId,
@@ -195,7 +193,6 @@ export class ClaudeCliExecutor implements AgentExecutor {
     // no-repo runs. `workspace` stays null exactly for the scratch case.
     let workspaceDir: string;
     let workspace: MultiPrepareResult | null = null;
-    let suggestedBranch: string | undefined;
     if (noRepo) {
       // feature 010 (FR-018, Constitution V): a no-repository run (the
       // orchestrator's triage) runs from a scratch temp dir — no clone, no
@@ -208,17 +205,12 @@ export class ClaudeCliExecutor implements AgentExecutor {
       }
       // No `worktree_path` persisted — there is no repository worktree to inspect.
     } else {
-      // The system no longer creates branches (feature 023) — it only picks the
-      // commit each repo starts from and SUGGESTS a name for the agent to
-      // create. A ticketless repo run is a config error EXCEPT for
-      // workspace-setup runs (feature 015, FR-020): those are ticketless by
-      // design and suggest `setup/<runId8>` (never pushed — spec FR-015).
-      if (ctx.ticket) {
-        suggestedBranch = `${branchPrefix}/${ctx.ticket.key}`;
-      } else if (setupRun) {
-        const identity = setupRunBranchIdentity(ctx.runId);
-        suggestedBranch = `${identity.branchPrefix}/${identity.ticketKey}`;
-      } else {
+      // The system no longer creates OR names branches (feature 023 + 024) —
+      // it only picks the commit each repo starts from; the agent creates and
+      // reports its own branch. A repo run must be ticket-bound OR a
+      // workspace-setup run (feature 015, FR-020, ticketless by design); any
+      // other ticketless repo run is a config error.
+      if (!ctx.ticket && !setupRun) {
         return {
           exitStatus: 'crashed',
           diagnostics: 'ticketless run requires a no-repository agent (workspace_mode: none)',
@@ -231,17 +223,18 @@ export class ClaudeCliExecutor implements AgentExecutor {
         // false-success mode this feature exists to prevent. Setup runs are
         // ticketless — there is no chain to continue.
         let continueBranches: Record<string, string> = {};
+        let prior: PriorWork | undefined;
+        let matched: BranchMatch = { continueBranches: {}, unmatched: [] };
         if (ctx.ticket && ticketId) {
-          const prior = await getPriorWork(this.db, {
+          prior = await getPriorWork(this.db, {
             ticketId,
             currentRunId: ctx.runId,
             preferRunId,
           });
-          const matched = prior
+          matched = prior
             ? matchReportedBranches(prior.entries, repos)
             : { continueBranches: {}, unmatched: [] };
           continueBranches = matched.continueBranches;
-          await this.recordStartRefEvent(ctx.runId, repos, prior, matched);
         }
         workspace = await prepareAll(
           repos,
@@ -250,6 +243,13 @@ export class ClaudeCliExecutor implements AgentExecutor {
           runtimeConfig.repoCacheRoot,
           { continueBranches },
         );
+        // Feature 024: record start-ref events AFTER prepare, so each carries
+        // the resolved startSha (the gate baseline). A prepare that throws
+        // above writes no rows — such a run fails loudly before an agent
+        // starts and hands nothing off.
+        if (ctx.ticket && ticketId) {
+          await this.recordStartRefEvent(ctx.runId, workspace.repos, prior, matched);
+        }
       } catch (err) {
         return { exitStatus: 'crashed', diagnostics: err instanceof Error ? err.message : String(err) };
       }
@@ -272,6 +272,11 @@ export class ClaudeCliExecutor implements AgentExecutor {
             callbackUrl: ctx.callback.httpBaseUrl,
             runToken: ctx.callback.runToken,
             mcpServerEntryPath: this.resolveMcpServerEntryPath(),
+            // Feature 024: the gate observes these worktrees' HEADs at
+            // complete_task. Empty for no-repo runs (workspace is null).
+            repoDirs: Object.fromEntries(
+              (workspace?.repos ?? []).map((r) => [r.repo.name, r.worktreeDir]),
+            ),
           },
           defaultMcpConfigRoot(tmpdir()),
         );
@@ -294,7 +299,6 @@ export class ClaudeCliExecutor implements AgentExecutor {
             absPath: r.worktreeDir,
             defaultBranch: r.repo.defaultBranch,
             continueBranch: r.start.continueBranch,
-            suggestedBranch,
           })),
           // Feature 020 (D4): non-empty only for ticket-narrowed runs.
           onDemandRepos: excludedRepos.map((r) => ({ name: r.name, url: r.url })),
@@ -560,7 +564,6 @@ export class ClaudeCliExecutor implements AgentExecutor {
     repos: WorktreeRepo[];
     /** Feature 020 (D4): base-set repos excluded by ticket-component narrowing — wrapper escape hatch. */
     excludedRepos: WorktreeRepo[];
-    branchPrefix: string;
     workspaceId: string;
     /** Feature 023: anchors the "prior work on this ticket" lookup. Null for ticketless runs. */
     ticketId: string | null;
@@ -604,7 +607,6 @@ export class ClaudeCliExecutor implements AgentExecutor {
     let executorSecrets = row.executorSecrets;
     let behavior = (row.behavior ?? {}) as {
       allowed_tools?: string[];
-      branch_prefix?: string;
       repository?: string;
       repositories?: string[];
       workspace_mode?: string;
@@ -733,9 +735,6 @@ export class ClaudeCliExecutor implements AgentExecutor {
       runtimeConfig,
       repos,
       excludedRepos,
-      // Feature 023: no longer a git instruction — the name SUGGESTED to the
-      // agent in the wrapper when it has no prior branch to continue.
-      branchPrefix: behavior.branch_prefix ?? 'run',
       workspaceId: row.workspaceId,
       ticketId: row.ticketId,
       preferRunId: (row.triggerEvent as { failing_run_id?: string } | null)?.failing_run_id,
@@ -848,12 +847,12 @@ export class ClaudeCliExecutor implements AgentExecutor {
    */
   private async recordStartRefEvent(
     runId: string,
-    repos: WorktreeRepo[],
+    repos: MultiPrepareResult['repos'],
     prior: PriorWork | undefined,
     matched: BranchMatch,
   ): Promise<void> {
-    const rows = repos.map((repo) => {
-      const continueBranch = matched.continueBranches[repo.name];
+    const rows = repos.map(({ repo, start }) => {
+      const continueBranch = start.continueBranch;
       const decision = continueBranch ? 'report_confirmed' : 'default_branch';
       const message = continueBranch
         ? `${repo.name}: continuing branch ${continueBranch}, reported by run ${prior?.runId}`
@@ -867,6 +866,8 @@ export class ClaudeCliExecutor implements AgentExecutor {
           repo: repo.name,
           decision,
           continueBranch: continueBranch ?? null,
+          // Feature 024: the resolved commit — the completion gate's baseline.
+          startSha: start.startSha,
           reportedByRunId: prior?.runId ?? null,
           unmatchedReportedRepos: matched.unmatched,
         },
