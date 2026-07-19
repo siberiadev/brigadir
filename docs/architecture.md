@@ -338,7 +338,7 @@ CREATE TABLE webhook_events (
 -- Phase 3+: users, workspace_members, api_keys, audit_log, runner_nodes
 ```
 
-Redis — только очереди BullMQ (`queue:claude_cli`, `queue:anthropic_api`, `queue:deepseek_api`, `queue:claude_routines`, `queue:reconcile`) + флаги отмены `run:{id}:cancelled`. Per-issue write queue Jira — in-process (`p-queue` по issue key), не BullMQ: OSS-версия per-key сериализацию из коробки не даёт.
+Redis — только очереди BullMQ (`run.<type>` из `RUN_QUEUE_EXECUTOR_TYPES` через `runQueueName`: сейчас `run.mock`, `run.claude_cli`, `run.kimi`; + `reconcile`) + флаги отмены `run:{id}:cancelled`. Per-issue write queue Jira — in-process (`p-queue` по issue key), не BullMQ: OSS-версия per-key сериализацию из коробки не даёт.
 
 ---
 
@@ -372,7 +372,7 @@ export interface ExecutorResult {
 }
 
 export interface AgentExecutor {
-  readonly type: 'claude_cli' | 'anthropic_api' | 'deepseek_api' | 'claude_routines';
+  readonly type: 'claude_cli' | 'kimi' | 'anthropic_api' | 'deepseek_api' | 'claude_routines';
   /** Полный жизненный цикл одного прогона. Резолвится по завершении процесса/сессии. */
   run(ctx: RunContext, signal: AbortSignal): Promise<ExecutorResult>;
   /** Проверка конфигурации (auth жив, CLI установлен, routine отвечает). */
@@ -382,14 +382,16 @@ export interface AgentExecutor {
 
 ### Реализации
 
-| | `claude_cli` | `anthropic_api` | `deepseek_api` | `claude_routines` |
-|---|---|---|---|---|
-| Механика | `spawn('claude', ['-p', ...])`, `detached: true`, kill process group | Agent SDK `query()` in-process | Agent SDK c `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic` (план A; спайк Phase 2: endpoint не поддерживает `cache_control`, который шлёт SDK — проверить, деградирует ли молча на автокэш DeepSeek или падает) или свой OpenAI-loop (план B) | `POST /v1/claude_code/routines/{id}/fire` |
-| Auth | Подписка пользователя (login/`setup-token`); **легально только на машине пользователя** | `ANTHROPIC_API_KEY` (BYOK) | DeepSeek API key (BYOK) | Per-routine fire token |
-| Structured report | MCP stdio `complete_task` + `--json-schema` как fallback | In-process SDK MCP `complete_task` + `outputFormat` fallback | Forced tool call `complete_task` + repair-loop | HTTP callback `complete_task` (URL+токен в тексте триггера/промпте routine) |
-| Rate-limit сигнал | stream-json `system/api_retry {error:"rate_limit"}` | SDK message stream / 429 headers | 429 (конкурентность) | 429 + `Retry-After` на `/fire` |
-| Результат процесса | exit + result JSON | `SDKResultMessage` | финальный message | **fire-and-forget**: завершение = только callback или таймаут |
-| Особенности | `--strict-mcp-config`, env-санация (API-ключ перебивает подписку!) | `permissionMode:'dontAsk'`, `allowedTools` | policy-деградация: no-vision routing, недоверие self-report, строгие tool-схемы (beta strict) | обязателен заголовок `anthropic-beta: experimental-cc-routine-2026-04-01`; `text` ≤ 65 536; дедуп на нашей стороне (нет idempotency key); нет отмены; watchdog-таймаут; **привязка к личному аккаунту claude.ai** — действия в Jira/git от имени владельца routine, дневной cap на запуски |
+Статус: `mock`, `claude_cli` и `kimi` — реализованы; `anthropic_api` / `deepseek_api` / `claude_routines` — план.
+
+| | `claude_cli` | `kimi` (feature 025) | `anthropic_api` | `deepseek_api` | `claude_routines` |
+|---|---|---|---|---|---|
+| Механика | `spawn('claude', ['-p', ...])`, `detached: true`, kill process group | ТОТ ЖЕ Claude CLI harness, параметризованный provider-пресетом: `ANTHROPIC_BASE_URL=https://api.moonshot.ai/anthropic` (хардкод-константа, замаплена на тип; НЕ конфигурируется оператором, нигде не хранится и не отдаётся API/UI) | Agent SDK `query()` in-process | Agent SDK c `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic` (план A; спайк Phase 2: endpoint не поддерживает `cache_control`, который шлёт SDK — проверить, деградирует ли молча на автокэш DeepSeek или падает) или свой OpenAI-loop (план B) | `POST /v1/claude_code/routines/{id}/fire` |
+| Auth | Подписка пользователя (login/`setup-token`); **легально только на машине пользователя** | Moonshot API key (BYOK), неявно api_key-only: нет auth-селектора, нет host_subscription/bedrock. Ключ — write-only, sealed (AES-256-GCM), инжектится `ANTHROPIC_API_KEY` из профиля ПОСЛЕ allowlist; профиль без ключа не создать/не сохранить и он падает fail-fast на прогоне | `ANTHROPIC_API_KEY` (BYOK) | DeepSeek API key (BYOK) | Per-routine fire token |
+| Structured report | MCP stdio `complete_task` + `--json-schema` как fallback | как `claude_cli` (тот же harness: brigadir-mcp + Stop hook) | In-process SDK MCP `complete_task` + `outputFormat` fallback | Forced tool call `complete_task` + repair-loop | HTTP callback `complete_task` (URL+токен в тексте триггера/промпте routine) |
+| Rate-limit сигнал | stream-json `system/api_retry {error:"rate_limit"}` | как `claude_cli` (формат стрима не меняется — бинарь тот же) | SDK message stream / 429 headers | 429 (конкурентность) | 429 + `Retry-After` на `/fire` |
+| Результат процесса | exit + result JSON | как `claude_cli` | `SDKResultMessage` | финальный message | **fire-and-forget**: завершение = только callback или таймаут |
+| Особенности | `--strict-mcp-config`, env-санация (API-ключ перебивает подписку!) | first-class тип (иммутабельный `runs.executor_type = 'kimi'`, своя очередь `run.kimi`) — имя = провайдер, не транспорт, так что harness можно позже сменить на нативный kimi-cli без миграции истории/аналитики. `ANTHROPIC_BASE_URL` НИКОГДА не в allowlist (host-значение не утечёт ни в один прогон). `cost_usd` **индикативен**: CLI считает по прайс-листу Anthropic, не Moonshot — помечается в UI (маркер `~` на стоимости kimi-прогона) и здесь; пересчёт по ценам Moonshot — вне scope | `permissionMode:'dontAsk'`, `allowedTools` | policy-деградация: no-vision routing, недоверие self-report, строгие tool-схемы (beta strict) | обязателен заголовок `anthropic-beta: experimental-cc-routine-2026-04-01`; `text` ≤ 65 536; дедуп на нашей стороне (нет idempotency key); нет отмены; watchdog-таймаут; **привязка к личному аккаунту claude.ai** — действия в Jira/git от имени владельца routine, дневной cap на запуски |
 
 Примечание к `claude_routines`: поскольку `/fire` принимает только текст, callback URL + run-токен вшиваются в текст триггера (`{"text": "ticket=BRIG-123 callback=https://... token=..."}`), а сохранённый промпт routine инструктирует репортить результат POST'ом. Это самый слабый канал — поэтому для Routines обязателен watchdog: нет callback'а за `timeout_minutes` → `failed`, тикет в Blocked, human task. `healthCheck()` для Routines не может проверить «routine отвечает» (read-API нет, а `/fire` создаёт реальную сессию) — только наличие/формат токена и давность последнего успешного fire. Cancel облачной сессии невозможен: run помечается `cancelled` локально, поздний `complete`-callback отсекается по статусу (409).
 

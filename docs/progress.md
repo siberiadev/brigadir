@@ -1677,3 +1677,76 @@ baseline 353; mcp-server 17). **`pnpm test:integration` НЕ запускалс�
 `dependency-gate`, `sprint-sequencing`, флейк `callback-completion`) — они старше 023.
 Напоминание оператору: пересборка `dist/` не влияет на уже запущенный node-процесс —
 после деплоя рестартовать worker и backend.
+
+## Iteration 33 — First-class `kimi` executor type (Moonshot AI backend, feature 025, 2026-07-19)
+
+Второй модель-провайдер для pipeline-агентов: модели Moonshot Kimi (`kimi-k3`,
+варианты `kimi-k2.7`) как альтернатива Anthropic. Moonshot отдаёт Anthropic-
+совместимый endpoint (`https://api.moonshot.ai/anthropic`), который Claude Code CLI
+поддерживает нативно через `ANTHROPIC_BASE_URL` + `ANTHROPIC_API_KEY` — правок CLI не
+нужно. Реализация: НЕ новый адаптер, а существующий боевой Claude CLI harness
+(`libs/executors/src/claude-cli/`), параметризованный provider-пресетом.
+
+**Почему first-class тип, а не поле `provider` в конфиге claude_cli.** Атрибуция
+провайдера обязана жить на денормализованной иммутабельной колонке
+`runs.executor_type` (`WHERE executor_type = 'kimi'` для аналитики, правка профиля не
+переатрибутирует историю). Поле в мутабельном `executors.config` jsonb тихо
+переписало бы историю прогонов при редактировании профиля. Нативный `kimi-cli` тоже
+отвергнут (нестабильный stream-формат, `config.toml`-генератор вместо env-кредов, нет
+Stop-hook аналога для enforcement отчёта) — возможен позже ПОД ТЕМ ЖЕ именем типа: имя
+= провайдер, транспорт — деталь реализации.
+
+**Форма реализации (решения, не открытые вопросы).**
+- `ClaudeCliExecutor` параметризован конструкторным provider-пресетом
+  `{ type, anthropicBaseUrl? }`; `readonly type` берётся из пресета. Две DI-инстанции
+  ОДНОГО класса под токеном `AGENT_EXECUTORS`: bare class-provider = `claude_cli`
+  (пресет отсутствует → `@Optional` дефолт, поведение байт-в-байт как до 025); вторая
+  инстанция под приватным токеном `KIMI_EXECUTOR` через `useFactory` с Moonshot-
+  пресетом. `ExecutorRegistry` резолвит по `type` — правок реестра нет.
+- Инъекция endpoint'а — чистая `applyProviderEnv(env, preset)` рядом с `applyAuthEnv`,
+  строго ПОСЛЕ `buildChildEnv` (allowlist) и после `applyAuthEnv`. Для claude_cli-
+  пресета — no-op (env байт-идентичен). `ANTHROPIC_BASE_URL` НИКОГДА не в allowlist:
+  host-значение не пройдёт `buildChildEnv` ни для одного типа.
+- Auth для kimi неявно api_key-only: в `loadRunConfig` kimi-пресет резолвит
+  `{mode:'api_key'}` безусловно и требует sealed-секрет — профиль без ключа падает
+  fail-fast штатным failed-путём. Нет auth-селектора, нет host_subscription/bedrock.
+- Второй worker-процессор `KimiRunProcessor extends ClaudeCliRunProcessor`, привязан к
+  `@Processor(run.kimi)`; общий базовый класс получил `protected executorType`
+  (значение claude_cli не изменилось), питающий concurrency-bootstrap/re-apply. Вся
+  финализация, гварды правила 7, gate — наследуются verbatim.
+- Контракты: `'kimi'` в оба списка `EXECUTOR_TYPES` (interface + contracts) и в
+  `RUN_QUEUE_EXECUTOR_TYPES` (провижн `run.kimi` через `QueuesModule`, правок модуля
+  очередей нет); `KimiExecutorConfigSchema` (stored camelCase, strict, без auth/aws) в
+  union; `KimiExecutorApiConfigSchema` (snake_case, strict, write-only api_key) в
+  create-union с рефайнментом «kimi requires an api_key on create» + update-union;
+  claude_cli cross-field superRefine-проверки (`repository`, allowedTools) расширены на
+  kimi. **Миграций БД нет** (тип — text, config — jsonb; прецедент bedrock 018).
+- Backend: маппера `executors.controller` (`toInsertValues`/`toExecutorResponse`,
+  `sealApiKey`, update-правило «must end with a key») покрывают `kimi`; для kimi не
+  вычисляется `auth`, нигде нет endpoint-поля. **Seed профиля kimi НЕ добавляется**
+  (уточнение 2026-07-19): создание только вручную через форму/API, чтобы инвариант
+  «ключ обязателен» оставался безусловным.
+- Web: `kimi` в селекторе типа `ExecutorForm`; общий с claude_cli набор harness-полей
+  через `isCliHarness`; НЕТ auth-селектора, AWS-полей, URL-поля; ключ обязателен на
+  create (клиентский гвард), заменяем, но не очищаем (keyless kimi невозможен).
+  `cost_usd` kimi-прогонов помечен индикативным маркером `~` с тултипом в `RunCard` и
+  таблице `Runs` (CLI считает по прайсу Anthropic, не Moonshot; пересчёт — вне scope).
+
+**Тесты (правило 4, в той же итерации).** Юниты: `applyProviderEnv`-матрица (kimi ⇒
+Moonshot-константа; claude_cli ⇒ ключ отсутствует; чистота; host не утекает); реестр/
+модуль (обе инстанции, resolve('kimi')); claude_cli env байт-идентичен на всех auth-
+модах (регрессия SC-002); allowlist-floor lock (негативный пин через `buildChildEnv`);
+контрактные accept/reject матрицы kimi (schema + agents-config). Web: набор полей формы
+kimi/валидация/форма запроса/no-clear; индикативный маркер в RunCard. Интеграционные
+(testcontainers + fake-claude): `kimi-run` (e2e env-dump, паритет rate-limit/no-report/
+keyless, claude_cli-компаньон без base URL, иммутабельная атрибуция), `kimi-security`
+(polluted host-shell + argv), `kimi-executor-crud` (API-матрица ошибок), `kimi-gate`
+(type capacity + per-profile limit).
+
+**Гейты.** `pnpm typecheck && pnpm lint && pnpm test` — зелёные (unit 387, +4 к baseline
+383; contracts/mcp/admin отдельными проектами зелёные; web 266, +8). **`pnpm
+test:integration` НЕ запускался** — в облачной сессии нет Docker-демона (прецедент
+итераций 29/32); 4 новых kimi-интеграционных сьюта написаны, выполняются на стенде
+оператора. Пред­существующие интеграционные фейлы старше 025 — вне скоупа. Напоминание:
+пересборка `dist/` не влияет на запущенный node-процесс — после деплоя рестартовать
+worker и backend; для admin-MCP также нужен `pnpm --filter @brigadir/admin-mcp build`.
