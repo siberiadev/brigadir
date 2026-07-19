@@ -112,9 +112,9 @@ Monorepo per plan.md: `libs/executors/`, `packages/contracts/`, `libs/queues/` (
 
 **Independent Test**: Open form → select kimi → verify visible fields and absences; save without key rejected; run views show indicative marker for kimi cost.
 
-- [ ] T026 [US5] Add `kimi` option to the type selector (`data-test="executor-type"`, lines 152–157) and a kimi conditional field block (model, api_key, max_parallel_runs, cli_path, use_callback_channel, keep_failed_worktrees, max_turns; NO url field, NO auth selector `data-test="executor-auth"`, NO aws fields) with key-required-on-create form validation, extending `buildRequest()` (lines 83–121) in `apps/web/src/components/ExecutorForm/ExecutorForm.vue`
-- [ ] T027 [P] [US5] Indicative-cost marker (tooltip/суффикс «indicative», styled via `var(--el-color-*)` only, lucide icon static per UI conventions) when `executor_type === 'kimi'` in `apps/web/src/views/RunCard.vue` (`meta-cost`, ~line 197) and the cost column of `apps/web/src/views/Runs.vue` (~line 193)
-- [ ] T028 [P] [US5] Component/unit tests for the kimi form branch (visible/hidden fields, key-required validation, request payload shape) alongside existing ExecutorForm tests in `apps/web/src/components/ExecutorForm/` (UI story — lighter coverage permitted, but form→request mapping feeds the pipeline contract, so payload shape is asserted)
+- [X] T026 [US5] Add `kimi` option to the type selector (`data-test="executor-type"`, lines 152–157) and a kimi conditional field block (model, api_key, max_parallel_runs, cli_path, use_callback_channel, keep_failed_worktrees, max_turns; NO url field, NO auth selector `data-test="executor-auth"`, NO aws fields) with key-required-on-create form validation, extending `buildRequest()` (lines 83–121) in `apps/web/src/components/ExecutorForm/ExecutorForm.vue`
+- [X] T027 [P] [US5] Indicative-cost marker (tooltip/суффикс «indicative», styled via `var(--el-color-*)` only, lucide icon static per UI conventions) when `executor_type === 'kimi'` in `apps/web/src/views/RunCard.vue` (`meta-cost`, ~line 197) and the cost column of `apps/web/src/views/Runs.vue` (~line 193)
+- [X] T028 [P] [US5] Component/unit tests for the kimi form branch (visible/hidden fields, key-required validation, request payload shape) alongside existing ExecutorForm tests in `apps/web/src/components/ExecutorForm/` (UI story — lighter coverage permitted, but form→request mapping feeds the pipeline contract, so payload shape is asserted)
 
 **Checkpoint**: Story 5 acceptance scenarios + FR-013/FR-014 UI half satisfied.
 

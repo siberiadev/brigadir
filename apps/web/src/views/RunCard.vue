@@ -109,6 +109,12 @@ const executorLabel = computed(() => {
   return executorModel.value ? `${type} · ${executorModel.value}` : type;
 });
 
+// Feature 025: kimi runs report cost priced against Anthropic's list, not
+// Moonshot's — the figure is indicative only, so flag it wherever it shows.
+const costIsIndicative = computed(() => run.value?.executor_type === 'kimi');
+const INDICATIVE_COST_TIP =
+  'Indicative only — kimi runs are priced against Anthropic’s list, not Moonshot’s.';
+
 // Live Duration while running: tick from `started_at` every second; otherwise
 // the server-computed `duration_ms` (same rule as the Runs table).
 const now = useNow();
@@ -195,6 +201,10 @@ const liveDuration = computed(() => {
       <span class="meta-item" title="Cost" data-test="meta-cost">
         <CircleDollarSign :size="13" />
         {{ formatCost(run.cost_usd) ?? '—' }}
+        <!-- kimi cost is priced against Anthropic's list — mark it indicative -->
+        <el-tooltip v-if="costIsIndicative" :content="INDICATIVE_COST_TIP" placement="top">
+          <sup class="indicative-mark" data-test="cost-indicative">~</sup>
+        </el-tooltip>
       </span>
     </div>
 
@@ -354,6 +364,11 @@ const liveDuration = computed(() => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+.indicative-mark {
+  color: var(--el-color-warning);
+  font-weight: $font-weight-medium;
+  cursor: help;
 }
 .content-tabs {
   margin-top: $space-sm;
