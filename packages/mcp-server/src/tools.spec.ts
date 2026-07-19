@@ -182,6 +182,67 @@ describe('createToolHandlers (T095)', () => {
     expect(capturedAuth).toBe('Bearer server-side-token');
   });
 
+  // --- feature 024 (US3): completion gate — observed HEADs header ---
+
+  it('complete_task attaches x-brigadir-observed-heads from the configured repo dirs', async () => {
+    const markerPath = await setup();
+    let capturedHeader: string | undefined;
+    const handlers = createToolHandlers({
+      callbackUrl: 'http://callback.test/api/callbacks',
+      runId: 'run-1',
+      runToken: 'tok',
+      markerPath,
+      repoDirs: { product: '/wt/product', infra: '/wt/infra' },
+      gitHeadResolver: async (dir) =>
+        dir === '/wt/product' ? 'a'.repeat(40) : 'b'.repeat(40),
+      fetchImpl: async (_url, init) => {
+        capturedHeader = (init?.headers as Record<string, string>)['x-brigadir-observed-heads'];
+        return jsonResponse(200, { ok: true, outcome: 'success' });
+      },
+    });
+
+    await handlers.complete_task({ schema_version: 1, outcome: 'success', summary: 's', checks: [] });
+    expect(JSON.parse(capturedHeader!)).toEqual({ product: 'a'.repeat(40), infra: 'b'.repeat(40) });
+  });
+
+  it('complete_task omits a repo whose rev-parse fails (evidence observed, never fabricated)', async () => {
+    const markerPath = await setup();
+    let capturedHeader: string | undefined;
+    const handlers = createToolHandlers({
+      callbackUrl: 'http://callback.test/api/callbacks',
+      runId: 'run-1',
+      runToken: 'tok',
+      markerPath,
+      repoDirs: { product: '/wt/product', gone: '/wt/gone' },
+      gitHeadResolver: async (dir) => (dir === '/wt/product' ? 'a'.repeat(40) : null),
+      fetchImpl: async (_url, init) => {
+        capturedHeader = (init?.headers as Record<string, string>)['x-brigadir-observed-heads'];
+        return jsonResponse(200, { ok: true });
+      },
+    });
+
+    await handlers.complete_task({ schema_version: 1, outcome: 'success', summary: 's', checks: [] });
+    expect(JSON.parse(capturedHeader!)).toEqual({ product: 'a'.repeat(40) });
+  });
+
+  it('complete_task sends no observed-heads header when no repo dirs are configured', async () => {
+    const markerPath = await setup();
+    let headerPresent = true;
+    const handlers = createToolHandlers({
+      callbackUrl: 'http://callback.test/api/callbacks',
+      runId: 'run-1',
+      runToken: 'tok',
+      markerPath,
+      fetchImpl: async (_url, init) => {
+        headerPresent = 'x-brigadir-observed-heads' in (init?.headers as Record<string, string>);
+        return jsonResponse(200, { ok: true });
+      },
+    });
+
+    await handlers.complete_task({ schema_version: 1, outcome: 'success', summary: 's', checks: [] });
+    expect(headerPresent).toBe(false);
+  });
+
   // --- feature 011: read-only Jira tools ---
 
   it('get_project_overview GETs the overview endpoint and never touches the marker', async () => {

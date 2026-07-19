@@ -76,6 +76,31 @@ describe('writeMcpConfig (T103, D1/D8)', () => {
     await expect(stat(written.markerPath)).rejects.toThrow();
   });
 
+  // Feature 024 (US3): BRIGADIR_REPO_DIRS carries the run's worktree dirs so
+  // the tool server can observe each repo's HEAD at complete_task.
+  it('writes BRIGADIR_REPO_DIRS as a JSON repo→dir map for repo runs', async () => {
+    root = await mkdtemp(join(tmpdir(), 'brigadir-mcp-config-test-'));
+    const repoDirs = { product: '/wt/run-1/product', infra: '/wt/run-1/infra' };
+    const written = await writeMcpConfig(
+      { runId: 'run-1', callbackUrl: 'http://x', runToken: 't', mcpServerEntryPath: '/x/main.js', repoDirs },
+      root,
+    );
+    const env = JSON.parse(await readFile(written.configPath, 'utf8')).mcpServers.brigadir.env;
+    expect(JSON.parse(env.BRIGADIR_REPO_DIRS)).toEqual(repoDirs);
+  });
+
+  it('omits BRIGADIR_REPO_DIRS entirely for no-repo runs (absent or empty map)', async () => {
+    root = await mkdtemp(join(tmpdir(), 'brigadir-mcp-config-test-'));
+    for (const repoDirs of [undefined, {}]) {
+      const written = await writeMcpConfig(
+        { runId: 'run-1', callbackUrl: 'http://x', runToken: 't', mcpServerEntryPath: '/x/main.js', repoDirs },
+        root,
+      );
+      const env = JSON.parse(await readFile(written.configPath, 'utf8')).mcpServers.brigadir.env;
+      expect(env).not.toHaveProperty('BRIGADIR_REPO_DIRS');
+    }
+  });
+
   it('defaultMcpConfigRoot nests under brigadir/mcp-config of the given base', () => {
     expect(defaultMcpConfigRoot('/tmp')).toBe(join('/tmp', 'brigadir', 'mcp-config'));
   });

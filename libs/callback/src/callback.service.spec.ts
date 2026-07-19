@@ -240,6 +240,122 @@ describe('CallbackService (T100)', () => {
     );
   });
 
+  // --- feature 024 (US3): completion gate ---
+
+  // A db that serves the gate's start-ref query and captures inserts. The gate
+  // reads run_events (type 'log') via select().from().where() → the array of
+  // start-ref rows; every other select shape resolves empty.
+  function gateDb(startRefRows: Array<{ repo: string; startSha: string }>) {
+    const inserted: unknown[] = [];
+    const rows = startRefRows.map((r) => ({
+      payload: { source: 'start-ref', repo: r.repo, startSha: r.startSha },
+    }));
+    const db = {
+      inserted,
+      insert: () => ({
+        values: async (v: unknown) => {
+          inserted.push(v);
+        },
+      }),
+      select: () => ({
+        from: () => ({
+          // gate baseline query: from().where() resolves to the start-ref rows
+          where: async () => rows,
+          innerJoin: () => ({ where: () => ({ limit: async () => [{ behavior: {} }] }) }),
+          limit: async () => [],
+        }),
+      }),
+    };
+    return db;
+  }
+
+  function makeGateService(db: unknown, finalizeWithReport = vi.fn().mockResolvedValue(true)) {
+    return new CallbackService(
+      db as never,
+      fakeModuleRef() as never,
+      { finalizeWithReport } as unknown as RunsService,
+      { onRunFinished: vi.fn().mockResolvedValue(undefined) } as unknown as PipelineService,
+      { acceptTeamReport: vi.fn() } as unknown as SetupApplyService,
+      { createFromRequest: vi.fn().mockResolvedValue({ created: true, blocking: false }) } as unknown as HumanTaskService,
+    );
+  }
+
+  const A = 'a'.repeat(40);
+  const B = 'b'.repeat(40);
+  const observedHeader = (m: Record<string, string>) => JSON.stringify(m);
+
+  it('complete: rejects a completion that omits a repo whose HEAD moved; run stays active + violation event', async () => {
+    const db = gateDb([{ repo: 'product', startSha: A }]);
+    const finalizeWithReport = vi.fn().mockResolvedValue(true);
+    const service = makeGateService(db, finalizeWithReport);
+
+    const result = await service.complete(
+      'run-1',
+      { schema_version: 2, outcome: 'success', summary: 's', checks: [] },
+      observedHeader({ product: B }),
+    );
+
+    expect(result).toMatchObject({ kind: 'validation' });
+    expect(finalizeWithReport).not.toHaveBeenCalled();
+    const violation = (db.inserted as Array<{ payload?: { source?: string } }>).find(
+      (e) => e.payload?.source === 'handoff-violation',
+    );
+    expect(violation).toBeDefined();
+    expect((violation as { payload: { violations: unknown[] } }).payload.violations).toHaveLength(1);
+  });
+
+  it('complete: accepts when the moved repo IS reported (v2 entry present)', async () => {
+    const db = gateDb([{ repo: 'product', startSha: A }]);
+    const finalizeWithReport = vi.fn().mockResolvedValue(true);
+    const service = makeGateService(db, finalizeWithReport);
+
+    const result = await service.complete(
+      'run-1',
+      {
+        schema_version: 2,
+        outcome: 'success',
+        summary: 's',
+        checks: [],
+        artifacts: { repos: [{ repo: 'product', branch: 'run/T' }] },
+      },
+      observedHeader({ product: B }),
+    );
+
+    expect(result).toEqual({ ok: true, outcome: 'success' });
+    expect(finalizeWithReport).toHaveBeenCalledTimes(1);
+  });
+
+  it('complete: accepts when no observed-heads header is present (evidence absent)', async () => {
+    const db = gateDb([{ repo: 'product', startSha: A }]);
+    const finalizeWithReport = vi.fn().mockResolvedValue(true);
+    const service = makeGateService(db, finalizeWithReport);
+
+    const result = await service.complete('run-1', {
+      schema_version: 2,
+      outcome: 'success',
+      summary: 's',
+      checks: [],
+    });
+
+    expect(result).toEqual({ ok: true, outcome: 'success' });
+    expect(finalizeWithReport).toHaveBeenCalledTimes(1);
+  });
+
+  it('complete: accepts when HEAD did not move', async () => {
+    const db = gateDb([{ repo: 'product', startSha: A }]);
+    const finalizeWithReport = vi.fn().mockResolvedValue(true);
+    const service = makeGateService(db, finalizeWithReport);
+
+    const result = await service.complete(
+      'run-1',
+      { schema_version: 2, outcome: 'success', summary: 's', checks: [] },
+      observedHeader({ product: A }),
+    );
+
+    expect(result).toEqual({ ok: true, outcome: 'success' });
+    expect(finalizeWithReport).toHaveBeenCalledTimes(1);
+  });
+
   it('progress: valid input inserts a run_events row and returns ok', async () => {
     const inserted: unknown[] = [];
     const db = {

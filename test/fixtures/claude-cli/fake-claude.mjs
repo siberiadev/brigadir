@@ -37,7 +37,7 @@
 
 import { createReadStream, readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -128,6 +128,9 @@ async function runCallbacks() {
     throw new Error('mcp-config file is missing BRIGADIR_RUN_TOKEN/BRIGADIR_CALLBACK_URL/BRIGADIR_RUN_ID');
   }
 
+  // Feature 024: the worktree dirs the real mcp-server would probe for HEADs.
+  const repoDirs = serverEnv.BRIGADIR_REPO_DIRS ? JSON.parse(serverEnv.BRIGADIR_REPO_DIRS) : {};
+
   const base = callbackUrl.replace(/\/+$/, '');
   for (const step of steps) {
     // { tool: 'sleep', ms } — linger without calling anything: models a real
@@ -145,9 +148,40 @@ async function runCallbacks() {
       await streamFixture(step.fixture);
       continue;
     }
+    // Feature 024: { tool: 'commit', repo, file } — make a real commit in a
+    // repo's worktree, moving its HEAD past the recorded start SHA. Models an
+    // agent that pushed work; used to exercise the completion gate.
+    if (step.tool === 'commit') {
+      const dir = repoDirs[step.repo];
+      if (!dir) throw new Error(`commit step: no worktree dir for repo "${step.repo}"`);
+      writeFileSync(join(dir, step.file ?? 'work.txt'), 'agent work\n');
+      execFileSync('git', ['-C', dir, 'add', '-A']);
+      execFileSync('git', [
+        '-C', dir,
+        '-c', 'user.email=agent@acme.io',
+        '-c', 'user.name=Agent',
+        'commit', '-m', 'agent work',
+      ]);
+      continue;
+    }
+    // Feature 024: on complete_task, mirror the real mcp-server — observe each
+    // configured worktree's HEAD and attach the x-brigadir-observed-heads
+    // header. A repo whose rev-parse fails is omitted.
+    const headers = { 'content-type': 'application/json', authorization: `Bearer ${runToken}` };
+    if (step.tool === 'complete' && Object.keys(repoDirs).length > 0) {
+      const observed = {};
+      for (const [repo, dir] of Object.entries(repoDirs)) {
+        try {
+          observed[repo] = execFileSync('git', ['-C', dir, 'rev-parse', 'HEAD']).toString().trim();
+        } catch {
+          /* omit — evidence observed, never fabricated */
+        }
+      }
+      headers['x-brigadir-observed-heads'] = JSON.stringify(observed);
+    }
     const res = await fetch(`${base}/runs/${runId}/${step.tool === 'human' ? 'human' : step.tool}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${runToken}` },
+      headers,
       body: JSON.stringify(step.body ?? {}),
     });
     process.stderr.write(`fake-claude callback ${step.tool} -> ${res.status}\n`);

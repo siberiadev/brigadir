@@ -139,7 +139,10 @@ export function resetFakeClaudeEnv(): void {
 export type FakeClaudeCallbackStep =
   | { tool: 'progress' | 'human' | 'complete'; body: Record<string, unknown> }
   | { tool: 'sleep'; ms: number }
-  | { tool: 'stream'; fixture: string };
+  | { tool: 'stream'; fixture: string }
+  // Feature 024: make a real commit in a repo's worktree (moves HEAD past the
+  // recorded start SHA) to exercise the completion gate.
+  | { tool: 'commit'; repo: string; file?: string };
 
 /** Sets FAKE_CLAUDE_CALLBACKS so the fake CLI plays this scripted sequence (quickstart.md pattern 1). */
 export function setFakeClaudeCallbacks(steps: FakeClaudeCallbackStep[]): void {

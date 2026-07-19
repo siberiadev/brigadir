@@ -89,7 +89,10 @@ describe('worktree prepareAll/cleanupAll (T080, feature 019 multi-repo; 023 deta
     const wt = result.repos[0];
     expect(wt.worktreeDir).toBe(join(result.parentDir, 'product'));
     expect(existsSync(join(wt.worktreeDir, 'README.md'))).toBe(true);
-    expect(wt.start).toEqual({ startRef: 'origin/main' });
+    expect(wt.start.startRef).toBe('origin/main');
+    expect(wt.start.continueBranch).toBeUndefined();
+    // Feature 024 (US3): the resolved start SHA is the gate's baseline.
+    expect(wt.start.startSha).toBe(await revParse(wt.worktreeDir, 'HEAD'));
 
     expect(await isDetached(wt.worktreeDir)).toBe(true);
     expect(await revParse(wt.worktreeDir, 'HEAD')).toBe(await revParse(wt.cacheDir, 'origin/main'));
@@ -125,7 +128,11 @@ describe('worktree prepareAll/cleanupAll (T080, feature 019 multi-repo; 023 deta
 
     const second = await prep([repo], 'run-2', { continueBranches: { product: 'run/BRIG-7' } });
     const wt = second.repos[0];
-    expect(wt.start).toEqual({ startRef: 'origin/run/BRIG-7', continueBranch: 'run/BRIG-7' });
+    expect(wt.start.startRef).toBe('origin/run/BRIG-7');
+    expect(wt.start.continueBranch).toBe('run/BRIG-7');
+    // Feature 024 (US3): startSha is the tip of the continued branch.
+    expect(wt.start.startSha).toBe(await revParse(wt.worktreeDir, 'HEAD'));
+    expect(wt.start.startSha).toBe(await revParse(wt.cacheDir, 'origin/run/BRIG-7'));
     expect(await isDetached(wt.worktreeDir)).toBe(true);
     expect(existsSync(join(wt.worktreeDir, 'work.txt'))).toBe(true);
   });
@@ -259,7 +266,9 @@ describe('worktree prepareAll/cleanupAll (T080, feature 019 multi-repo; 023 deta
         join(worktreeRoot, 'run-m1', 'infra'),
       ]);
       for (const r of result.repos) {
-        expect(r.start).toEqual({ startRef: 'origin/main' });
+        expect(r.start.startRef).toBe('origin/main');
+        expect(r.start.continueBranch).toBeUndefined();
+        expect(r.start.startSha).toBe(await revParse(r.worktreeDir, 'HEAD'));
         expect(await isDetached(r.worktreeDir)).toBe(true);
       }
       // Independent caches, one per repo name.
@@ -280,7 +289,8 @@ describe('worktree prepareAll/cleanupAll (T080, feature 019 multi-repo; 023 deta
       });
       expect(next.repos[0].start.continueBranch).toBe('run/BRIG-24');
       expect(existsSync(join(next.repos[0].worktreeDir, 'work.txt'))).toBe(true);
-      expect(next.repos[1].start).toEqual({ startRef: 'origin/main' });
+      expect(next.repos[1].start.startRef).toBe('origin/main');
+      expect(next.repos[1].start.continueBranch).toBeUndefined();
     });
 
     it('partial failure unwinds already-created worktrees and removes the parent dir (SC-006)', async () => {

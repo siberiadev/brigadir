@@ -1,4 +1,8 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { writeMarker } from './marker.js';
+
+const execFileAsync = promisify(execFile);
 
 /**
  * The three callback tools (contracts/mcp-config.md "Tool → HTTP mapping").
@@ -7,6 +11,40 @@ import { writeMarker } from './marker.js';
  * 4xx), and on a 2xx of complete_task / blocking request_human writes the
  * completion marker (FR-013). Zero DB access — a thin HTTP client only.
  */
+
+/** Header carrying observed worktree HEADs on complete_task (feature 024). */
+const OBSERVED_HEADS_HEADER = 'x-brigadir-observed-heads';
+
+/**
+ * Observe each configured worktree's HEAD (feature 024, completion gate). The
+ * tool server is the only system-owned process colocated with the worktrees at
+ * completion time. A repo whose `rev-parse` fails is OMITTED — evidence is
+ * observed, never fabricated. Returns the header VALUE (JSON map) or undefined
+ * when nothing is configured/observable, so no header is attached.
+ */
+async function observeHeads(
+  repoDirs: Record<string, string> | undefined,
+  resolver: (dir: string) => Promise<string | null>,
+): Promise<string | undefined> {
+  if (!repoDirs || Object.keys(repoDirs).length === 0) return undefined;
+  const observed: Record<string, string> = {};
+  for (const [repo, dir] of Object.entries(repoDirs)) {
+    const sha = await resolver(dir);
+    if (sha) observed[repo] = sha;
+  }
+  return JSON.stringify(observed);
+}
+
+/** Default HEAD resolver: `git -C <dir> rev-parse HEAD`, null on any failure. */
+async function defaultGitHeadResolver(dir: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', dir, 'rev-parse', 'HEAD']);
+    const sha = stdout.trim();
+    return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+  } catch {
+    return null;
+  }
+}
 
 export interface ToolCallResult {
   content: { type: 'text'; text: string }[];
@@ -21,6 +59,10 @@ export interface ToolHandlersConfig {
   fetchImpl?: typeof fetch;
   maxRetries?: number;
   retryDelayMs?: (attempt: number) => number;
+  /** Feature 024: repo name → worktree dir; HEADs observed on complete_task. */
+  repoDirs?: Record<string, string>;
+  /** Feature 024: injectable HEAD resolver (defaults to `git rev-parse HEAD`). */
+  gitHeadResolver?: (dir: string) => Promise<string | null>;
 }
 
 interface CallbackResponse {
@@ -52,6 +94,7 @@ async function postWithRetry(
   body: unknown,
   runToken: string,
   cfg: Required<Pick<ToolHandlersConfig, 'fetchImpl' | 'maxRetries' | 'retryDelayMs'>>,
+  extraHeaders: Record<string, string> = {},
 ): Promise<CallbackResponse> {
   let attempt = 0;
   for (;;) {
@@ -63,6 +106,7 @@ async function postWithRetry(
         headers: {
           'content-type': 'application/json',
           authorization: `Bearer ${runToken}`,
+          ...extraHeaders,
         },
         body: JSON.stringify(body),
       });
@@ -148,6 +192,7 @@ export function createToolHandlers(config: ToolHandlersConfig): {
     maxRetries: config.maxRetries ?? 3,
     retryDelayMs: config.retryDelayMs ?? defaultRetryDelayMs,
   };
+  const gitHeadResolver = config.gitHeadResolver ?? defaultGitHeadResolver;
   const base = config.callbackUrl.replace(/\/+$/, '');
 
   return {
@@ -178,11 +223,16 @@ export function createToolHandlers(config: ToolHandlersConfig): {
     },
 
     async complete_task(args: unknown): Promise<ToolCallResult> {
+      // Feature 024: observe worktree HEADs and hand them to the backend gate.
+      // Attached by the tool server itself — outside the tool's input schema,
+      // so the agent cannot author or spoof it.
+      const observedHeads = await observeHeads(config.repoDirs, gitHeadResolver);
       const response = await postWithRetry(
         `${base}/runs/${config.runId}/complete`,
         args,
         config.runToken,
         cfg,
+        observedHeads !== undefined ? { [OBSERVED_HEADS_HEADER]: observedHeads } : {},
       );
       if (response.status >= 200 && response.status < 300) {
         await writeMarker(config.markerPath);

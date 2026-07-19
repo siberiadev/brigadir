@@ -2,7 +2,7 @@ import { Injectable, Inject, Logger } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { getQueueToken } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import { runQueueName } from '@brigadir/queues';
 import {
@@ -17,6 +17,7 @@ import { scrub } from '@brigadir/scrubber';
 import { RunsService } from '@brigadir/runs';
 import { PipelineService, SetupApplyService } from '@brigadir/pipeline';
 import { HumanTaskService } from '@brigadir/human-tasks';
+import { detectHandoffViolations, parseObservedHeads } from './completion-gate';
 
 export interface ValidationFailure {
   kind: 'validation';
@@ -162,6 +163,7 @@ export class CallbackService {
   async complete(
     runId: string,
     rawBody: unknown,
+    observedHeadsHeader?: string,
   ): Promise<{ ok: true; outcome: AgentReport['outcome'] } | ValidationFailure | ConflictFailure> {
     const parsed = ReportSchema.safeParse(rawBody);
     if (!parsed.success) {
@@ -169,6 +171,14 @@ export class CallbackService {
     }
 
     const scrubbedReport = scrubReport(parsed.data);
+
+    // feature 024 (US3): before the run finalizes, reject a completion that
+    // omits a repository whose worktree HEAD moved past its recorded start
+    // commit. Evidence-absent cases (no header, no start-ref baseline) pass
+    // through untouched. Applied to ALL outcomes: a rework/resume continuation
+    // reads a `failure`/`needs_human` report too, so those must be honest.
+    const gateFailure = await this.checkHandoffGate(runId, scrubbedReport, observedHeadsHeader);
+    if (gateFailure) return gateFailure;
 
     // feature 011 (D9/D10): a `team` report takes the setup accept path —
     // business validation + atomic apply (agents + review task + finalize) in
@@ -200,6 +210,72 @@ export class CallbackService {
     }
 
     return { ok: true, outcome: scrubbedReport.outcome };
+  }
+
+  /**
+   * Completion gate (feature 024, US3; contracts/completion-gate.md). Returns
+   * a validation failure — leaving the run ACTIVE, exactly like an invalid
+   * team report — when the completion omits a repository whose worktree HEAD
+   * moved past its recorded start commit. Degrades silently (returns
+   * undefined, completion proceeds) whenever evidence is absent: no observed-
+   * heads header, no start-ref baseline for this run (no-repo triage,
+   * workspace-setup, Phase-0 runs), or a repo the header did not observe.
+   */
+  private async checkHandoffGate(
+    runId: string,
+    report: AgentReport,
+    observedHeadsHeader: string | undefined,
+  ): Promise<ValidationFailure | undefined> {
+    const observed = parseObservedHeads(observedHeadsHeader);
+    if (!observed) return undefined; // evidence absent — nothing to check
+
+    // The start-ref events written at prepare time are the baseline. type
+    // 'log' + payload.source 'start-ref', one row per mounted repo.
+    const rows = await this.db
+      .select({ payload: schema.runEvents.payload })
+      .from(schema.runEvents)
+      .where(and(eq(schema.runEvents.runId, runId), eq(schema.runEvents.type, 'log')));
+
+    const startRefs = new Map<string, string>();
+    for (const row of rows) {
+      const p = row.payload as { source?: string; repo?: string; startSha?: unknown } | null;
+      if (p?.source === 'start-ref' && typeof p.repo === 'string' && typeof p.startSha === 'string') {
+        startRefs.set(p.repo, p.startSha);
+      }
+    }
+    if (startRefs.size === 0) return undefined; // no baseline — nothing to check
+
+    const violations = detectHandoffViolations(
+      startRefs,
+      observed,
+      normalizeReportArtifacts(report),
+      startRefs.size,
+    );
+    if (violations.length === 0) return undefined;
+
+    const describe = (sha: string): string => sha.slice(0, 7);
+    const message =
+      'completion rejected: unreported work in ' +
+      violations.map((v) => `${v.repo} (${describe(v.startSha)}… → ${describe(v.observedHead)}…)`).join(', ');
+    await this.db.insert(schema.runEvents).values({
+      runId,
+      type: 'log',
+      payload: { source: 'handoff-violation', message, violations, outcome: report.outcome },
+    });
+
+    return {
+      kind: 'validation',
+      errors: violations.map((v) => ({
+        path: ['artifacts', 'repos'],
+        repo: v.repo,
+        startSha: v.startSha,
+        observedHead: v.observedHead,
+        message:
+          `repository "${v.repo}" has local commits (started at ${v.startSha}, now ${v.observedHead}) ` +
+          `but your report names no branch for it. Push your branch, add an artifacts.repos entry ` +
+          `for "${v.repo}", and call complete_task again.`,
+      })),
+    };
   }
 
   /**

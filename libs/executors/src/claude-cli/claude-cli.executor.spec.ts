@@ -37,9 +37,10 @@ function fakeWorkspace(parentDir: string, repoName = 'product', continueBranch?:
         worktreeDir: join(parentDir, repoName),
         cacheDir: join(parentDir, '..', 'cache', repoName),
         // Feature 023: per-repo start ref; no run-level branch any more.
+        // Feature 024: startSha is the gate baseline (fixed fake SHA).
         start: continueBranch
-          ? { startRef: `origin/${continueBranch}`, continueBranch }
-          : { startRef: 'origin/main' },
+          ? { startRef: `origin/${continueBranch}`, continueBranch, startSha: 'a'.repeat(40) }
+          : { startRef: 'origin/main', startSha: 'a'.repeat(40) },
       },
     ],
   };
@@ -239,6 +240,35 @@ describe('ClaudeCliExecutor.run (T082)', () => {
     group.child.emit('close', 0, null);
     const result = await runPromise;
     expect(result.exitStatus).toBe('completed');
+  });
+
+  // Feature 024 (US3): start-ref events are written AFTER prepare and carry
+  // the resolved startSha (the completion gate's baseline).
+  it('records a start-ref run_event per repo with the resolved startSha', async () => {
+    const group = makeGroup();
+    spawnGroupMock.mockReturnValue(group);
+    const db = fakeDb(executorConfig, {});
+    const fakeJira = { getFeatureContext: vi.fn().mockResolvedValue({ linked: [] }) };
+    const executor = new ClaudeCliExecutor(db as never, agentsConfig, fakeJira as never);
+
+    const runPromise = executor.run(makeCtx(), new AbortController().signal);
+    await waitForSpawn(spawnGroupMock);
+    for (const line of readFixtureLines('stream-success')) group.child.stdout.write(line + '\n');
+    await flush();
+    group.child.emit('close', 0, null);
+    await runPromise;
+
+    const startRef = (db.insertedEvents as unknown[])
+      .flatMap((v) => (Array.isArray(v) ? v : [v]))
+      .find((e) => (e as { payload?: { source?: string } })?.payload?.source === 'start-ref') as
+      | { payload: Record<string, unknown> }
+      | undefined;
+    expect(startRef).toBeDefined();
+    expect(startRef!.payload).toMatchObject({
+      repo: 'product',
+      startSha: 'a'.repeat(40),
+      decision: 'default_branch',
+    });
   });
 
   it('invalid report: completed with no report and a diagnostic', async () => {

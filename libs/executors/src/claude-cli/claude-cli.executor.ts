@@ -223,17 +223,18 @@ export class ClaudeCliExecutor implements AgentExecutor {
         // false-success mode this feature exists to prevent. Setup runs are
         // ticketless — there is no chain to continue.
         let continueBranches: Record<string, string> = {};
+        let prior: PriorWork | undefined;
+        let matched: BranchMatch = { continueBranches: {}, unmatched: [] };
         if (ctx.ticket && ticketId) {
-          const prior = await getPriorWork(this.db, {
+          prior = await getPriorWork(this.db, {
             ticketId,
             currentRunId: ctx.runId,
             preferRunId,
           });
-          const matched = prior
+          matched = prior
             ? matchReportedBranches(prior.entries, repos)
             : { continueBranches: {}, unmatched: [] };
           continueBranches = matched.continueBranches;
-          await this.recordStartRefEvent(ctx.runId, repos, prior, matched);
         }
         workspace = await prepareAll(
           repos,
@@ -242,6 +243,13 @@ export class ClaudeCliExecutor implements AgentExecutor {
           runtimeConfig.repoCacheRoot,
           { continueBranches },
         );
+        // Feature 024: record start-ref events AFTER prepare, so each carries
+        // the resolved startSha (the gate baseline). A prepare that throws
+        // above writes no rows — such a run fails loudly before an agent
+        // starts and hands nothing off.
+        if (ctx.ticket && ticketId) {
+          await this.recordStartRefEvent(ctx.runId, workspace.repos, prior, matched);
+        }
       } catch (err) {
         return { exitStatus: 'crashed', diagnostics: err instanceof Error ? err.message : String(err) };
       }
@@ -264,6 +272,11 @@ export class ClaudeCliExecutor implements AgentExecutor {
             callbackUrl: ctx.callback.httpBaseUrl,
             runToken: ctx.callback.runToken,
             mcpServerEntryPath: this.resolveMcpServerEntryPath(),
+            // Feature 024: the gate observes these worktrees' HEADs at
+            // complete_task. Empty for no-repo runs (workspace is null).
+            repoDirs: Object.fromEntries(
+              (workspace?.repos ?? []).map((r) => [r.repo.name, r.worktreeDir]),
+            ),
           },
           defaultMcpConfigRoot(tmpdir()),
         );
@@ -834,12 +847,12 @@ export class ClaudeCliExecutor implements AgentExecutor {
    */
   private async recordStartRefEvent(
     runId: string,
-    repos: WorktreeRepo[],
+    repos: MultiPrepareResult['repos'],
     prior: PriorWork | undefined,
     matched: BranchMatch,
   ): Promise<void> {
-    const rows = repos.map((repo) => {
-      const continueBranch = matched.continueBranches[repo.name];
+    const rows = repos.map(({ repo, start }) => {
+      const continueBranch = start.continueBranch;
       const decision = continueBranch ? 'report_confirmed' : 'default_branch';
       const message = continueBranch
         ? `${repo.name}: continuing branch ${continueBranch}, reported by run ${prior?.runId}`
@@ -853,6 +866,8 @@ export class ClaudeCliExecutor implements AgentExecutor {
           repo: repo.name,
           decision,
           continueBranch: continueBranch ?? null,
+          // Feature 024: the resolved commit — the completion gate's baseline.
+          startSha: start.startSha,
           reportedByRunId: prior?.runId ?? null,
           unmatchedReportedRepos: matched.unmatched,
         },
