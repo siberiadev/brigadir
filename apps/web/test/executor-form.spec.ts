@@ -386,6 +386,113 @@ describe('ExecutorForm — auth modes (feature 018)', () => {
   });
 });
 
+/**
+ * Feature 025 (T028) — kimi shares the Claude CLI harness field set but has
+ * NO auth selector, NO AWS fields, and NO base-URL field; the API key is
+ * required on create and can be replaced but never cleared.
+ */
+describe('ExecutorForm — kimi type (feature 025)', () => {
+  const selectType = async (wrapper: ReturnType<typeof mountForm>, type: string) => {
+    await wrapper
+      .findAllComponents({ name: 'ElSelect' })
+      .find((s) => s.attributes('data-test') === 'executor-type')!
+      .setValue(type);
+    await flush();
+  };
+
+  it('shows model/CLI/key/knobs + kimi hint; hides auth selector, AWS fields, and any URL field', async () => {
+    const wrapper = mountForm();
+    await flush();
+    await selectType(wrapper, 'kimi');
+
+    expect(wrapper.find('[data-test="executor-model"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="executor-cli-path"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="executor-max-turns"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="executor-max-parallel"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="executor-callback"]').exists()).toBe(true);
+    // kimi is implicitly api_key-only → the key block shows unconditionally…
+    expect(wrapper.find('[data-test="executor-api-key"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="executor-api-key"]').attributes('placeholder')).toBe('sk-...');
+    // …and the kimi model hint is shown.
+    const hint = wrapper.find('[data-test="kimi-model-hint"]');
+    expect(hint.exists()).toBe(true);
+    expect(hint.text()).toContain('indicative');
+    // No auth selector, no AWS fields, no base-URL field anywhere.
+    expect(wrapper.find('[data-test="executor-auth"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="executor-aws-region"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="executor-base-url"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="bedrock-model-hint"]').exists()).toBe(false);
+  });
+
+  it('blocks a keyless create client-side with a field error (never POSTs)', async () => {
+    let posted = false;
+    server.use(
+      http.post('/api/executors', () => {
+        posted = true;
+        return HttpResponse.json(sampleExecutors[0], { status: 201 });
+      }),
+    );
+
+    const wrapper = mountForm();
+    await flush();
+    await selectType(wrapper, 'kimi');
+    await wrapper.find('[data-test="executor-name"]').setValue('moonshot');
+    await (wrapper.vm as unknown as { submit: () => Promise<void> }).submit();
+    await flush();
+
+    expect(posted).toBe(false);
+    const keyItem = wrapper
+      .findAllComponents({ name: 'ElFormItem' })
+      .find((i) => i.find('[data-test="executor-api-key"]').exists());
+    expect(keyItem!.props('error')).toContain('required');
+  });
+
+  it('creates a kimi profile with the harness body + key; no auth/aws/url fields ride along', async () => {
+    let posted: Record<string, unknown> | undefined;
+    server.use(
+      http.post('/api/executors', async ({ request }) => {
+        posted = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ ...sampleExecutors[0], type: 'kimi', has_api_key: true }, { status: 201 });
+      }),
+    );
+
+    const wrapper = mountForm();
+    await flush();
+    await selectType(wrapper, 'kimi');
+    await wrapper.find('[data-test="executor-name"]').setValue('moonshot');
+    await wrapper.find('[data-test="executor-model"]').setValue('kimi-k3');
+    await wrapper.find('[data-test="executor-api-key"]').setValue('sk-moonshot-1');
+    await (wrapper.vm as unknown as { submit: () => Promise<void> }).submit();
+    await flush();
+
+    expect(posted).toMatchObject({
+      type: 'kimi',
+      name: 'moonshot',
+      model: 'kimi-k3',
+      cli_path: 'claude',
+      api_key: 'sk-moonshot-1',
+    });
+    expect(posted).not.toHaveProperty('auth');
+    expect(posted).not.toHaveProperty('aws_region');
+    expect(posted).not.toHaveProperty('base_url');
+    expect(posted).not.toHaveProperty('repository');
+  });
+
+  it('a configured kimi key shows Replace but NOT Clear (keyless kimi cannot exist)', async () => {
+    const kimiWithKey = {
+      ...sampleExecutorWithKey,
+      type: 'kimi' as const,
+      config: { model: 'kimi-k3', cli_path: 'claude', use_callback_channel: true, keep_failed_worktrees: false, max_turns: 30 },
+    };
+    const wrapper = mountForm(kimiWithKey);
+    await flush();
+
+    expect(wrapper.find('[data-test="api-key-configured"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="api-key-replace"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="api-key-clear"]').exists()).toBe(false);
+  });
+});
+
 describe('SettingsExecutors — delete-in-use', () => {
   it('surfaces the 409 executor_in_use message', async () => {
     const errorSpy = vi.spyOn(ElMessage, 'error').mockImplementation(() => ({}) as never);

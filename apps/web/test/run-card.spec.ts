@@ -82,6 +82,39 @@ describe('RunCard — report + diagnostics', () => {
     expect(wrapper.find('[data-test="timeline-count"]').text()).toBe('6 steps');
   });
 
+  // Feature 025: kimi cost is priced against Anthropic's list — indicative only.
+  it('marks the cost as indicative for a kimi run; a claude_cli run has no marker', async () => {
+    // Default fixture is claude_cli → no marker.
+    const claude = mountCard();
+    await flush();
+    expect(claude.find('[data-test="cost-indicative"]').exists()).toBe(false);
+
+    server.use(
+      http.get('/api/runs/:id', () =>
+        HttpResponse.json({
+          ...sampleRunCard,
+          run: { ...sampleRunCard.run, executor_type: 'kimi' },
+        }),
+      ),
+    );
+    const kimi = mountCard();
+    await flush();
+    expect(kimi.find('[data-test="cost-indicative"]').exists()).toBe(true);
+
+    // A kimi run without a cost yet shows a bare "—", no caveat marker.
+    server.use(
+      http.get('/api/runs/:id', () =>
+        HttpResponse.json({
+          ...sampleRunCard,
+          run: { ...sampleRunCard.run, executor_type: 'kimi', cost_usd: null },
+        }),
+      ),
+    );
+    const kimiNoCost = mountCard();
+    await flush();
+    expect(kimiNoCost.find('[data-test="cost-indicative"]').exists()).toBe(false);
+  });
+
   it('hides the report section entirely while there are no checks; the timeline still shows', async () => {
     server.use(
       http.get('/api/runs/:id', () => HttpResponse.json({ ...sampleRunCard, checks: [] })),

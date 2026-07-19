@@ -54,6 +54,9 @@ export const RunListItemSchema = z
     ticket: RunTicketRefSchema.nullable(),
     status: RunStatusSchema,
     attempt: z.number().int(),
+    // Denormalized executor type of the run (feature 025) — the list marks a
+    // kimi run's cost as indicative, same as the run card path already does.
+    executor_type: z.string(),
     duration_ms: z.number().int().nullable(),
     // Anchor for the client-side live duration ticker on `running` rows —
     // `duration_ms` is computed at response time and goes stale between polls.

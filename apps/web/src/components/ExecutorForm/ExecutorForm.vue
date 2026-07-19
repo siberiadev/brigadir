@@ -15,6 +15,10 @@ import { ApiError } from '../../api/client';
 // block only for auth "api_key", the bedrock trio (region / AWS profile /
 // CA bundle) only for auth "bedrock". `config.auth` in responses is always
 // the EFFECTIVE mode, so the selector prefills correctly for legacy rows.
+// Feature 025: `kimi` shares the harness field set (model / CLI path / key /
+// knobs) but has NO auth selector (implicitly api_key-only), no AWS fields,
+// and deliberately no URL field — the Moonshot endpoint is fixed by the
+// type. The key is REQUIRED (create) and can be replaced but never cleared.
 // Driven by the shared `executor.schema` union — the field set switches on
 // `type` (mock: Name + Max parallel runs only). Mirrors AgentForm: a
 // dialog-agnostic body exposing submit()/saving for the hosting FormDialog.
@@ -52,8 +56,19 @@ const form = reactive({
 const NAME_TIP =
   'An alias for quick recognition of this runner — e.g. the team it belongs to or the user who created it.';
 
+// Feature 025: the two types sharing the Claude CLI harness field set.
+const isCliHarness = computed(() => form.type === 'claude_cli' || form.type === 'kimi');
+// kimi shows the key block unconditionally (api_key-only); claude_cli gates
+// it behind the auth selector.
+const showApiKey = computed(
+  () => form.type === 'kimi' || (form.type === 'claude_cli' && form.auth === 'api_key'),
+);
+
 const BEDROCK_MODEL_HINT =
   'Use a full Bedrock model/inference-profile id, e.g. "eu.anthropic.claude-opus-4-8" — bare aliases like "opus" resolve through ANTHROPIC_DEFAULT_*_MODEL env vars that are deliberately not passed to runs.';
+
+const KIMI_MODEL_HINT =
+  'A Moonshot model id, e.g. "kimi-k3" or a "kimi-k2.7" variant. Runs execute against Moonshot’s Anthropic-compatible endpoint; cost figures are priced against Anthropic’s list and are indicative only.';
 
 // --- api_key states (write-only round-trip) ---
 const hasStoredKey = computed(() => props.executor?.has_api_key === true);
@@ -83,6 +98,23 @@ const saving = computed(() => create.isPending.value || update.isPending.value);
 function buildRequest(): ExecutorCreateRequest {
   if (form.type === 'mock') {
     return { type: 'mock', name: form.name, max_parallel_runs: form.max_parallel_runs };
+  }
+  if (form.type === 'kimi') {
+    // Feature 025: no auth selector, no AWS fields, no URL — harness knobs +
+    // the write-only key only. An entered key rides along; untouched → omit
+    // (keep stored). There is no Clear path: a keyless kimi profile cannot
+    // exist, so `api_key: null` is never sent.
+    return {
+      type: 'kimi',
+      name: form.name,
+      model: form.model,
+      cli_path: form.cli_path,
+      use_callback_channel: form.use_callback_channel,
+      keep_failed_worktrees: form.keep_failed_worktrees,
+      max_turns: form.max_turns,
+      max_parallel_runs: form.max_parallel_runs,
+      ...(form.api_key ? { api_key: form.api_key } : {}),
+    };
   }
   // api_key tri-state applies only in api_key mode: entered value → replace;
   // Clear → null; untouched → omitted (keep). Other modes send NO api_key —
@@ -123,6 +155,12 @@ function buildRequest(): ExecutorCreateRequest {
 async function submit() {
   for (const k of Object.keys(fieldErrors)) delete fieldErrors[k];
   generalError.value = '';
+  // Feature 025: a new kimi profile must arrive with a key (schema rule
+  // 'kimi requires an api_key on create') — surface it before the round-trip.
+  if (form.type === 'kimi' && !props.executor && !form.api_key) {
+    fieldErrors.api_key = 'A Moonshot API key is required to create a kimi profile.';
+    return;
+  }
   const body = buildRequest();
   try {
     if (props.executor) {
@@ -152,13 +190,21 @@ defineExpose({ submit, saving });
       <el-form-item label="Type">
         <el-select v-model="form.type" data-test="executor-type">
           <el-option label="claude_cli" value="claude_cli" />
+          <el-option label="kimi" value="kimi" />
           <el-option label="mock" value="mock" />
         </el-select>
       </el-form-item>
-      <el-form-item v-if="form.type === 'claude_cli'" label="Model" :error="fieldErrors.model">
+      <el-form-item v-if="isCliHarness" label="Model" :error="fieldErrors.model">
         <el-input v-model="form.model" data-test="executor-model" />
-        <div v-if="form.auth === 'bedrock'" class="field-hint" data-test="bedrock-model-hint">
+        <div
+          v-if="form.type === 'claude_cli' && form.auth === 'bedrock'"
+          class="field-hint"
+          data-test="bedrock-model-hint"
+        >
           {{ BEDROCK_MODEL_HINT }}
+        </div>
+        <div v-else-if="form.type === 'kimi'" class="field-hint" data-test="kimi-model-hint">
+          {{ KIMI_MODEL_HINT }}
         </div>
       </el-form-item>
     </div>
@@ -175,13 +221,14 @@ defineExpose({ submit, saving });
       <el-input v-model="form.name" data-test="executor-name" />
     </el-form-item>
 
-    <!-- claude_cli-only fields -->
-    <template v-if="form.type === 'claude_cli'">
+    <!-- claude_cli + kimi share the Claude CLI harness field set (feature 025) -->
+    <template v-if="isCliHarness">
       <el-form-item label="CLI path" :error="fieldErrors.cli_path">
         <el-input v-model="form.cli_path" data-test="executor-cli-path" />
       </el-form-item>
 
-      <el-form-item label="Authentication" :error="fieldErrors.auth">
+      <!-- Auth mode selector is claude_cli-only: kimi is implicitly api_key-only -->
+      <el-form-item v-if="form.type === 'claude_cli'" label="Authentication" :error="fieldErrors.auth">
         <el-select v-model="form.auth" data-test="executor-auth">
           <el-option label="Host subscription (~/.claude)" value="host_subscription" />
           <el-option label="API key" value="api_key" />
@@ -189,15 +236,22 @@ defineExpose({ submit, saving });
         </el-select>
       </el-form-item>
 
-      <!-- api_key mode only: the write-only key with its tri-state round-trip -->
-      <el-form-item v-if="form.auth === 'api_key'" label="API key" :error="fieldErrors.api_key">
+      <!-- API key: claude_cli api_key mode (tri-state) OR kimi (required, no Clear) -->
+      <el-form-item v-if="showApiKey" label="API key" :error="fieldErrors.api_key">
         <!-- configured + not replacing/clearing → status line with actions -->
         <div v-if="hasStoredKey && !replacingKey && !clearedKey" class="api-key-configured">
           <el-tag size="small" type="success" data-test="api-key-configured">configured</el-tag>
           <el-button link type="primary" data-test="api-key-replace" @click="startReplaceKey">
             Replace
           </el-button>
-          <el-button link type="danger" data-test="api-key-clear" @click="clearKey">
+          <!-- kimi cannot be cleared: a keyless kimi profile can never run -->
+          <el-button
+            v-if="form.type !== 'kimi'"
+            link
+            type="danger"
+            data-test="api-key-clear"
+            @click="clearKey"
+          >
             Clear
           </el-button>
         </div>
@@ -207,7 +261,7 @@ defineExpose({ submit, saving });
           type="password"
           show-password
           autocomplete="new-password"
-          placeholder="sk-ant-..."
+          :placeholder="form.type === 'kimi' ? 'sk-...' : 'sk-ant-...'"
           data-test="executor-api-key"
         />
         <div v-if="clearedKey" class="api-key-note" data-test="api-key-cleared-note">
@@ -215,8 +269,8 @@ defineExpose({ submit, saving });
         </div>
       </el-form-item>
 
-      <!-- bedrock mode only: non-secret AWS settings; credentials stay in ~/.aws on the worker -->
-      <template v-if="form.auth === 'bedrock'">
+      <!-- bedrock mode only (claude_cli): non-secret AWS settings; credentials stay in ~/.aws on the worker -->
+      <template v-if="form.type === 'claude_cli' && form.auth === 'bedrock'">
         <el-form-item label="AWS region" :error="fieldErrors.aws_region">
           <el-input v-model="form.aws_region" placeholder="eu-west-1" data-test="executor-aws-region" />
         </el-form-item>

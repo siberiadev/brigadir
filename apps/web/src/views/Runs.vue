@@ -190,7 +190,17 @@ async function stopAllRuns() {
         <template #default="{ row }">{{ liveDuration(row) }}</template>
       </el-table-column>
       <el-table-column label="Cost">
-        <template #default="{ row }">{{ formatCostUsd(row.cost_usd) ?? '—' }}</template>
+        <template #default="{ row }">
+          {{ formatCostUsd(row.cost_usd) ?? '—' }}
+          <!-- feature 025: kimi cost is priced against Anthropic's list, indicative only -->
+          <el-tooltip
+            v-if="row.executor_type === 'kimi' && row.cost_usd != null"
+            content="Indicative only — kimi runs are priced against Anthropic’s list, not Moonshot’s."
+            placement="top"
+          >
+            <sup class="indicative-mark" data-test="cost-indicative">~</sup>
+          </el-tooltip>
+        </template>
       </el-table-column>
     </el-table>
 
@@ -213,6 +223,11 @@ async function stopAllRuns() {
 }
 .cost-total {
   font-weight: $font-weight-medium;
+}
+.indicative-mark {
+  color: var(--el-color-warning);
+  font-weight: $font-weight-medium;
+  cursor: help;
 }
 .muted {
   color: var(--el-text-color-secondary);

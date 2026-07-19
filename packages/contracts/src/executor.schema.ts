@@ -17,6 +17,10 @@ import { makePaginatedResponseSchema } from './pagination.schema';
  *                   (+ auth mode, feature 018: host_subscription | api_key |
  *                   bedrock, with aws_region/aws_profile/ca_bundle_path for
  *                   bedrock).
+ *  - `kimi`       → same harness knobs as claude_cli but implicitly
+ *                   api_key-only (feature 025): no auth selector, no AWS
+ *                   fields, no base-URL field — the Moonshot endpoint is a
+ *                   code constant mapped from the type.
  *
  * Auth defaulting (feature 018, additive — stored rows are never rewritten):
  * a row without `auth` behaves as `api_key` when it has a sealed api_key blob,
@@ -41,7 +45,7 @@ import { makePaginatedResponseSchema } from './pagination.schema';
  * response carries `has_api_key: boolean` instead; `api_key: null` clears.
  */
 
-export const ExecutorTypeSchema = z.enum(['mock', 'claude_cli']);
+export const ExecutorTypeSchema = z.enum(['mock', 'claude_cli', 'kimi']);
 export type ExecutorType = z.infer<typeof ExecutorTypeSchema>;
 
 export const MockExecutorConfigSchema = z
@@ -131,12 +135,39 @@ export const ClaudeCliExecutorApiConfigSchema = z
   .superRefine(refineClaudeCliAuth);
 
 /**
+ * `kimi` branch (feature 025) — the Claude CLI harness against Moonshot's
+ * Anthropic-compatible endpoint. Implicitly api_key-only: there is NO `auth`
+ * selector (host_subscription/bedrock are meaningless against Moonshot), no
+ * AWS fields, and no base-URL field anywhere — the endpoint is a hardcoded
+ * constant mapped from the type (contracts/kimi-provider-env.md). `.strict()`
+ * rejects all of those as foreign. `api_key` keeps the claude_cli write-only
+ * semantics; the create-time key-required rule lives on the create schema and
+ * the update-side (provided-OR-stored) rule lives in the controller.
+ */
+export const KimiExecutorApiConfigSchema = z
+  .object({
+    type: z.literal('kimi'),
+    model: z.string().min(1),
+    cli_path: z.string().min(1),
+    use_callback_channel: z.boolean(),
+    keep_failed_worktrees: z.boolean(),
+    max_turns: z.number().int().min(1),
+    max_parallel_runs: z.number().int().min(1),
+    // WRITE-ONLY: omitted → keep the stored key as-is; string → replace;
+    // null → clear request (rejected by the controller when it would leave
+    // the profile keyless — a keyless kimi profile cannot run).
+    api_key: z.string().min(1).nullable().optional(),
+  })
+  .strict();
+
+/**
  * The typed-config authority (discriminated union). Consumed by the backend
  * validation path AND the Vue form to drive the per-type field set.
  */
 export const ExecutorApiConfigSchema = z.discriminatedUnion('type', [
   MockExecutorConfigSchema,
   ClaudeCliExecutorApiConfigSchema,
+  KimiExecutorApiConfigSchema,
 ]);
 export type ExecutorApiConfig = z.infer<typeof ExecutorApiConfigSchema>;
 
@@ -148,6 +179,7 @@ export type ExecutorApiConfig = z.infer<typeof ExecutorApiConfigSchema>;
  */
 const MockCreateBranch = MockExecutorConfigSchema.extend({ name: z.string().min(1) });
 const ClaudeCliCreateBranch = ClaudeCliExecutorApiConfigSchema.extend({ name: z.string().min(1) });
+const KimiCreateBranch = KimiExecutorApiConfigSchema.extend({ name: z.string().min(1) });
 
 export const ExecutorCreateRequestSchema = z.discriminatedUnion('type', [
   MockCreateBranch,
@@ -163,6 +195,17 @@ export const ExecutorCreateRequestSchema = z.discriminatedUnion('type', [
       });
     }
   }),
+  // Create-only (feature 025): kimi is implicitly api_key-only, so the key
+  // must always arrive with the create. Update-side rule in the controller.
+  KimiCreateBranch.superRefine((value, ctx) => {
+    if (typeof value.api_key !== 'string') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['api_key'],
+        message: 'kimi requires an api_key on create.',
+      });
+    }
+  }),
 ]);
 export type ExecutorCreateRequest = z.infer<typeof ExecutorCreateRequestSchema>;
 
@@ -173,6 +216,7 @@ export type ExecutorCreateRequest = z.infer<typeof ExecutorCreateRequestSchema>;
 export const ExecutorUpdateRequestSchema = z.discriminatedUnion('type', [
   MockCreateBranch,
   ClaudeCliCreateBranch,
+  KimiCreateBranch,
 ]);
 export type ExecutorUpdateRequest = z.infer<typeof ExecutorUpdateRequestSchema>;
 

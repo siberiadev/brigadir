@@ -62,3 +62,31 @@ describe('buildChildEnv (T078)', () => {
     expect(env.FAKE_CLAUDE_ENV_DUMP).toBe('/tmp/env.json');
   });
 });
+
+/**
+ * Feature 025 (T023, US4): lock the floor — the provider/auth variables are
+ * injected per-run AFTER the allowlist pass (from profile/preset values) and
+ * must never become allowlisted, or a host-level value could silently
+ * redirect any run's traffic or billing. This is a deliberate negative pin:
+ * if someone tries to "fix" a kimi/auth issue by extending the allowlist,
+ * this test is the tripwire.
+ */
+describe('allowlist floor lock (feature 025, T023)', () => {
+  it('never passes provider endpoint or credential variables through, even when the host sets them', () => {
+    const forbidden = [
+      'ANTHROPIC_BASE_URL',
+      'ANTHROPIC_API_KEY',
+      'ANTHROPIC_AUTH_TOKEN',
+      'CLAUDE_CODE_USE_BEDROCK',
+      'OPENAI_API_KEY',
+      'OPENAI_BASE_URL',
+    ];
+    const source: NodeJS.ProcessEnv = { HOME: '/home/op' };
+    for (const key of forbidden) source[key] = `canary-${key}`;
+    const env = buildChildEnv(source);
+    for (const key of forbidden) {
+      expect(env[key], key).toBeUndefined();
+    }
+    expect(Object.keys(env)).toEqual(['HOME']);
+  });
+});

@@ -212,6 +212,74 @@ describe('AgentsConfigSchema', () => {
     expect(res.success).toBe(true);
   });
 
+  // --- feature 025: kimi executor branch (T007) ---
+
+  const withKimi = () => {
+    const config = withClaudeCli();
+    config.executors['coder'] = {
+      type: 'kimi',
+      model: 'kimi-k3',
+      repository: 'product',
+      concurrency: 1,
+    };
+    return config;
+  };
+
+  it('accepts a valid kimi executor with the claude_cli harness defaults applied', () => {
+    const res = AgentsConfigSchema.safeParse(withKimi());
+    expect(res.success).toBe(true);
+    if (res.success) {
+      const coder = res.data.executors['coder'];
+      expect(coder.type).toBe('kimi');
+      if (coder.type === 'kimi') {
+        expect(coder.cliPath).toBe('claude');
+        expect(coder.keepFailedWorktrees).toBe(false);
+        expect(coder.killGraceMs).toBe(5000);
+        expect(coder.cancelPollMs).toBe(3000);
+        expect(coder.useCallbackChannel).toBe(false);
+      }
+    }
+  });
+
+  it('rejects auth/AWS fields on kimi — implicitly api_key-only, strict branch', () => {
+    for (const extra of [
+      { auth: 'api_key' },
+      { auth: 'bedrock' },
+      { awsRegion: 'eu-west-1' },
+      { awsProfile: 'corp-dev' },
+      { caBundlePath: '/etc/ssl/ca.pem' },
+      { anthropicBaseUrl: 'https://x' },
+    ]) {
+      const config = withKimi();
+      Object.assign(config.executors['coder'] as Record<string, unknown>, extra);
+      expect(AgentsConfigSchema.safeParse(config).success).toBe(false);
+    }
+  });
+
+  it('rejects a kimi `repository` not in workspace.repositories[].name (shared harness rule)', () => {
+    const config = withKimi();
+    (config.executors['coder'] as { repository: string }).repository = 'does-not-exist';
+    const res = AgentsConfigSchema.safeParse(config);
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      const issue = res.error.issues.find((i) => i.path.join('.') === 'executors.coder.repository');
+      expect(issue).toBeDefined();
+      expect(issue?.message).toContain('does-not-exist');
+    }
+  });
+
+  it('rejects a kimi agent with allowedTools omitted and empty behavior.allowed_tools (shared harness rule)', () => {
+    const config = withKimi();
+    config.agents[0].behavior = {};
+    const res = AgentsConfigSchema.safeParse(config);
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(
+        res.error.issues.some((i) => i.path.join('.') === 'agents.0.behavior.allowed_tools'),
+      ).toBe(true);
+    }
+  });
+
   // --- feature 019: agent repository scope (behavior.repositories) ---
 
   const withTwoRepos = () => {

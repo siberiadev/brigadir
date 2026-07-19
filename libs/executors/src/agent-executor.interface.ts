@@ -7,6 +7,7 @@
 export const EXECUTOR_TYPES = [
   'mock',
   'claude_cli',
+  'kimi',
   'anthropic_api',
   'deepseek_api',
   'claude_routines',

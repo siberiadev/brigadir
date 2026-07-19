@@ -12,6 +12,7 @@ import { ReconcileProcessor } from './reconcile.processor';
 import { ReconcileScheduler } from './reconcile.scheduler';
 import { RunProcessor } from './run.processor';
 import { ClaudeCliRunProcessor } from './claude-cli-run.processor';
+import { KimiRunProcessor } from './kimi-run.processor';
 
 /**
  * Worker composition. JiraModule.forRootAsync() is @Global and LAZY — it exposes
@@ -41,6 +42,15 @@ import { ClaudeCliRunProcessor } from './claude-cli-run.processor';
   // provider, which the worker deliberately does not have (compose gives the
   // worker no BRIGADIR_DASHBOARD_TOKEN). The service's own deps (DRIZZLE,
   // JiraClientFactory) are already global here.
-  providers: [RunProcessor, ClaudeCliRunProcessor, ReconcileProcessor, ReconcileScheduler, HumanTaskService],
+  providers: [
+    RunProcessor,
+    ClaudeCliRunProcessor,
+    // Feature 025: `run.kimi` — the same processor logic bound to the kimi
+    // queue/profile budget (see kimi-run.processor.ts).
+    KimiRunProcessor,
+    ReconcileProcessor,
+    ReconcileScheduler,
+    HumanTaskService,
+  ],
 })
 export class WorkerAppModule {}

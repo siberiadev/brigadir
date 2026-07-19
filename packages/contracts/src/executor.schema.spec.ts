@@ -185,3 +185,75 @@ describe('claude_cli auth modes (feature 018)', () => {
     expect(parsed.success).toBe(true);
   });
 });
+
+/**
+ * Feature 025 (T006) — the kimi accept/reject matrix from
+ * specs/025-kimi-executor/contracts/kimi-executor-api.md. kimi is implicitly
+ * api_key-only: no auth selector, no AWS fields, no base-URL field — all
+ * foreign by `.strict()`; the key is required on create.
+ */
+describe('kimi executor branch (feature 025)', () => {
+  const kimiConfig = (overrides: Record<string, unknown> = {}) => ({
+    type: 'kimi',
+    model: 'kimi-k3',
+    cli_path: 'claude',
+    use_callback_channel: true,
+    keep_failed_worktrees: false,
+    max_turns: 40,
+    max_parallel_runs: 2,
+    ...overrides,
+  });
+  const issuePaths = (parsed: { error?: { issues: { path: PropertyKey[] }[] } }) =>
+    (parsed.error?.issues ?? []).map((i) => i.path.join('.'));
+
+  it('accepts a valid kimi config (harness knobs + optional write-only api_key)', () => {
+    expect(ExecutorConfigSchema.safeParse(kimiConfig()).success).toBe(true);
+    expect(ExecutorConfigSchema.safeParse(kimiConfig({ api_key: 'sk-moonshot' })).success).toBe(
+      true,
+    );
+    expect(ExecutorConfigSchema.safeParse(kimiConfig({ api_key: null })).success).toBe(true);
+  });
+
+  it('rejects an auth selector — kimi has no auth modes', () => {
+    for (const auth of ['api_key', 'host_subscription', 'bedrock']) {
+      expect(ExecutorConfigSchema.safeParse(kimiConfig({ auth })).success).toBe(false);
+    }
+  });
+
+  it('rejects the AWS/bedrock fields as foreign', () => {
+    for (const field of ['aws_region', 'aws_profile', 'ca_bundle_path']) {
+      expect(ExecutorConfigSchema.safeParse(kimiConfig({ [field]: 'x' })).success).toBe(false);
+    }
+  });
+
+  it('rejects any base-URL-shaped field — the endpoint is a code constant, never config', () => {
+    for (const field of ['base_url', 'anthropic_base_url', 'endpoint', 'url']) {
+      expect(ExecutorConfigSchema.safeParse(kimiConfig({ [field]: 'https://x' })).success).toBe(
+        false,
+      );
+    }
+  });
+
+  it('rejects repository on kimi — same platform-scoped rule as claude_cli', () => {
+    expect(ExecutorConfigSchema.safeParse(kimiConfig({ repository: 'api' })).success).toBe(false);
+  });
+
+  it('CREATE requires an api_key string (omitted and null both rejected at api_key)', () => {
+    const body = { ...kimiConfig(), name: 'kimi-1' };
+    const omitted = ExecutorCreateRequestSchema.safeParse(body);
+    expect(omitted.success).toBe(false);
+    expect(issuePaths(omitted)).toContain('api_key');
+    const cleared = ExecutorCreateRequestSchema.safeParse({ ...body, api_key: null });
+    expect(cleared.success).toBe(false);
+    expect(issuePaths(cleared)).toContain('api_key');
+    expect(
+      ExecutorCreateRequestSchema.safeParse({ ...body, api_key: 'sk-moonshot' }).success,
+    ).toBe(true);
+  });
+
+  it('UPDATE accepts an omitted key (stored key retained; clear-to-keyless is the controller 422)', () => {
+    const body = { ...kimiConfig(), name: 'kimi-1' };
+    expect(ExecutorUpdateRequestSchema.safeParse(body).success).toBe(true);
+    expect(ExecutorUpdateRequestSchema.safeParse({ ...body, api_key: null }).success).toBe(true);
+  });
+});

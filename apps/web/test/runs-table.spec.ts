@@ -27,6 +27,29 @@ describe('Runs — table + filters + cost', () => {
     expect(wrapper.find('[data-test="cost-total"]').text()).not.toContain('1.2345');
   });
 
+  // Feature 025: a kimi run's cost carries the indicative marker in the list;
+  // a claude_cli run does not. Regression guard — the list row must carry
+  // `executor_type` (RunListItemSchema), or the marker silently never renders.
+  it('marks a kimi run cost as indicative in the table; claude_cli has no marker', async () => {
+    server.use(
+      http.get('/api/workspaces/:id/runs', () =>
+        HttpResponse.json({
+          ...sampleRunList,
+          items: [
+            { ...sampleRunListItem, run_id: 'run-kimi', executor_type: 'kimi', cost_usd: '0.0500' },
+            { ...sampleRunListItem, run_id: 'run-claude', executor_type: 'claude_cli' },
+          ],
+          total: 2,
+        }),
+      ),
+    );
+    const wrapper = mountRuns();
+    await flush();
+
+    const markers = wrapper.findAll('[data-test="cost-indicative"]');
+    expect(markers.length).toBe(1);
+  });
+
   it('shows the agent role per run, em dash when the agent has none (feature 016)', async () => {
     server.use(
       http.get('/api/workspaces/:id/runs', () =>
