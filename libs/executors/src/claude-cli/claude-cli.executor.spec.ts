@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentsConfig } from '@brigadir/contracts';
@@ -29,15 +29,18 @@ const cleanupMock = cleanupAll as unknown as ReturnType<typeof vi.fn>;
 const spawnGroupMock = spawnGroup as unknown as ReturnType<typeof vi.fn>;
 
 /** Fake MultiPrepareResult for a single-repo workspace rooted at `parentDir`. */
-function fakeWorkspace(parentDir: string, repoName = 'product', branch = 'feat/BRIG-1') {
+function fakeWorkspace(parentDir: string, repoName = 'product', continueBranch?: string) {
   return {
     parentDir,
-    branch,
     repos: [
       {
         repo: { name: repoName, url: `git@acme:${repoName}.git`, defaultBranch: 'main' },
         worktreeDir: join(parentDir, repoName),
         cacheDir: join(parentDir, '..', 'cache', repoName),
+        // Feature 023: per-repo start ref; no run-level branch any more.
+        start: continueBranch
+          ? { startRef: `origin/${continueBranch}`, continueBranch }
+          : { startRef: 'origin/main' },
       },
     ],
   };
@@ -88,12 +91,18 @@ function fakeDb(executorConfig: unknown, behavior: unknown, settings: Record<str
         innerJoin: () => ({
           innerJoin: () => ({
             where: () => ({
-              limit: () => Promise.resolve([{ executorConfig, behavior, workspaceId: 'ws-1' }]),
+              limit: () =>
+                Promise.resolve([
+                  { executorConfig, behavior, workspaceId: 'ws-1', ticketId: 'tkt-1' },
+                ]),
             }),
           }),
         }),
         where: () => ({
           limit: () => Promise.resolve([{ settings }]),
+          // Feature 023 prior-work scan: runs on the ticket, newest first. No
+          // prior run here, so every repo starts from its default branch.
+          orderBy: () => ({ limit: () => Promise.resolve([]) }),
         }),
       }),
     }),
@@ -598,7 +607,9 @@ describe('ClaudeCliExecutor — workspace-setup environment (feature 015)', () =
   let worktreeDir: string;
   beforeEach(async () => {
     worktreeDir = await mkdtemp(join(tmpdir(), 'brigadir-setup-exec-test-'));
-    prepareMock.mockReset().mockResolvedValue(fakeWorkspace(worktreeDir, 'api', 'setup/a1b2c3d4'));
+    // Feature 023: a setup run is ticketless — there is never prior work to
+    // continue, so the worktree is detached at the repo's default branch.
+    prepareMock.mockReset().mockResolvedValue(fakeWorkspace(worktreeDir, 'api'));
     cleanupMock.mockReset().mockResolvedValue(undefined);
     spawnGroupMock.mockReset();
   });
@@ -628,15 +639,17 @@ describe('ClaudeCliExecutor — workspace-setup environment (feature 015)', () =
     expect(argv[argv.indexOf('--allowed-tools') + 1]).toBe(
       DEFAULT_REPO_RUN_ALLOWED_TOOLS.join(','),
     );
-    // Ticketless worktree: branch identity setup/<first 8 chars of run id>.
     // Feature 019 (research D5): a setup run keeps a ONE-element repo scope.
     expect(prepareMock).toHaveBeenCalledTimes(1);
-    const [reposArg, runIdArg, ticketKeyArg, prefixArg] = prepareMock.mock.calls[0];
+    const [reposArg, runIdArg, , , optsArg] = prepareMock.mock.calls[0];
     expect(reposArg).toHaveLength(1);
     expect(reposArg[0]).toMatchObject({ name: 'api' });
     expect(runIdArg).toBe('a1b2c3d4-e5f6-7890');
-    expect(ticketKeyArg).toBe('a1b2c3d4');
-    expect(prefixArg).toBe('setup');
+    // Feature 023: a ticketless setup run has no chain to continue — the
+    // system creates no branch, it only SUGGESTS setup/<runId8> to the agent.
+    expect(optsArg.continueBranches).toEqual({});
+    const wrapperText = await readFile(join(worktreeDir, '.brigadir', 'wrapper.txt'), 'utf8');
+    expect(wrapperText).toContain('create setup/a1b2c3d4');
     // Cleanup rides the standard workspace path (keep flag falsy — success run).
     expect(cleanupMock).toHaveBeenCalledTimes(1);
     expect(cleanupMock.mock.calls[0][0]).toMatchObject({ parentDir: worktreeDir });

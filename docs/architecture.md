@@ -639,6 +639,7 @@ all-or-nothing: невалидный агент ⇒ 422 с path-qualified issues
 - `outcome=team` ⇒ `team` обязателен (feature 011). Принятие — атомарное: валидация proposal'а (имена ∪ существующие агенты, статусы против живой борды, executor-профили по имени, коллизии триггеров) и применение (агенты enabled + бестикетная review-задача + finalize succeeded) в одной транзакции; невалидный proposal — 422 с списком ошибок через complete_task, прогон остаётся running (агент чинит и повторяет).
 - Из `checks` строятся: чеклист ✅/❌ в Vue-дашборде и ADF-коммент в Jira (`taskList` + `panel`).
 - Из `artifacts` (feature 019) — артефакт-строки: по одной на репозиторий (`<repo>: <branch> — <pr_url> (<n> commits, <m> files)`) в ADF-комменте и блоке Artifacts на run card; легаси-плоская форма рендерится одной строкой без префикса репозитория.
+- **`artifacts.repos[].branch` — не описательное поле, а вход контракта следующей стадии (feature 023):** система стартует следующий прогон по тикету с заявленной здесь ветки (`prior-work.ts`, см. §7). Поле остаётся ОПЦИОНАЛЬНЫМ — его отсутствие означает «продолжать нечего, старт с дефолтной ветки», поэтому вперёд-совместимость v1/v2 не нарушена. Заявленная, но отсутствующая на origin ветка роняет прогон громко. Обратная сторона: изменённый, но не заявленный репозиторий для следующей стадии невидим — детерминированной проверки этого пока нет (см. `specs/023-branch-handoff/research.md`, «Deferred»).
 - Отчёт проходит **скраббер секретов** (regex+entropy) до записи в БД и постинга в Jira; artifacts (обе формы) скрабятся наравне с прочими free-text полями (feature 019 закрыл этот пробел).
 - Схема версионируется (`schema_version`); миграции отчётов — вперёд-совместимые. v2 (feature 019) добавил `artifacts.repos[]`; v1-отчёты валидны навсегда, связки «версия⇄поле» нет (v1+repos и v2+плоские — тоже валидны).
 - Для QA-агента `checks` — это его чек-план; для Implementer — определение готовности (tests pass, lint pass, PR opened). Набор рекомендованных checks задаётся в обёртке инструкции.
@@ -685,20 +686,34 @@ You have MCP tools from the "brigadir" server. They are the ONLY way to report t
 
 ## Rules
 - Work only inside the provided workspace directory.
-- {code_delivery == branch_push: "Commit to branch {branch} and push. Do not merge."}
+- {code_delivery == branch_push: "Create your branch, commit and push. Do not merge."}
 - Do not transition or comment the Jira ticket yourself — the system does that from your report.
 - If you cannot finish, still call complete_task with outcome=failure or needs_human.
 ```
 
 Мульти-репо прогоны (feature 019, реализовано в живой обёртке `wrapper.ts`): у repo-carrying
 прогона workspace-директория — РОДИТЕЛЬ `worktreeRoot/<runId>/` с worktree на каждый репозиторий
-scope'а (`<runId>/<repo.name>/`, все на одной ветке `<branch_prefix>/<ticketKey>`). Обёртка
-рендерит секцию `## Repositories`: список всех подготовленных репо (имя, абсолютный путь, ветка,
-база) + правила поведения: (a) решить по тикету, какие репо реально требуют изменений; (b)
-коммитить/пушить только в изменённых; (c) при взаимозависимых PR ссылаться на зависимый PR в
-описании каждого; (d) отчитаться `artifacts.repos[]` (schema_version: 2) по одной записи на
-ИЗМЕНЁННЫЙ репозиторий; чеки/тесты — только в изменённых репо. No-repo (triage) прогоны получают
-обёртку, байт-в-байт идентичную до-019.
+scope'а (`<runId>/<repo.name>/`). **Ветками система не владеет (feature 023):** каждый worktree
+чекаутится в DETACHED HEAD на своём старт-рефе — `origin/<continueBranch>`, если предыдущая
+стадия по этому тикету отчиталась веткой для этого репо, иначе `origin/<defaultBranch>`. Репо
+расходятся независимо; общей «ветки прогона» больше нет. Обёртка рендерит секцию
+`## Repositories`: список подготовленных репо (имя, абсолютный путь, continue-ветка ЛИБО база +
+предлагаемое имя) + правила поведения: (a) решить по тикету, какие репо реально требуют
+изменений; (b) встать на ветку (`git switch -C`) до первого коммита — в detached HEAD не
+коммитить; (c) continue-ветку продолжать, а не заводить конкурирующую; (d) коммитить/пушить
+только в изменённых; (e) при взаимозависимых PR ссылаться на зависимый PR в описании каждого;
+(f) отчитаться `artifacts.repos[]` (schema_version: 2) по одной записи на ИЗМЕНЁННЫЙ репозиторий
+— **следующая стадия стартует именно с заявленной здесь ветки**; чеки/тесты — только в изменённых
+репо. No-repo (triage) прогоны получают обёртку, байт-в-байт идентичную до-019.
+
+Резолв старт-рефа (feature 023, `prior-work.ts`): `trigger_event.failing_run_id` (без фильтра по
+статусу; если он ничего не заявил — проваливаемся дальше) → последний `succeeded` прогон тикета
+(окно 5) → дефолтная ветка. Заявленная ветка проверяется на `refs/remotes/origin/*` (фетч кэша
+идёт с `--prune` — иначе удалённая ветка резолвится с протухшего рефа); **явно названная и не
+найденная ветка роняет прогон громко и НЕ откатывается на дефолтную** — иначе ревьюер тихо
+отревьюит пустой диф и вернёт success. Отсутствие записи для репо — штатный старт с дефолтной
+ветки. По каждому смонтированному репо пишется событие `run_events` `source: 'start-ref'`
+(`repo`, `decision`, `continueBranch`, `reportedByRunId`).
 
 Для не-Claude executor'ов те же опции компилируются в соответствующий формат (OpenAI system message + tools); для Routines — в сохранённый промпт routine + текст триггера. Компилятор обёртки — единственная точка, где «опции поведения» превращаются в текст: это позволяет улучшать промпт-инженерию без миграции пользовательских данных.
 
@@ -719,7 +734,8 @@ scope'а (`<runId>/<repo.name>/`, все на одной ветке `<branch_pre
 ```ts
 export interface RunRuntime {
   // feature 019: prepare принимает СПИСОК репозиториев — WorkspaceHandle обозначает
-  // родительскую директорию прогона с worktree на каждый repo (одна ветка во всех).
+  // родительскую директорию прогона с worktree на каждый repo. feature 023: `ref` —
+  // это старт-реф, на котором worktree чекаутится DETACHED; ветку заводит агент.
   prepare(spec: { repos: { repoUrl: string; ref: string }[]; env: Record<string,string> }): Promise<WorkspaceHandle>;
   spawn(handle: WorkspaceHandle, cmd: string[], opts: SpawnOpts): Promise<AgentProcess>; // kill = process group
   cleanup(handle: WorkspaceHandle): Promise<void>;

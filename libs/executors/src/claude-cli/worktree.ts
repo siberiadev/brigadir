@@ -12,21 +12,40 @@ export interface WorktreeRepo {
   defaultBranch: string;
 }
 
+/**
+ * Where one repo's worktree was parked, and why (feature 023). The worktree is
+ * always DETACHED: the system no longer owns the branch namespace — the agent
+ * creates and pushes its own branch.
+ */
+export interface RepoStart {
+  /** The commit-ish the worktree is detached at. */
+  startRef: string;
+  /**
+   * Branch a previous stage on this ticket reported, verified present on
+   * origin. Absent ⇒ this repo starts from its default branch.
+   */
+  continueBranch?: string;
+}
+
 /** One prepared per-repo worktree inside a run's parent workspace dir. */
 export interface RepoWorktree {
   repo: WorktreeRepo;
   worktreeDir: string;
   cacheDir: string;
+  start: RepoStart;
 }
 
 /**
  * A run's whole prepared workspace (feature 019): the parent dir the agent
- * works in (`worktreeRoot/<runId>`), containing one worktree per repo — all
- * on the SAME branch (branch↔ticket traceability across repos).
+ * works in (`worktreeRoot/<runId>`), containing one worktree per repo.
+ *
+ * There is deliberately NO run-level branch (feature 023 removed it): repo A
+ * may continue a previous stage's branch while repo B starts fresh from its
+ * default branch, so a single shared name would be a structural lie. Per-repo
+ * provenance lives in `RepoWorktree.start`.
  */
 export interface MultiPrepareResult {
   parentDir: string;
-  branch: string;
   repos: RepoWorktree[];
 }
 
@@ -40,23 +59,51 @@ export class WorktreePrepareError extends Error {
 /**
  * Branch identity of a TICKETLESS workspace-setup run (feature 015, FR-020):
  * `setup/<first 8 chars of run id>`. Deterministic and collision-free (run ids
- * are unique; every resume creates a NEW setup run per feature 011), and
- * local-only — a setup run never pushes (spec FR-015); cleanup removes the
- * worktree like any run, and a leftover zero-commit branch falls under the
- * standard leftover policy in prepareAll().
+ * are unique; every resume creates a NEW setup run per feature 011).
+ *
+ * Since feature 023 this is a SUGGESTED name offered to the agent in the
+ * wrapper, not a branch the system creates — the leftover policy it used to
+ * fall under no longer exists. A setup run still never pushes (spec FR-015).
  */
 export function setupRunBranchIdentity(runId: string): { branchPrefix: string; ticketKey: string } {
   return { branchPrefix: 'setup', ticketKey: runId.slice(0, 8) };
 }
 
-async function branchExists(cacheDir: string, branch: string): Promise<boolean> {
+/**
+ * Is `branch` present on the remote? Checked against `refs/remotes/origin/*`,
+ * never `refs/heads/*`: a local head in the shared cache may be an inert
+ * leftover from a pre-023 run and proves nothing about what a previous stage
+ * actually pushed. Correctness depends on `ensureCache` fetching with
+ * `--prune` — without it a deleted branch lingers here forever.
+ */
+async function remoteBranchExists(cacheDir: string, branch: string): Promise<boolean> {
   try {
-    await execFileAsync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], {
-      cwd: cacheDir,
-    });
+    await execFileAsync(
+      'git',
+      ['show-ref', '--verify', '--quiet', `refs/remotes/origin/${branch}`],
+      { cwd: cacheDir },
+    );
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * A branch name from an agent report is untrusted free text (`ReportSchema`
+ * only bounds its length) that lands in an argv position. There is no shell
+ * (`execFile`), so no injection — but a leading `-` would be parsed as an
+ * OPTION by git (`--upload-pack=…`), so it is rejected before anything else,
+ * then git itself judges the grammar.
+ */
+async function assertSafeBranchName(branch: string): Promise<void> {
+  if (branch.length === 0 || branch.startsWith('-')) {
+    throw new WorktreePrepareError(`reported branch name "${branch}" is not a valid branch name`);
+  }
+  try {
+    await execFileAsync('git', ['check-ref-format', '--branch', branch]);
+  } catch {
+    throw new WorktreePrepareError(`reported branch name "${branch}" is not a valid branch name`);
   }
 }
 
@@ -117,7 +164,11 @@ async function ensureCache(repo: WorktreeRepo, repoCacheRoot: string): Promise<s
 
   if (existsSync(cacheDir)) {
     try {
-      await git(['fetch', 'origin'], cacheDir);
+      // `--prune` is load-bearing since feature 023, not hygiene: start refs are
+      // resolved against `refs/remotes/origin/*`, and without pruning a branch
+      // deleted upstream lingers here forever — a run would silently start from
+      // a deleted branch's stale tip, with no error anywhere. Do not drop it.
+      await git(['fetch', '--prune', 'origin'], cacheDir);
     } catch (err) {
       if (await headResolves(cacheDir)) throw err;
       await rm(cacheDir, { recursive: true, force: true });
@@ -132,59 +183,62 @@ async function ensureCache(repo: WorktreeRepo, repoCacheRoot: string): Promise<s
 }
 
 /**
- * Add one repo's worktree on `branch` into `worktreeDir` (research D3 layout).
- * Leftover-branch policy (revised, live incident 2026-07-14) — applied PER
- * REPO, unchanged by feature 019: an existing branch with ZERO commits beyond
- * the base ref is a worthless remnant of an attempt that died before doing
- * work — it is deleted and recreated so retries are possible. An existing
- * branch WITH commits is real prior work — fail fast and loud (never silently
- * reuse or force-reset); a human decides.
+ * Add one repo's DETACHED worktree into `worktreeDir` (research D3 layout,
+ * revised by feature 023).
  *
- * `reuseBranch` (feature 004 FR-016/018): a resumed attempt deliberately
- * CONTINUES the ticket branch a prior attempt started — attach where the
- * branch exists. Feature 019 (research D4): if the branch does NOT exist in
- * some repo (agent scope widened between attempts, or the first attempt never
- * branched there), fall through to fresh creation instead of failing — a
- * resume is a continuation, not a stale-leftover hazard.
+ * The system no longer creates, deletes or resets branches — it only chooses
+ * the commit to start from. That retires the leftover-branch policy born of
+ * the 2026-07-14 incident: there is no longer a system-chosen branch name for
+ * a later run to collide with, and no code path that CAN discard prior work
+ * (`git branch -D` left the codebase entirely). Naming and pushing are the
+ * agent's job; the wrapper tells it what to create or continue.
+ *
+ * `continueBranch` is a branch a previous stage on this ticket reported. It is
+ * agent-authored, so it is validated, then verified to exist on origin. The
+ * asymmetry is deliberate and load-bearing: a branch EXPLICITLY named but
+ * missing fails loudly, while NO named branch quietly means "start from the
+ * default". Falling back to the default on an explicit miss would let a
+ * reviewer silently review an empty diff and report success.
  */
 async function addRepoWorktree(
   repo: WorktreeRepo,
   cacheDir: string,
   worktreeDir: string,
-  branch: string,
-  opts: { reuseBranch?: boolean },
-): Promise<void> {
-  const baseRef = `origin/${repo.defaultBranch}`;
+  continueBranch: string | undefined,
+): Promise<RepoStart> {
+  let start: RepoStart = { startRef: `origin/${repo.defaultBranch}` };
+  if (continueBranch !== undefined) {
+    await assertSafeBranchName(continueBranch);
+    if (!(await remoteBranchExists(cacheDir, continueBranch))) {
+      throw new WorktreePrepareError(
+        `previous run reported branch "${continueBranch}" but origin has no such branch — ` +
+          `push it or clear the stale report, then retry`,
+      );
+    }
+    start = { startRef: `origin/${continueBranch}`, continueBranch };
+  }
   try {
-    const exists = await branchExists(cacheDir, branch);
-    if (opts.reuseBranch && exists) {
-      await git(['worktree', 'add', worktreeDir, branch], cacheDir);
-      return;
-    }
-    if (exists) {
-      const ahead = (await git(['rev-list', '--count', `${baseRef}..${branch}`], cacheDir)).trim();
-      if (ahead === '0') {
-        await git(['branch', '-D', branch], cacheDir);
-      } else {
-        throw new WorktreePrepareError(
-          `branch "${branch}" already exists with ${ahead} commit(s) of prior work — ` +
-            `refusing to discard or silently reuse it; delete or merge the branch, then retry`,
-        );
-      }
-    }
-    await git(['worktree', 'add', '-b', branch, worktreeDir, baseRef], cacheDir);
+    await git(['worktree', 'add', '--detach', worktreeDir, start.startRef], cacheDir);
   } catch (err) {
     if (err instanceof WorktreePrepareError) throw err;
     throw new WorktreePrepareError(
-      `cannot create worktree on branch "${branch}": ${(err as Error).message}`,
+      `cannot create worktree at "${start.startRef}": ${(err as Error).message}`,
     );
   }
+  return start;
 }
 
 /**
- * Prepare a run's workspace (feature 019, research D3/D4): one worktree per
- * repo under `worktreeRoot/<runId>/<repo.name>/`, every repo on the same
- * `<branchPrefix>/<ticketKey>` branch off `origin/<repo.defaultBranch>`.
+ * Prepare a run's workspace (feature 019 research D3, revised by 023): one
+ * DETACHED worktree per repo under `worktreeRoot/<runId>/<repo.name>/`, each
+ * at its own start ref — `origin/<continueBranch>` where a previous stage on
+ * this ticket reported one for that repo, otherwise `origin/<defaultBranch>`.
+ * Repos diverge independently; there is no run-level branch.
+ *
+ * `continueBranches` is keyed by `WorktreeRepo.name`. Matching agent-reported
+ * repo names to workspace repos is the CALLER's job (see `prior-work.ts`) —
+ * this module stays a pure git layer with no knowledge of report semantics.
+ *
  * Sequential by design — repo counts are small and error attribution stays
  * deterministic. ALL-OR-NOTHING: a failure at repo N unwinds the N-1
  * worktrees already created and removes the parent dir (spec FR-008/SC-006),
@@ -193,11 +247,9 @@ async function addRepoWorktree(
 export async function prepareAll(
   repos: WorktreeRepo[],
   runId: string,
-  ticketKey: string,
-  branchPrefix: string,
   worktreeRoot: string,
   repoCacheRoot: string,
-  opts: { reuseBranch?: boolean } = {},
+  opts: { continueBranches?: Record<string, string> } = {},
 ): Promise<MultiPrepareResult> {
   if (repos.length === 0) {
     throw new WorktreePrepareError('no repositories to prepare for this run');
@@ -206,14 +258,18 @@ export async function prepareAll(
   const parentDir = join(worktreeRoot, runId);
   await mkdir(parentDir, { recursive: true });
 
-  const branch = `${branchPrefix}/${ticketKey}`;
   const prepared: RepoWorktree[] = [];
   for (const repo of repos) {
     try {
       const cacheDir = await ensureCache(repo, repoCacheRoot);
       const worktreeDir = join(parentDir, repo.name);
-      await addRepoWorktree(repo, cacheDir, worktreeDir, branch, opts);
-      prepared.push({ repo, worktreeDir, cacheDir });
+      const start = await addRepoWorktree(
+        repo,
+        cacheDir,
+        worktreeDir,
+        opts.continueBranches?.[repo.name],
+      );
+      prepared.push({ repo, worktreeDir, cacheDir, start });
     } catch (err) {
       // Unwind everything this run already created — no orphaned half-prepared
       // workspaces (best-effort per worktree; `git worktree prune` on the next
@@ -227,7 +283,7 @@ export async function prepareAll(
     }
   }
 
-  return { parentDir, branch, repos: prepared };
+  return { parentDir, repos: prepared };
 }
 
 /**

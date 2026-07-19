@@ -156,12 +156,21 @@ describe('claude_cli ticket-component repository scoping (feature 020)', () => {
     }
   }
 
-  /** The ticket branch a run created in a cache repo, if any (caches persist across tests — branch per unique ticket is the discriminator). */
-  async function branchInCache(cacheName: string, ticketKey: string): Promise<boolean> {
-    const cacheDir = join(env.repoCacheRoot, cacheName);
-    if (!existsSync(cacheDir)) return false;
-    const { stdout } = await execFileAsync('git', ['-C', cacheDir, 'branch', '--list', `run/${ticketKey}`]);
-    return stdout.trim() !== '';
+  /**
+   * Was `repoName` actually mounted for this run? Feature 023 removed the
+   * system-created `run/<ticket>` branch that used to be the discriminator
+   * (caches persist across tests, so the cache dir alone proves nothing). The
+   * per-repo `start-ref` timeline event is the durable per-RUN record of what
+   * was mounted, written before the worktree that cleanup later removes.
+   */
+  async function mountedInRun(runId: string, repoName: string): Promise<boolean> {
+    const rows = await db.db
+      .select()
+      .from(schema.runEvents)
+      .where(eq(schema.runEvents.runId, runId));
+    return rows
+      .map((r) => r.payload as Record<string, unknown>)
+      .some((p) => p?.source === 'start-ref' && p?.repo === repoName);
   }
 
   /** The run's repo-scoping timeline events (feature 020, FR-015). */
@@ -188,9 +197,9 @@ describe('claude_cli ticket-component repository scoping (feature 020)', () => {
     const { runId, ticketKey } = await triggerRun({ components: ['infra'] });
     const row = await pollRun(runId);
     expect(row.status).toBe('succeeded');
-    expect(await branchInCache('infra', ticketKey)).toBe(true);
-    expect(await branchInCache('product', ticketKey)).toBe(false);
-    expect(await branchInCache('docs', ticketKey)).toBe(false);
+    expect(await mountedInRun(runId, 'infra')).toBe(true);
+    expect(await mountedInRun(runId, 'product')).toBe(false);
+    expect(await mountedInRun(runId, 'docs')).toBe(false);
 
     const events = await scopingEvents(runId);
     expect(events).toHaveLength(1);
@@ -206,8 +215,8 @@ describe('claude_cli ticket-component repository scoping (feature 020)', () => {
     const { runId, ticketKey } = await triggerRun({ components: ['Design', 'infra'] });
     const row = await pollRun(runId);
     expect(row.status).toBe('succeeded');
-    expect(await branchInCache('infra', ticketKey)).toBe(true);
-    expect(await branchInCache('product', ticketKey)).toBe(false);
+    expect(await mountedInRun(runId, 'infra')).toBe(true);
+    expect(await mountedInRun(runId, 'product')).toBe(false);
 
     const events = await scopingEvents(runId);
     expect(events[0]).toMatchObject({ gate: 'passed', ignored: ['Design'], effective: ['infra'] });
@@ -221,9 +230,9 @@ describe('claude_cli ticket-component repository scoping (feature 020)', () => {
     });
     const row = await pollRun(runId);
     expect(row.status).toBe('succeeded');
-    expect(await branchInCache('infra', ticketKey)).toBe(true);
-    expect(await branchInCache('docs', ticketKey)).toBe(false);
-    expect(await branchInCache('product', ticketKey)).toBe(false);
+    expect(await mountedInRun(runId, 'infra')).toBe(true);
+    expect(await mountedInRun(runId, 'docs')).toBe(false);
+    expect(await mountedInRun(runId, 'product')).toBe(false);
 
     const events = await scopingEvents(runId);
     expect(events[0]).toMatchObject({ gate: 'passed', effective: ['infra'] });
@@ -233,9 +242,9 @@ describe('claude_cli ticket-component repository scoping (feature 020)', () => {
     const { runId, ticketKey } = await triggerRun({ components: ['docs'] });
     const row = await pollRun(runId);
     expect(row.status).toBe('succeeded');
-    expect(await branchInCache('docs', ticketKey)).toBe(true);
-    expect(await branchInCache('product', ticketKey)).toBe(false);
-    expect(await branchInCache('infra', ticketKey)).toBe(false);
+    expect(await mountedInRun(runId, 'docs')).toBe(true);
+    expect(await mountedInRun(runId, 'product')).toBe(false);
+    expect(await mountedInRun(runId, 'infra')).toBe(false);
   });
 
   // ---------------------------------------------------------------- US2: fail-closed parking
@@ -289,7 +298,7 @@ describe('claude_cli ticket-component repository scoping (feature 020)', () => {
 
       // FR-008: the gate fired BEFORE any clone — no branch in any cache.
       for (const repo of ['product', 'infra', 'docs']) {
-        expect(await branchInCache(repo, ticketKey), `${c.name}: ${repo}`).toBe(false);
+        expect(await mountedInRun(runId, repo), `${c.name}: ${repo}`).toBe(false);
       }
 
       const events = await scopingEvents(runId);
@@ -325,7 +334,7 @@ describe('claude_cli ticket-component repository scoping (feature 020)', () => {
     expect(row.error).toMatch(/components could not be read from Jira.*failing closed/);
     expect(await openTasks(res.runId)).toHaveLength(0);
     for (const repo of ['product', 'infra', 'docs']) {
-      expect(await branchInCache(repo, ticketKey)).toBe(false);
+      expect(await mountedInRun(res.runId, repo)).toBe(false);
     }
     const events = await scopingEvents(res.runId);
     expect(events[0]?.gate).toBe('failed:components_unreadable');
@@ -354,9 +363,11 @@ describe('claude_cli ticket-component repository scoping (feature 020)', () => {
 
     const successor = await pollRun(resolveBody.newRunId);
     expect(successor.status).toBe('succeeded');
-    expect(await branchInCache('infra', ticketKey)).toBe(true);
-    expect(await branchInCache('product', ticketKey)).toBe(false);
-    expect(await branchInCache('docs', ticketKey)).toBe(false);
+    // The SUCCESSOR is the run that mounted anything — the parked one never did.
+    expect(await mountedInRun(resolveBody.newRunId, 'infra')).toBe(true);
+    expect(await mountedInRun(resolveBody.newRunId, 'product')).toBe(false);
+    expect(await mountedInRun(resolveBody.newRunId, 'docs')).toBe(false);
+    expect(await mountedInRun(runId, 'infra')).toBe(false);
 
     const events = await scopingEvents(resolveBody.newRunId);
     expect(events).toHaveLength(1);
@@ -373,7 +384,7 @@ describe('claude_cli ticket-component repository scoping (feature 020)', () => {
     expect(row.status).toBe('succeeded');
     // ALL workspace repositories mounted, exactly as before feature 020.
     for (const repo of ['product', 'infra', 'docs']) {
-      expect(await branchInCache(repo, ticketKey), repo).toBe(true);
+      expect(await mountedInRun(runId, repo), repo).toBe(true);
     }
     expect(await scopingEvents(runId)).toHaveLength(0);
     expect(await openTasks(runId)).toHaveLength(0);
@@ -383,7 +394,7 @@ describe('claude_cli ticket-component repository scoping (feature 020)', () => {
     const { runId, ticketKey } = await triggerRun({ ticketScoping: false });
     const row = await pollRun(runId);
     expect(row.status).toBe('succeeded');
-    expect(await branchInCache('product', ticketKey)).toBe(true);
+    expect(await mountedInRun(runId, 'product')).toBe(true);
     expect(await scopingEvents(runId)).toHaveLength(0);
   });
 
@@ -395,8 +406,8 @@ describe('claude_cli ticket-component repository scoping (feature 020)', () => {
     });
     const row = await pollRun(runId);
     expect(row.status).toBe('succeeded');
-    expect(await branchInCache('infra', ticketKey)).toBe(true);
-    expect(await branchInCache('product', ticketKey)).toBe(false);
+    expect(await mountedInRun(runId, 'infra')).toBe(true);
+    expect(await mountedInRun(runId, 'product')).toBe(false);
     expect(await scopingEvents(runId)).toHaveLength(0);
   });
 
@@ -406,8 +417,8 @@ describe('claude_cli ticket-component repository scoping (feature 020)', () => {
     const off = await triggerRun({ ticketScoping: false, components: ['infra'] });
     expect((await pollRun(on.runId)).status).toBe('succeeded');
     expect((await pollRun(off.runId)).status).toBe('succeeded');
-    expect(await branchInCache('product', on.ticketKey)).toBe(false); // narrowed
-    expect(await branchInCache('product', off.ticketKey)).toBe(true); // untouched legacy
+    expect(await mountedInRun(on.runId, 'product')).toBe(false); // narrowed
+    expect(await mountedInRun(off.runId, 'product')).toBe(true); // untouched legacy
   });
 
   // ---------------------------------------------------------------- US4: the gate never over-blocks
@@ -418,7 +429,7 @@ describe('claude_cli ticket-component repository scoping (feature 020)', () => {
     const row = await pollRun(runId);
     expect(row.status).toBe('succeeded');
     expect(await openTasks(runId)).toHaveLength(0);
-    expect(await branchInCache('infra', ticketKey)).toBe(true);
+    expect(await mountedInRun(runId, 'infra')).toBe(true);
     const events = await scopingEvents(runId);
     expect(events).toHaveLength(1);
     expect(events[0].gate).toBe('skipped_single_repo');
@@ -432,7 +443,7 @@ describe('claude_cli ticket-component repository scoping (feature 020)', () => {
     const row = await pollRun(runId);
     expect(row.status).toBe('succeeded');
     expect(await openTasks(runId)).toHaveLength(0);
-    expect(await branchInCache('infra', ticketKey)).toBe(true);
+    expect(await mountedInRun(runId, 'infra')).toBe(true);
     expect((await scopingEvents(runId))[0].gate).toBe('skipped_single_repo');
   });
 });

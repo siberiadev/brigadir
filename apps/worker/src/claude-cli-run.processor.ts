@@ -465,18 +465,7 @@ export class ClaudeCliRunProcessor
         maxBudgetUsd: loaded.maxBudgetUsd !== null ? Number(loaded.maxBudgetUsd) : undefined,
       },
       env: {},
-      isResumedAttempt: this.isResumedAttempt(loaded),
     };
-  }
-
-  /**
-   * A continuation reuses the existing branch/worktree instead of cutting a
-   * fresh one. Both a human-resume and a rework are continuations of prior work
-   * on the same ticket (feature 010, FR-014/T052).
-   */
-  private isResumedAttempt(loaded: LoadedRun): boolean {
-    const source = (loaded.triggerEvent as { source?: string } | null)?.source;
-    return source === 'human-resume' || source === 'rework';
   }
 
   /**
