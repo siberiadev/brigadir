@@ -306,4 +306,28 @@ Linked incident section: [Problem 7](incident-2026-07-19-fix-prompt.md#problem-7
   `libs/executors/src/claude-cli/outbox.spec.ts`; the processor wiring is integration-covered.
   Gates green (`pnpm typecheck && lint && test`, unit 416). No callback HTTP-contract change,
   no DB migration, no new external deps.
-- **Phase 5** — pending (concurrency reduction + monitoring).
+- **Phase 5 (P2, Problem 7 — concurrency reduction + monitoring)** — this branch; see
+  `docs/progress.md` "Iteration 37". The per-profile default (2) is already low, so the
+  actionable levers are a ceiling, a per-model cap, and an overload signal — not lowering a
+  hardcoded default. **G1**: `applyExecutorConcurrency` (`apps/worker/src/executor-concurrency.ts`)
+  now clamps the summed type capacity to an optional operator ceiling —
+  `EXECUTOR_MAX_TYPE_CONCURRENCY_<TYPE>` (uppercased) over the generic
+  `EXECUTOR_MAX_TYPE_CONCURRENCY`, read lazily, integer ≥ 1 or ignored; unset ⇒ pure sum; the
+  quiet-no-op-on-unchanged contract is preserved and the clamp is logged only when it bites.
+  **G2** (the real protection): a per-model cap in the gate
+  (`apps/worker/src/executor-gate.ts`) — `EXECUTOR_MODEL_LIMITS` (JSON map model → positive
+  integer, lazy `parseModelLimits`) caps `running` runs across all profiles sharing
+  `config->>'model'` (any type); over the cap ⇒ held via the same rate-limit path with a new
+  `model_at_capacity` verdict (no attempt burned). The decision core is the pure `decideGate`
+  (unit-tested without Docker); ordering is `disabled` → profile → model, and the model query
+  runs only when the model actually has a cap. **G3**: on admit at ≥75% post-admit occupancy
+  of the tightest applicable limit the gate returns a `nearCapacity` hint and the processor
+  emits an operator `warn`. `claude-cli-run.processor.ts` threads `model_at_capacity` through
+  the existing hold branch and logs the overload warn; `KimiRunProcessor` inherits it; the mock
+  processor and Phase-0 are untouched (the gate's model tier short-circuits for uncapped
+  models). Unit tests: new `apps/worker/src/executor-gate.spec.ts` (17) + extended
+  `executor-concurrency.spec.ts` (+10); integration: `test/integration/executor-gate.spec.ts`
+  (+1, per-model cap). Gates green (`pnpm typecheck && lint && test`, unit 443; `pnpm
+  test:integration executor-gate` 3/3). No schema migration, no callback HTTP-contract change,
+  no new external deps; new env vars are all optional (unset = pre-Phase-5 behavior),
+  documented in `.env.example`. **The incident is fully resolved (Problems 1–7).**

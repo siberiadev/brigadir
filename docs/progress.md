@@ -1909,3 +1909,66 @@ test:integration` НЕ запускался — в облачной сессии
 29/32/33/34/35). Callback HTTP-контракт, Phase-0 (`useCallbackChannel = false` — вся
 реконсиляция внутри callback-ветки), схема БД — не тронуты; миграций нет; новых внешних
 зависимостей нет.
+
+## Iteration 37 — Инцидент 2026-07-19, Фаза 5: снижение параллелизма + мониторинг (P2, Problem 7, 2026-07-20)
+
+Последняя фаза `docs/incident-2026-07-19-fix-plan.md` §Phase 5 — инцидент закрыт (Problems
+1–7). В пике **10 прогонов исполнялись параллельно на одном хосте**; операторская сумма
+`max_parallel_runs` профилей давала type-capacity 22, и ничто не мешало всплеску целиком из
+`claude-opus-4-8` занять всю ёмкость типа. Пер-профильный дефолт уже низкий (2), поэтому
+рычаги — не понижение хардкода, а **потолок суммарной ёмкости**, **пер-модельный кап** и
+**сигнал перегрузки**.
+
+**G1 — потолок type-capacity.** `apps/worker/src/executor-concurrency.ts`: перед
+присваиванием `worker.concurrency` сумма кламится опциональным потолком
+`typeCapacityCeiling()` — пер-типовой `EXECUTOR_MAX_TYPE_CONCURRENCY_<TYPE>` (тип в верхнем
+регистре) старше generic `EXECUTOR_MAX_TYPE_CONCURRENCY`; читается лениво на каждом вызове
+(правило #1), значение должно быть целым ≥ 1, иначе игнорируется. Не задано ⇒ прежнее
+поведение (чистая сумма). Контракт «тихий no-op при неизменном» сохранён (сравниваем
+`effective`), про клам логируем только когда он реально сработал (`effective < total`).
+
+**G2 — пер-модельный кап (реальная защита).** `apps/worker/src/executor-gate.ts`: модель
+профиля берётся из `executors.config->>'model'`. Новый `EXECUTOR_MODEL_LIMITS`
+(`'{"claude-opus-4-8":2}'`, JSON-карта model→положительное целое, ленивый `parseModelLimits`,
+битый JSON / неположительные записи отбрасываются с warn-once на distinct raw) задаёт кап на
+число `running` прогонов **по всем профилям с этой моделью** (любого типа —
+`runs⋈agents⋈executors WHERE config->>'model' = <model>`). Порядок в гейте: `disabled` →
+пер-профиль → пер-модель; модельный запрос выполняется ТОЛЬКО когда у модели есть кап (обычный
+безкапный путь — без лишнего запроса). Модели нет в карте ⇒ капа нет. `GateVerdict.reason`
+расширен `'model_at_capacity'` (несёт `profile` + `model`), новый `MODEL_AT_CAPACITY_TTL_MS =
+1000`, `ttlOverride()` уважается. Решающая логика вынесена в чистую `decideGate(inputs)`
+(counts+limits → verdict), `checkExecutorGate` — тонкая DB-оболочка (юниты без Docker,
+прецедент облачных сессий). ID модели — данные, не константа.
+
+**G3 — сигнал перегрузки.** На **admit** при post-admit занятости ≥ 75% самого тесного
+применимого лимита (профиль всегда; модель — при наличии капа) `decideGate` возвращает
+`nearCapacity` (`limitKind` / `running` / `limit`), процессор пишет `logger.warn`. Порог
+считаем от post-admit занятости `(running+1)/limit`, а не от pre-admit — при дефолте
+`max_parallel_runs = 2` pre-admit-чтение никогда бы не достигло 75% и warn был бы мёртв там,
+где лимиты малы. DB-доступ — в гейте, логирование — в процессоре (текущий сплит).
+
+**Проводка.** `apps/worker/src/claude-cli-run.processor.ts`: `model_at_capacity` идёт по той
+же rate-limit-паузе (`worker.rateLimit` + `Worker.RateLimitError()`, атаки не сжигаются), в
+hold-лог добавлена модель; после `gate.admit` — G3-warn при `nearCapacity`; `this.logger`
+прокинут в `checkExecutorGate` (для warn о битом `EXECUTOR_MODEL_LIMITS`). `KimiRunProcessor
+extends ClaudeCliRunProcessor` — наследует всё, отдельных правок нет. Mock-процессор
+(`run.processor.ts`) вызывает гейт без логгера (параметр опционален) — Phase-0 не затронут.
+
+**Тесты.** `apps/worker/src/executor-gate.spec.ts` (новый, 17): `decideGate` — admit;
+disabled(15000); at_capacity(1000); model_at_capacity(1000, с `profile`+`model`); без
+`modelLimit` модель игнорируется даже при высоком `modelRunning`; профиль важнее модели при
+двойном насыщении; `ttlOverride` на всех трёх причинах; `nearCapacity` — профиль/модель/оба
+(побеждает наибольшая утилизация), ниже порога — нет хинта, дефолт 2 на 2-м прогоне
+(2/2=100%) срабатывает; `parseModelLimits` — валид/пусто/битый JSON/дроп неположительных.
+`executor-concurrency.spec.ts` (+10): клам активен (22→6, лог), не задан → сумма, пер-тип
+старше generic, невалид (`0/-1/abc/3.5/''`) игнор, потолок выше суммы не кламит, тихий no-op.
+`test/integration/executor-gate.spec.ts` (+1): два `claude_cli`-профиля с общей моделью,
+`EXECUTOR_MODEL_LIMITS={model:2}`, 3-й прогон держится (`queued`, `attempt=1`), затем
+досдаётся на 1-й попытке.
+
+**Гейты.** `pnpm typecheck && pnpm lint && pnpm test` — зелёные (unit 443). `pnpm
+test:integration executor-gate` — зелёные (3/3, включая пер-модельный кейс; Docker был
+доступен в этой сессии). Схема БД / `architecture.md` §3 / callback HTTP-контракт — не
+тронуты; миграций нет; новых внешних зависимостей нет; Phase-0 и mock-исполнитель не
+затронуты. Новые env (все опциональные, дефолт = прежнее поведение) задокументированы в
+`.env.example`.
