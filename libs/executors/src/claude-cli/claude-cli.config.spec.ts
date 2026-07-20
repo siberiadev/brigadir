@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
   resolveClaudeCliConfig,
+  normalizeKillGraceMs,
   resolveEffectiveAuth,
   applyAuthEnv,
   applyProviderEnv,
@@ -21,6 +22,41 @@ const base: ClaudeCliExecutorConfig = {
   cancelPollMs: 3000,
   useCallbackChannel: false,
 };
+
+describe('normalizeKillGraceMs (Phase 2, incident 2026-07-19)', () => {
+  it('passes an in-range value through unchanged', () => {
+    expect(normalizeKillGraceMs(5000)).toBe(5000);
+    expect(normalizeKillGraceMs(1000)).toBe(1000);
+    expect(normalizeKillGraceMs(60_000)).toBe(60_000);
+  });
+
+  it('clamps a below-floor value up to 1000 (0 = SIGTERM instantly chased by SIGKILL)', () => {
+    expect(normalizeKillGraceMs(0)).toBe(1000);
+    expect(normalizeKillGraceMs(50)).toBe(1000);
+    expect(normalizeKillGraceMs(-5)).toBe(1000);
+  });
+
+  it('clamps an above-ceiling value down to 60000', () => {
+    expect(normalizeKillGraceMs(120_000)).toBe(60_000);
+  });
+
+  it('rounds a non-integer to the nearest millisecond', () => {
+    expect(normalizeKillGraceMs(5000.6)).toBe(5001);
+  });
+
+  it('falls back to the 10s default for a missing or non-finite value', () => {
+    expect(normalizeKillGraceMs(undefined)).toBe(10_000);
+    expect(normalizeKillGraceMs(NaN)).toBe(10_000);
+    expect(normalizeKillGraceMs(Infinity)).toBe(10_000);
+    expect(normalizeKillGraceMs('5000')).toBe(10_000);
+  });
+});
+
+describe('resolveClaudeCliConfig applies the killGraceMs clamp', () => {
+  it('clamps a below-floor stored value to the runtime floor', () => {
+    expect(resolveClaudeCliConfig({ ...base, killGraceMs: 50 }).killGraceMs).toBe(1000);
+  });
+});
 
 describe('resolveClaudeCliConfig (T076)', () => {
   it('resolves omitted optional fields to their documented defaults', () => {

@@ -110,7 +110,9 @@ export function baseExecutorConfig(
     keepFailedWorktrees: false,
     worktreeRoot: env.worktreeRoot,
     repoCacheRoot: env.repoCacheRoot,
-    killGraceMs: 500,
+    // Runtime floor is 1000ms (normalizeKillGraceMs, incident 2026-07-19); a
+    // smaller value here would just be clamped up, so keep them in sync.
+    killGraceMs: 1000,
     cancelPollMs: 200,
     ...overrides,
   };

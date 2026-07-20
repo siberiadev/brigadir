@@ -164,7 +164,7 @@ describe('AgentsConfigSchema', () => {
       if (coder.type === 'claude_cli') {
         expect(coder.cliPath).toBe('claude');
         expect(coder.keepFailedWorktrees).toBe(false);
-        expect(coder.killGraceMs).toBe(5000);
+        expect(coder.killGraceMs).toBe(10_000);
         expect(coder.cancelPollMs).toBe(3000);
       }
     }
@@ -234,7 +234,7 @@ describe('AgentsConfigSchema', () => {
       if (coder.type === 'kimi') {
         expect(coder.cliPath).toBe('claude');
         expect(coder.keepFailedWorktrees).toBe(false);
-        expect(coder.killGraceMs).toBe(5000);
+        expect(coder.killGraceMs).toBe(10_000);
         expect(coder.cancelPollMs).toBe(3000);
         expect(coder.useCallbackChannel).toBe(false);
       }

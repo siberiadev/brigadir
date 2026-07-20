@@ -77,6 +77,15 @@ function makeGroup() {
   return { child, killGroup: vi.fn(), terminate };
 }
 
+// A group whose terminate() does NOT emit 'close' — models the incident where a
+// setsid-escaped grandchild keeps the pipe fds open so the leader never closes
+// until something else (the watchdog abort, a later manual kill) lands.
+function makeGroupNoClose() {
+  const child = new FakeChild();
+  const terminate = vi.fn(() => Promise.resolve());
+  return { child, killGroup: vi.fn(), terminate };
+}
+
 function fakeDb(executorConfig: unknown, behavior: unknown, settings: Record<string, unknown> = {}) {
   // run_events payloads captured for assertions (feature 020 repo-scoping event).
   const insertedEvents: unknown[] = [];
@@ -138,7 +147,7 @@ const executorConfig = {
   repository: 'product',
   allowedTools: ['Read'],
   keepFailedWorktrees: false,
-  killGraceMs: 50,
+  killGraceMs: 1000,
   cancelPollMs: 50,
 };
 
@@ -350,7 +359,7 @@ describe('ClaudeCliExecutor.run (T082)', () => {
 
     const result = await runPromise;
     expect(result.exitStatus).toBe('timeout');
-    expect(group.terminate).toHaveBeenCalledWith(50);
+    expect(group.terminate).toHaveBeenCalledWith(1000);
   });
 
   // Problem 5 (incident 2026-07-19): a timed_out run persists the last ≤16 KB
@@ -485,6 +494,48 @@ describe('ClaudeCliExecutor.run (T082)', () => {
     expect(group.terminate).toHaveBeenCalled();
   });
 
+  it('rate_limit that outlives terminate() then hits a watchdog timeout still resolves rate_limited (incident 2026-07-19)', async () => {
+    // Captain Nemo: opus rate-limited, executor called terminate(), but the
+    // process lingered until the watchdog aborted with 'timeout' ~50min later.
+    // A rate_limit already parsed must outrank that late timeout, else the run
+    // finalizes timed_out and the subscription limit burns the attempt.
+    const group = makeGroupNoClose();
+    spawnGroupMock.mockReturnValue(group);
+    const executor = makeExecutor();
+    const controller = new AbortController();
+
+    const runPromise = executor.run(makeCtx(), controller.signal);
+    await waitForSpawn(spawnGroupMock);
+    for (const line of readFixtureLines('stream-rate-limit')) group.child.stdout.write(line + '\n');
+    await flush();
+    // terminate() did not bring the process down; the watchdog fires much later.
+    controller.abort('timeout');
+    await flush();
+    // Only now does the wedged process finally close.
+    group.child.emit('close', null, 'SIGKILL');
+
+    const result = await runPromise;
+    expect(result.exitStatus).toBe('rate_limited');
+  });
+
+  it('a cancel after a rate_limit wins over the parked rate_limit (cancelled outranks)', async () => {
+    const group = makeGroupNoClose();
+    spawnGroupMock.mockReturnValue(group);
+    const executor = makeExecutor();
+    const controller = new AbortController();
+
+    const runPromise = executor.run(makeCtx(), controller.signal);
+    await waitForSpawn(spawnGroupMock);
+    for (const line of readFixtureLines('stream-rate-limit')) group.child.stdout.write(line + '\n');
+    await flush();
+    controller.abort('cancelled');
+    await flush();
+    group.child.emit('close', null, 'SIGKILL');
+
+    const result = await runPromise;
+    expect(result.exitStatus).toBe('cancelled');
+  });
+
   it('resolves exactly once even if budget-ish terminal and abort race (single-resolve guarantee)', async () => {
     const group = makeGroup();
     spawnGroupMock.mockReturnValue(group);
@@ -562,7 +613,7 @@ describe('ClaudeCliExecutor — default allowed tools (ST3-768)', () => {
     cliPath: 'claude',
     model: 'claude-sonnet-5',
     keepFailedWorktrees: false,
-    killGraceMs: 50,
+    killGraceMs: 1000,
     cancelPollMs: 50,
   };
 
@@ -597,13 +648,13 @@ describe('ClaudeCliExecutor — workspace-setup environment (feature 015)', () =
     cliPath: 'claude',
     model: 'claude-haiku-4-5-20251001',
     maxTurns: 15,
-    killGraceMs: 50,
+    killGraceMs: 1000,
     cancelPollMs: 50,
   };
   const setupProfileRow = {
     id: 'setup-exec-1',
     name: 'brigadir-setup',
-    config: { cliPath: 'claude', model: 'claude-sonnet-5', maxTurns: 60, killGraceMs: 50, cancelPollMs: 50 },
+    config: { cliPath: 'claude', model: 'claude-sonnet-5', maxTurns: 60, killGraceMs: 1000, cancelPollMs: 50 },
     secrets: null,
     enabled: true,
   };

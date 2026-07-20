@@ -1764,42 +1764,70 @@ select/map контроллера (оба слоя двигаются вмест
 правила ключа. Косметика: в списке executors тег `kimi` теперь читается как реальный
 бэкенд (primary), а не как fake `mock` (info).
 
-## Iteration 34 — Инцидент 2026-07-19 «массовые timed_out», фазы 1–2 (P0/P1, 2026-07-19)
+## Iteration 34 — Инцидент 2026-07-19, Фаза 2: rate_limit больше не превращается в timed_out (Problem 3)
 
-Диагностика и план — `docs/incident-2026-07-19-fix-prompt.md` / `-fix-plan.md`
-(проблемы 1–7). Слиты две фазы (журнальной записи ранее не было — восстановлено
-постфактум по коммитам).
+План: `docs/incident-2026-07-19-fix-plan.md` (Фаза 2). Фаза 1 (P0, MCP-callback,
+Problems 1–2) уже влита коммитом `8c12942`; отдельный kimi-429 TTL-фикс
+(`sanitizeRateLimitTtl`, `035ada8`) тоже. Эта итерация закрывает Problem 3.
 
-**Фаза 1 (P0, коммит `8c12942`) — стабилизация MCP-callback-канала + fail-fast агента
-(проблемы 1, 2).**
-- `packages/mcp-server/src/tools.ts`: сетевые ошибки (`TypeError: fetch failed`) и
-  транзиентные 5xx — экспоненциальный backoff с потолком, явный `fetch`-таймаут через
-  `AbortController`; HTTP 4xx — без ретраев (fail-fast); диагностика (URL/attempt/
-  error/status) в stderr. Пережить многоминутную недоступность бэкенда, но не прятать
-  его баги.
-- `libs/callback/src/callback.service.ts`: `complete_task` отвечает быстро —
-  `finalizeWithReport` синхронно, `PipelineService.onRunFinished` (Jira-записи) вынесен
-  в fire-and-forget с логированием ошибки (критерий «<1с при медленной Jira»).
-- `libs/executors/src/claude-cli/wrapper.ts` (`callbackToolsSection()`): правило
-  fail-fast — три подряд сетевых отказа `mcp__brigadir__*` ⇒ немедленно
-  `request_human(blocking=true, title='MCP callback channel unreachable')` и стоп;
-  запрет `ScheduleWakeup` / `Bash sleep` / `until false` как тактики «ждать
-  восстановления инфраструктуры» внутри прогона.
-- Тесты: `tools.spec.ts`, `callback.service.spec.ts`, `wrapper.spec.ts`.
+**Найденная первопричина (её НЕ было в исходном fix-plan).** `Captain Nemo` на
+`claude-opus-4-8` поймал `api_retry: rate_limit`, executor вызвал `terminate()`, но
+прогон висел ~50 мин до watchdog-таймаута и финализировался как `timed_out` вместо
+`rate_limited` (сжёг попытку вместо park+requeue). Корень — порядок веток в `handleClose`
+(`claude-cli.executor.ts`): `abortReason` проверялся ДО `rateLimited`. Когда `terminate()`
+не дожинает группу (escaped-потомок держит pipe-fd → `close` не приходит), промис висит,
+пока processor-watchdog не выставит `abortReason='timeout'`; на `close` ветка abortReason
+выигрывала → `timed_out`.
 
-**Фаза 2 (P1, коммит `035ada8`) — терминирование на rate_limit (проблема 3).**
-Реальная первопричина разошлась с наброском плана (§2.1–2.3 предлагали
-`killGraceMs`-дефолт + добивание дерева процессов в `process-group.ts`): фактический
-фикс — санитайзинг TTL, который CLI сообщает при rate-limit, в воркере перед парковкой
-прогона. `apps/worker/src/claude-cli-run.processor.ts` + `apps/worker/src/
-rate-limit-ttl.spec.ts`. `claude-cli.executor.ts` не трогался — ветвление `handleClose`
-осталось прежним (`abortReason` объединяет cancelled+timeout, затем rate_limited).
+**Изменения.**
+1. **Порядок исходов в `handleClose`** теперь `cancelled` > `rate_limited` > `timeout`
+   (`libs/executors/src/claude-cli/claude-cli.executor.ts`). Cancel по-прежнему
+   авторитетен; уже распарсенный rate_limit перебивает ПОЗДНИЙ watchdog-таймаут. Оба
+   `cancelled`/`timeout` сохраняют перенос `terminal?.totalCostUsd/usage` (путь cost-
+   preservation cancel-поллера — правило D7 — не задет).
+2. **Дожинание escaped-потомков в `terminate()`** (`process-group.ts`). После SIGTERM+grace,
+   если лидер жив, снимаем снапшот дерева потомков через рекурсивный `pgrep -P` (ПОКА лидер
+   жив — после SIGKILL потомки ре파рентятся к init и теряют ppid-связь), затем SIGKILL и по
+   группе (`-pid`), и по каждому пережившему pid. `setsid()`-потомок (docker) не в группе,
+   держит pipe-fd — из-за него `close` не приходил и слот висел до таймаута. Best-effort,
+   не бросает: `pgrep` отсутствует/падает → фолбэк на групповой сигнал; ESRCH проглатывается.
+3. **Дефолт/клэмп `killGraceMs`** (`claude-cli.config.ts` + `agents-config.schema.ts`).
+   Новый `normalizeKillGraceMs` в `resolveClaudeCliConfig` клэмпит рантайм-значение в
+   `[1000, 60000]`, дефолт `10_000` (не-finite/absent). zod-дефолт поднят `5000→10000`, но
+   `min(0)` в схеме СОХРАНЁН намеренно: жёсткий floor живёт только в рантайм-нормализаторе,
+   чтобы out-of-range значение в stored jsonb клэмпилось, а не валило boot-валидацию.
+   `0` раньше значил SIGTERM, тут же добиваемый SIGKILL — без окна graceful-shutdown.
+4. **TTL-override processor'а НЕ трогали** (Change 4 плана — отклонён). Явный
+   operator/test override в `resolveRateLimitTtl` документирован как «deliberately NOT
+   clamped ... exact by construction» и это доверенный вход; санитизация сломала бы
+   интеграционные `rate_limit_ttl_ms`-фикстуры с малым точным окном. Регрессия покрыта на
+   уровне маппера (`status-mapping.spec.ts`: `rate_limited → {action:'rate_limit'}`) и
+   executor'а (новые тесты ниже).
 
-## Iteration 35 — Инцидент 2026-07-19, фаза 3: ограничение QA-стека + stderr на timeout (P1, 2026-07-20)
+**Тесты (правило 4, в той же итерации).**
+- `claude-cli.executor.spec.ts`: репродукция инцидента — `stream-rate-limit` + поздний
+  `abort('timeout')` ДО `close` (через `makeGroupNoClose`, чей `terminate` не эмитит
+  `close`) ⇒ `rate_limited` (падал до фикса); cancel-после-rate_limit ⇒ `cancelled`.
+  Фикстуры `killGraceMs 50→1000`, ассерт `terminate` → `1000`.
+- `process-group.spec.ts`: мок `execFile` (pgrep); escaped-внук `9001` получает
+  `SIGKILL` по pid + по группе; отказ `pgrep` ⇒ фолбэк без throw, только групповой сигнал.
+- `claude-cli.config.spec.ts`: матрица `normalizeKillGraceMs` (in-range/floor/ceiling/
+  round/дефолт) + клэмп через `resolveClaudeCliConfig`.
+- `agents-config.schema.spec.ts`: дефолт `killGraceMs` обновлён `5000→10000` (обе ветки).
+- Интеграционный harness `test/integration/claude-cli-harness.ts`: `killGraceMs 500→1000`
+  (иначе клэмпнулся бы рантаймом — держим в синхроне).
+
+**Гейты.** `pnpm typecheck && pnpm lint && pnpm test` — зелёные (unit 406;
+contracts/mcp/admin отдельными проектами зелёные). **`pnpm test:integration` НЕ
+запускался** — в сессии нет Docker (прецедент итераций 29/32/33). БД-миграций нет.
+Напоминание: `dist/` контрактов в gitignore — после деплоя пересобрать и рестартовать
+worker/backend, чтобы поднялся новый zod-дефолт `killGraceMs`.
+
+## Iteration 35 — Инцидент 2026-07-19, Фаза 3: ограничение QA-стека + stderr на timeout (P1, 2026-07-20)
 
 Две независимые P1-правки из `docs/incident-2026-07-19-fix-plan.md` §Phase 3
 (проблемы 4 и 5). Обе — маленькие, самодостаточные, покрыты юнит-тестами в той же
-итерации (правило 4).
+итерации (правило 4). Опираются на реордер `handleClose` из Iteration 34 (Фаза 2).
 
 **Проблема 4 — QA-агент поднимает полный dev-стек внутри прогона.** Cyrus Smith
 (ST3-872) прогнал `docker compose`, `npm ci`, `nohup npm run start:dev` и живые
@@ -1815,18 +1843,14 @@ JSON-RPC вызовы, спалив весь 45-минутный бюджет в
 остаётся байт-в-байт (гвардится существующими спеками).
 
 **Проблема 5 — stderr теряется на `timed_out`.** В
-`libs/executors/src/claude-cli/claude-cli.executor.ts` (`runProcess` → `handleClose`,
-ветка `abortReason`) при `abortReason === 'timeout'` последний ≤16 KB хвост
-`stderrTail.text` персистится как `run_event(type='error')` через уже существующий
-`persistRunEvent` (SC #4 «последние 16 KB»). `StderrTail` уже режет буфер до
-`STDERR_TAIL_BYTES` на каждом `push`, поэтому доп. slice не нужен; `type='error'` —
-документированный валидный тип (`run-events.ts`, колонка free-form text, без enum), без
-миграции. `cancelled` (осознанное действие оператора, не сбой) остаётся молчаливым —
-поведение не меняется. **Осознанно НЕ сделано:** реордер `handleClose`
-(`cancelled > rate_limited > timeout` — это Phase-2-семантика, меняющая приоритет
-rate_limited↔timeout, вне скоупа фазы 3); задача предполагала этот реордер уже
-существующим, но по факту (см. Iteration 34) фаза 2 его не вносила — расхождение
-согласовано до реализации.
+`libs/executors/src/claude-cli/claude-cli.executor.ts` (`runProcess` → `handleClose`)
+ветка `abortReason === 'timeout'` (реордер `cancelled > rate_limited > timeout` из
+Фазы 2) перед `settle` персистит последний ≤16 KB хвост `stderrTail.text` как
+`run_event(type='error')` через уже существующий `persistRunEvent` (SC #4 «последние
+16 KB»). `StderrTail` уже режет буфер до `STDERR_TAIL_BYTES` на каждом `push`, поэтому
+доп. slice не нужен; `type='error'` — документированный валидный тип (`run-events.ts`,
+колонка free-form text, без enum), без миграции. `cancelled`/`rate_limited` (ветки выше)
+остаются молчаливыми — поведение не меняется.
 
 **Тесты.** `wrapper.spec.ts`: секция QA присутствует на callback-канале и отсутствует
 на Phase-0. `claude-cli.executor.spec.ts` (харнесс `FakeChild`/`makeGroup`/
@@ -1834,8 +1858,8 @@ rate_limited↔timeout, вне скоупа фазы 3); задача предп
 `error`-событие с хвостом, усечённым до 16 KB (endsWith последнего чанка, без первого);
 cancelled НЕ пишет `error`-событие.
 
-**Гейты.** `pnpm typecheck && pnpm lint && pnpm test` — зелёные (unit 400, +4 к
-baseline 396). `pnpm test:integration` НЕ запускался — в облачной сессии нет Docker
-(прецедент итераций 29/32/33/34); для этих двух юнит-уровневых правок интеграционное
-покрытие не требуется. Callback HTTP-контракт, Phase-0, схема БД — не тронуты; новых
-внешних зависимостей нет.
+**Гейты.** `pnpm typecheck && pnpm lint && pnpm test` — зелёные (unit 410, +4 к
+baseline 406 из Iteration 34). `pnpm test:integration` НЕ запускался — в облачной сессии
+нет Docker (прецедент итераций 29/32/33/34); для этих двух юнит-уровневых правок
+интеграционное покрытие не требуется. Callback HTTP-контракт, Phase-0, схема БД — не
+тронуты; новых внешних зависимостей нет.
