@@ -44,6 +44,12 @@ function callbackToolsSection(): string[] {
       'find tickets in this workspace; mcp__brigadir__get_ticket(key) for a ticket\'s full ' +
       'description, latest comments, and links. Use them whenever you need more context than ' +
       'this prompt carries; they cannot change anything in Jira.',
+    'Infrastructure failure handling: if any `mcp__brigadir__*` tool fails three times in a row ' +
+      'with `network error` or `fetch failed`, immediately call ' +
+      "mcp__brigadir__request_human(blocking=true, title='MCP callback channel unreachable', " +
+      'details=...) and stop the session. Do not retry the same tool more than three times ' +
+      'yourself, and do not use `ScheduleWakeup`, `Bash sleep`, or `until false` loops to wait ' +
+      'for infrastructure recovery inside a run.',
     '- outcome="success" ONLY if every required check actually passed in this session. Never ' +
       'claim a check passed without running it.',
     '- outcome="failure" if something required failed — report each check honestly with its ' +

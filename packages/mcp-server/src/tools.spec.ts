@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -130,8 +130,8 @@ describe('createToolHandlers (T095)', () => {
       runId: 'run-1',
       runToken: 'tok',
       markerPath,
-      maxRetries: 3,
-      retryDelayMs: () => 0,
+      maxNetworkErrorRetries: 3,
+      networkRetryDelayMs: () => 0,
       fetchImpl: async () => {
         calls++;
         throw new Error('ECONNREFUSED');
@@ -142,6 +142,144 @@ describe('createToolHandlers (T095)', () => {
     expect(calls).toBe(4); // 1 initial + 3 retries
     expect(result.isError).toBe(true);
     expect(JSON.parse(result.content[0].text).error).toMatch(/network error/);
+  });
+
+  it('a network error retries up to the default network budget (10) then surfaces', async () => {
+    const markerPath = await setup();
+    let calls = 0;
+    const handlers = createToolHandlers({
+      callbackUrl: 'http://callback.test/api/callbacks',
+      runId: 'run-1',
+      runToken: 'tok',
+      markerPath,
+      networkRetryDelayMs: () => 0,
+      fetchImpl: async () => {
+        calls++;
+        throw new TypeError('fetch failed');
+      },
+    });
+
+    const result = await handlers.report_progress({ stage: 'x', message: 'y' });
+    expect(calls).toBe(11); // 1 initial + 10 retries
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text).error).toMatch(/network error/);
+  });
+
+  it('network error backoff increases exponentially up to a 30 s ceiling', async () => {
+    const markerPath = await setup();
+    const delays: number[] = [];
+    const handlers = createToolHandlers({
+      callbackUrl: 'http://callback.test/api/callbacks',
+      runId: 'run-1',
+      runToken: 'tok',
+      markerPath,
+      maxNetworkErrorRetries: 10,
+      networkRetryDelayMs: (attempt) => {
+        delays.push(Math.min(2 ** attempt * 100, 30000));
+        return 0;
+      },
+      fetchImpl: async () => {
+        throw new TypeError('fetch failed');
+      },
+    });
+
+    await handlers.report_progress({ stage: 'x', message: 'y' });
+    expect(delays).toHaveLength(10);
+    expect(delays[0]).toBe(200);
+    expect(delays[1]).toBe(400);
+    expect(delays[2]).toBe(800);
+    expect(delays[delays.length - 1]).toBe(30000);
+  });
+
+  it('a 4xx response is not retried', async () => {
+    const markerPath = await setup();
+    let calls = 0;
+    const handlers = createToolHandlers({
+      callbackUrl: 'http://callback.test/api/callbacks',
+      runId: 'run-1',
+      runToken: 'tok',
+      markerPath,
+      fetchImpl: async () => {
+        calls++;
+        return jsonResponse(400, { ok: false, error: 'bad request' });
+      },
+    });
+
+    const result = await handlers.complete_task({ schema_version: 1, outcome: 'success', summary: 's', checks: [] });
+    expect(calls).toBe(1);
+    expect(result.isError).toBe(true);
+  });
+
+  it('a 5xx uses the HTTP retry budget (maxRetries)', async () => {
+    const markerPath = await setup();
+    let calls = 0;
+    const handlers = createToolHandlers({
+      callbackUrl: 'http://callback.test/api/callbacks',
+      runId: 'run-1',
+      runToken: 'tok',
+      markerPath,
+      retryDelayMs: () => 0,
+      fetchImpl: async () => {
+        calls++;
+        if (calls < 4) return jsonResponse(500, { ok: false });
+        return jsonResponse(200, { ok: true });
+      },
+    });
+
+    const result = await handlers.report_progress({ stage: 'x', message: 'y' });
+    expect(calls).toBe(4);
+    expect(result.isError).toBeUndefined();
+  });
+
+  it('a hung fetch is aborted by the per-attempt timeout and retried', async () => {
+    const markerPath = await setup();
+    let calls = 0;
+    const handlers = createToolHandlers({
+      callbackUrl: 'http://callback.test/api/callbacks',
+      runId: 'run-1',
+      runToken: 'tok',
+      markerPath,
+      fetchTimeoutMs: 10,
+      maxNetworkErrorRetries: 1,
+      networkRetryDelayMs: () => 0,
+      fetchImpl: async (_url, init) => {
+        calls++;
+        if (calls === 1) {
+          return new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new Error('AbortError')));
+          });
+        }
+        return jsonResponse(200, { ok: true });
+      },
+    });
+
+    const result = await handlers.report_progress({ stage: 'x', message: 'y' });
+    expect(calls).toBe(2);
+    expect(result.isError).toBeUndefined();
+  });
+
+  it('writes a diagnostic stderr line on each transient failure', async () => {
+    const markerPath = await setup();
+    const stderrSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const handlers = createToolHandlers({
+      callbackUrl: 'http://callback.test/api/callbacks',
+      runId: 'run-1',
+      runToken: 'tok',
+      markerPath,
+      maxNetworkErrorRetries: 1,
+      networkRetryDelayMs: () => 0,
+      fetchImpl: async () => {
+        throw new TypeError('fetch failed');
+      },
+    });
+
+    await handlers.report_progress({ stage: 'x', message: 'y' });
+    expect(stderrSpy).toHaveBeenCalledTimes(2);
+    const firstLine = stderrSpy.mock.calls[0][0] as string;
+    expect(firstLine).toMatch(/callback attempt 1 failed/);
+    expect(firstLine).toMatch(/url=http:\/\/callback.test\/api\/callbacks\/runs\/run-1\/progress/);
+    expect(firstLine).toMatch(/error=TypeError: fetch failed/);
+    stderrSpy.mockRestore();
   });
 
   it('sends Authorization: Bearer <runToken> on every call', async () => {

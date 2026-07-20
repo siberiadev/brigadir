@@ -54,6 +54,44 @@ describe('CallbackService (T100)', () => {
     expect(onRunFinished).toHaveBeenCalledWith('run-1');
   });
 
+  it('complete: returns immediately even when onRunFinished is slow', async () => {
+    const finalizeWithReport = vi.fn().mockResolvedValue(true);
+    let onRunFinishedResolved = false;
+    const onRunFinished = vi.fn().mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          setTimeout(() => {
+            onRunFinishedResolved = true;
+            resolve();
+          }, 5000);
+        }),
+    );
+
+    const service = new CallbackService(
+      fakeDb({ agentBehavior: {} }) as never,
+      fakeModuleRef() as never,
+      { finalizeWithReport } as unknown as RunsService,
+      { onRunFinished } as unknown as PipelineService,
+      { acceptTeamReport: vi.fn() } as unknown as SetupApplyService,
+      { createFromRequest: vi.fn() } as unknown as HumanTaskService,
+    );
+
+    const start = performance.now();
+    const result = await service.complete('run-1', {
+      schema_version: 1,
+      outcome: 'success',
+      summary: 'done',
+      checks: [],
+    });
+    const elapsed = performance.now() - start;
+
+    expect(result).toEqual({ ok: true, outcome: 'success' });
+    expect(finalizeWithReport).toHaveBeenCalledTimes(1);
+    expect(onRunFinished).toHaveBeenCalledWith('run-1');
+    expect(elapsed).toBeLessThan(100);
+    expect(onRunFinishedResolved).toBe(false);
+  });
+
   it('complete: invalid report (needs_human without human_task) → validation failure, no finalize', async () => {
     const finalizeWithReport = vi.fn();
     const service = new CallbackService(

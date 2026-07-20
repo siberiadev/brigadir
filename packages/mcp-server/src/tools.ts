@@ -1,5 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { Agent as HttpAgent } from 'node:http';
+import { Agent as HttpsAgent } from 'node:https';
 import { writeMarker } from './marker.js';
 
 const execFileAsync = promisify(execFile);
@@ -59,6 +61,12 @@ export interface ToolHandlersConfig {
   fetchImpl?: typeof fetch;
   maxRetries?: number;
   retryDelayMs?: (attempt: number) => number;
+  /** Max retries for network errors / fetch failures (separate from HTTP 5xx). */
+  maxNetworkErrorRetries?: number;
+  /** Backoff for network errors (separate from HTTP 5xx). */
+  networkRetryDelayMs?: (attempt: number) => number;
+  /** Per-attempt fetch timeout in milliseconds. */
+  fetchTimeoutMs?: number;
   /** Feature 024: repo name → worktree dir; HEADs observed on complete_task. */
   repoDirs?: Record<string, string>;
   /** Feature 024: injectable HEAD resolver (defaults to `git rev-parse HEAD`). */
@@ -70,12 +78,53 @@ interface CallbackResponse {
   body: unknown;
 }
 
+interface RetryConfig {
+  fetchImpl: typeof fetch;
+  usesCustomFetch: boolean;
+  maxRetries: number;
+  retryDelayMs: (attempt: number) => number;
+  maxNetworkErrorRetries: number;
+  networkRetryDelayMs: (attempt: number) => number;
+  fetchTimeoutMs: number;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function defaultRetryDelayMs(attempt: number): number {
+function defaultHttpRetryDelayMs(attempt: number): number {
   return Math.min(2 ** attempt * 100, 2000);
+}
+
+function defaultNetworkRetryDelayMs(attempt: number): number {
+  return Math.min(2 ** attempt * 100, 30000);
+}
+
+const sharedHttpAgent = new HttpAgent({ keepAlive: true });
+const sharedHttpsAgent = new HttpsAgent({ keepAlive: true });
+
+function pickAgent(url: string): HttpAgent | HttpsAgent | undefined {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === 'http:') return sharedHttpAgent;
+    if (parsed.protocol === 'https:') return sharedHttpsAgent;
+  } catch {
+    // malformed URL — proceed without keep-alive agent
+  }
+  return undefined;
+}
+
+function logDiagnostic(
+  context: { method: string; url: string },
+  attempt: number,
+  err: unknown,
+  status?: number,
+): void {
+  const statusPart = status !== undefined ? ` status=${status}` : '';
+  const errText = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  console.error(
+    `[brigadir-mcp] callback attempt ${attempt} failed: method=${context.method} url=${context.url}${statusPart} error=${errText}`,
+  );
 }
 
 async function safeJson(res: Response): Promise<unknown> {
@@ -88,20 +137,82 @@ async function safeJson(res: Response): Promise<unknown> {
   }
 }
 
-/** POST with bounded retries: 5xx/network ≤ maxRetries, 4xx never retried (D9). */
+/**
+ * Core retry loop. Distinguishes network errors (fetch threw) from HTTP 5xx:
+ * - 4xx returns immediately (D9).
+ * - 5xx retries up to `maxRetries` using `retryDelayMs`.
+ * - Network errors retry up to `maxNetworkErrorRetries` using `networkRetryDelayMs`
+ *   with a 30 s ceiling, surviving multi-minute backend outages.
+ * Every transient failure is logged to stderr with URL, attempt, status, and
+ * error details.
+ */
+async function fetchWithRetry(
+  url: string,
+  makeRequest: (signal: AbortSignal) => Promise<Response>,
+  cfg: RetryConfig,
+  context: { method: string },
+): Promise<CallbackResponse> {
+  let networkErrorsSeen = 0;
+  let serverErrorsSeen = 0;
+
+  for (;;) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort('timeout'), cfg.fetchTimeoutMs);
+    let res: Response | undefined;
+    let networkError: unknown;
+    try {
+      res = await makeRequest(controller.signal);
+    } catch (err) {
+      networkError = err;
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (networkError !== undefined) {
+      networkErrorsSeen++;
+      logDiagnostic({ method: context.method, url }, networkErrorsSeen, networkError);
+      if (networkErrorsSeen > cfg.maxNetworkErrorRetries) {
+        return {
+          status: 0,
+          body: { ok: false, error: `network error: ${String(networkError)}` },
+        };
+      }
+      await sleep(cfg.networkRetryDelayMs(networkErrorsSeen));
+      continue;
+    }
+
+    // If no network error occurred, the request must have produced a response.
+    if (res === undefined) {
+      throw new Error('response unexpectedly undefined after a non-throwing fetch');
+    }
+
+    if (res.status >= 500) {
+      serverErrorsSeen++;
+      logDiagnostic({ method: context.method, url }, serverErrorsSeen, new Error('server error'), res.status);
+      if (serverErrorsSeen > cfg.maxRetries) {
+        return { status: res.status, body: await safeJson(res) };
+      }
+      await sleep(cfg.retryDelayMs(serverErrorsSeen));
+      continue;
+    }
+
+    return { status: res.status, body: await safeJson(res) };
+  }
+}
+
+/** POST with bounded retries: 5xx ≤ maxRetries, network ≤ maxNetworkErrorRetries, 4xx never retried (D9). */
 async function postWithRetry(
   url: string,
   body: unknown,
   runToken: string,
-  cfg: Required<Pick<ToolHandlersConfig, 'fetchImpl' | 'maxRetries' | 'retryDelayMs'>>,
+  cfg: RetryConfig,
   extraHeaders: Record<string, string> = {},
 ): Promise<CallbackResponse> {
-  let attempt = 0;
-  for (;;) {
-    let res: Response | undefined;
-    let networkError: unknown;
-    try {
-      res = await cfg.fetchImpl(url, {
+  const agent = cfg.usesCustomFetch ? undefined : pickAgent(url);
+  return fetchWithRetry(
+    url,
+    (signal) =>
+      cfg.fetchImpl(url, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
@@ -109,66 +220,33 @@ async function postWithRetry(
           ...extraHeaders,
         },
         body: JSON.stringify(body),
-      });
-    } catch (err) {
-      networkError = err;
-    }
-
-    const transient = networkError !== undefined || (res !== undefined && res.status >= 500);
-    if (!transient) {
-      return { status: res!.status, body: await safeJson(res!) };
-    }
-
-    attempt++;
-    if (attempt > cfg.maxRetries) {
-      if (networkError !== undefined) {
-        return {
-          status: 0,
-          body: { ok: false, error: `network error: ${String(networkError)}` },
-        };
-      }
-      return { status: res!.status, body: await safeJson(res!) };
-    }
-    await sleep(cfg.retryDelayMs(attempt));
-  }
+        signal,
+        ...(agent ? { dispatcher: agent } : {}),
+      } as RequestInit),
+    cfg,
+    { method: 'POST' },
+  );
 }
 
 /** GET with the same bounded-retry posture (feature 011 read tools). */
 async function getWithRetry(
   url: string,
   runToken: string,
-  cfg: Required<Pick<ToolHandlersConfig, 'fetchImpl' | 'maxRetries' | 'retryDelayMs'>>,
+  cfg: RetryConfig,
 ): Promise<CallbackResponse> {
-  let attempt = 0;
-  for (;;) {
-    let res: Response | undefined;
-    let networkError: unknown;
-    try {
-      res = await cfg.fetchImpl(url, {
+  const agent = cfg.usesCustomFetch ? undefined : pickAgent(url);
+  return fetchWithRetry(
+    url,
+    (signal) =>
+      cfg.fetchImpl(url, {
         method: 'GET',
         headers: { authorization: `Bearer ${runToken}` },
-      });
-    } catch (err) {
-      networkError = err;
-    }
-
-    const transient = networkError !== undefined || (res !== undefined && res.status >= 500);
-    if (!transient) {
-      return { status: res!.status, body: await safeJson(res!) };
-    }
-
-    attempt++;
-    if (attempt > cfg.maxRetries) {
-      if (networkError !== undefined) {
-        return {
-          status: 0,
-          body: { ok: false, error: `network error: ${String(networkError)}` },
-        };
-      }
-      return { status: res!.status, body: await safeJson(res!) };
-    }
-    await sleep(cfg.retryDelayMs(attempt));
-  }
+        signal,
+        ...(agent ? { dispatcher: agent } : {}),
+      } as RequestInit),
+    cfg,
+    { method: 'GET' },
+  );
 }
 
 function toResult(response: CallbackResponse): ToolCallResult {
@@ -187,10 +265,14 @@ export function createToolHandlers(config: ToolHandlersConfig): {
   search_tickets: (args: unknown) => Promise<ToolCallResult>;
   get_ticket: (args: unknown) => Promise<ToolCallResult>;
 } {
-  const cfg = {
+  const cfg: RetryConfig = {
     fetchImpl: config.fetchImpl ?? fetch,
+    usesCustomFetch: config.fetchImpl !== undefined,
     maxRetries: config.maxRetries ?? 3,
-    retryDelayMs: config.retryDelayMs ?? defaultRetryDelayMs,
+    retryDelayMs: config.retryDelayMs ?? defaultHttpRetryDelayMs,
+    maxNetworkErrorRetries: config.maxNetworkErrorRetries ?? 10,
+    networkRetryDelayMs: config.networkRetryDelayMs ?? defaultNetworkRetryDelayMs,
+    fetchTimeoutMs: config.fetchTimeoutMs ?? 10_000,
   };
   const gitHeadResolver = config.gitHeadResolver ?? defaultGitHeadResolver;
   const base = config.callbackUrl.replace(/\/+$/, '');

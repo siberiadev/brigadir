@@ -188,11 +188,11 @@ export class CallbackService {
       const accepted = await this.setupApply.acceptTeamReport(runId, scrubbedReport);
       if (accepted.kind === 'invalid') return { kind: 'validation', errors: accepted.issues };
       if (accepted.kind === 'conflict') return { kind: 'conflict' };
-      try {
-        await this.pipeline.onRunFinished(runId);
-      } catch (err) {
-        this.logger.error(`onRunFinished failed for run ${runId} (will be repaired on reconcile): ${String(err)}`);
-      }
+      Promise.resolve()
+        .then(() => this.pipeline.onRunFinished(runId))
+        .catch((err) => {
+          this.logger.error(`onRunFinished failed for run ${runId} (will be repaired on reconcile): ${String(err)}`);
+        });
       return { ok: true, outcome: accepted.kind === 'recast_failure' ? 'failure' : 'team' };
     }
 
@@ -203,11 +203,11 @@ export class CallbackService {
 
     await this.maybeQueueReviewTask(runId, scrubbedReport);
 
-    try {
-      await this.pipeline.onRunFinished(runId);
-    } catch (err) {
-      this.logger.error(`onRunFinished failed for run ${runId} (will be repaired on reconcile): ${String(err)}`);
-    }
+    Promise.resolve()
+      .then(() => this.pipeline.onRunFinished(runId))
+      .catch((err) => {
+        this.logger.error(`onRunFinished failed for run ${runId} (will be repaired on reconcile): ${String(err)}`);
+      });
 
     return { ok: true, outcome: scrubbedReport.outcome };
   }

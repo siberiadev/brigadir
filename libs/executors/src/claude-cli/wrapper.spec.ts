@@ -27,6 +27,27 @@ describe('buildWrapperText (T103, D6)', () => {
     expect(text).not.toContain('return your final answer strictly as JSON');
   });
 
+  it('callback path instructs the agent to fail-fast on persistent MCP network failure', () => {
+    const text = buildWrapperText(ctx, '/tmp/wt', { useCallbackChannel: true });
+    expect(text).toContain('MCP callback channel unreachable');
+    expect(text).toContain('blocking=true');
+    expect(text).toContain('network error');
+    expect(text).toContain('fetch failed');
+  });
+
+  it('callback path forbids sleep-loop recovery tactics', () => {
+    const text = buildWrapperText(ctx, '/tmp/wt', { useCallbackChannel: true });
+    expect(text).toContain('ScheduleWakeup');
+    expect(text).toContain('Bash sleep');
+    expect(text).toContain('until false');
+  });
+
+  it('structured-output path does not contain callback-channel fail-fast rules', () => {
+    const text = buildWrapperText(ctx, '/tmp/wt', { useCallbackChannel: false });
+    expect(text).not.toContain('MCP callback channel unreachable');
+    expect(text).not.toContain('ScheduleWakeup');
+  });
+
   // feature 013: agents discover answer options from the wrapper alone —
   // stored instructions stay untouched. The Phase-0 section keeps its
   // byte-for-byte contract, so options are never mentioned there.

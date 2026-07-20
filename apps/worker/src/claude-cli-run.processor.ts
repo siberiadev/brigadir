@@ -73,7 +73,7 @@ const DEFAULT_CANCEL_POLL_MS = 3000;
 const DEFAULT_POST_FINALIZE_GRACE_MS = 30_000;
 /** Run-token TTL grace beyond the run's own timeout (contracts/run-jwt.md, plan.md). */
 const RUN_TOKEN_GRACE_SECONDS = 300;
-const DEFAULT_CALLBACK_BASE_URL = 'http://localhost:3000/api/callbacks';
+const DEFAULT_CALLBACK_BASE_URL = 'http://127.0.0.1:3000/api/callbacks';
 
 /**
  * Pure: CLI-reported `retry_delay_ms` → a park TTL safe to hand to BullMQ.
