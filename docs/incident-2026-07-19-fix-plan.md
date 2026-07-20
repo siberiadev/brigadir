@@ -264,16 +264,27 @@ Linked incident section: [Problem 7](incident-2026-07-19-fix-prompt.md#problem-7
   `127.0.0.1` callback default). The separate kimi-429 TTL sub-fix (`sanitizeRateLimitTtl`)
   landed in `035ada8`.
 - **Phase 2 (P1, Problem 3 — `rate_limit` → `timed_out`)** — implemented on branch
-  `claude/incident-2026-07-19-phase-2-dc94f1`; see `docs/progress.md` "Iteration 34".
-  Root cause was a branch-precedence bug in `handleClose` (**not** in the original Phase 2
-  scope): `abortReason` was evaluated before `rateLimited`, so a rate-limit that outlived a
-  wedged `terminate()` was reclassified as `timed_out` once the watchdog fired. Fixed by
-  reordering to `cancelled > rate_limited > timeout`, hardening `terminate()` to reap
-  `setsid()`-escaped descendants (recursive `pgrep -P` snapshot → per-pid SIGKILL) so the
-  worker slot frees promptly, and clamping `killGraceMs` to `[1000, 60000]` (default 10s).
-  The processor's `rate_limit_ttl_ms` override was intentionally left un-sanitized (a
-  trusted, exact-by-construction operator/test input). Gates green (`pnpm typecheck && lint
-  && test`, unit 406); acceptance test = executor incident reproduction (rate_limit event +
-  late timeout abort ⇒ `rate_limited`), satisfying Success Criterion #3.
-- **Phases 3–5** — pending (QA live-stack restriction + stderr-on-timeout, durable
-  finalize/outbox, concurrency reduction).
+  `claude/incident-2026-07-19-phase-2-dc94f1` (PR #39, commit `13c289f`); see
+  `docs/progress.md` "Iteration 34". Root cause was a branch-precedence bug in `handleClose`
+  (**not** in the original Phase 2 scope): `abortReason` was evaluated before `rateLimited`,
+  so a rate-limit that outlived a wedged `terminate()` was reclassified as `timed_out` once
+  the watchdog fired. Fixed by reordering to `cancelled > rate_limited > timeout`, hardening
+  `terminate()` to reap `setsid()`-escaped descendants (recursive `pgrep -P` snapshot →
+  per-pid SIGKILL) so the worker slot frees promptly, and clamping `killGraceMs` to
+  `[1000, 60000]` (default 10s). The processor's `rate_limit_ttl_ms` override was
+  intentionally left un-sanitized (a trusted, exact-by-construction operator/test input).
+  Gates green (`pnpm typecheck && lint && test`, unit 406); acceptance test = executor
+  incident reproduction (rate_limit event + late timeout abort ⇒ `rate_limited`), satisfying
+  Success Criterion #3.
+- **Phase 3 (P1, Problems 4–5 — QA live-stack + stderr-on-timeout)** — this branch; see
+  `docs/progress.md` "Iteration 35". Problem 4: new `## Verification and QA` section in
+  `wrapper.ts` (`verificationSection()`), callback-channel only — restricts full dev-stack
+  boots (`docker compose up`, `npm ci`, long-running `start:dev`), prefers unit/integration
+  tests + static analysis, and escalates via `request_human(blocking=true)` when a live env
+  is genuinely needed but not already reachable. Problem 5: builds on Phase 2's reordered
+  `handleClose` — the `abortReason === 'timeout'` branch persists the last ≤16 KB of
+  `stderrTail.text` as a `run_events(type='error')` row via the existing `persistRunEvent`
+  (Success Criteria #4/#5); `cancelled`/`rate_limited` (handled above) stay silent. Unit
+  tests in `wrapper.spec.ts` + `claude-cli.executor.spec.ts`. No callback HTTP-contract
+  change, no DB migration, no new external deps.
+- **Phases 4–5** — pending (durable finalize/outbox, concurrency reduction + monitoring).

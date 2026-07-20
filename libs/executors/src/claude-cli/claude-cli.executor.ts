@@ -541,6 +541,18 @@ export class ClaudeCliExecutor implements AgentExecutor {
         }
 
         if (abortReason === 'timeout') {
+          // Problem 5 (incident 2026-07-19): a timed_out run otherwise discards
+          // the last thing the CLI / MCP server wrote to stderr — the one place
+          // the cause is visible. Persist the (already ≤16 KB) tail as an
+          // `error` run_event so a timeout is diagnosable. cancelled/rate_limited
+          // are handled above and keep their existing paths.
+          if (stderrTail.text.length > 0) {
+            await persistRunEvent('error', {
+              source: 'stderr-tail',
+              reason: 'timeout',
+              stderr: stderrTail.text,
+            });
+          }
           settle({
             exitStatus: 'timeout',
             externalRef,

@@ -1764,7 +1764,6 @@ select/map контроллера (оба слоя двигаются вмест
 правила ключа. Косметика: в списке executors тег `kimi` теперь читается как реальный
 бэкенд (primary), а не как fake `mock` (info).
 
-
 ## Iteration 34 — Инцидент 2026-07-19, Фаза 2: rate_limit больше не превращается в timed_out (Problem 3)
 
 План: `docs/incident-2026-07-19-fix-plan.md` (Фаза 2). Фаза 1 (P0, MCP-callback,
@@ -1823,3 +1822,44 @@ contracts/mcp/admin отдельными проектами зелёные). **`
 запускался** — в сессии нет Docker (прецедент итераций 29/32/33). БД-миграций нет.
 Напоминание: `dist/` контрактов в gitignore — после деплоя пересобрать и рестартовать
 worker/backend, чтобы поднялся новый zod-дефолт `killGraceMs`.
+
+## Iteration 35 — Инцидент 2026-07-19, Фаза 3: ограничение QA-стека + stderr на timeout (P1, 2026-07-20)
+
+Две независимые P1-правки из `docs/incident-2026-07-19-fix-plan.md` §Phase 3
+(проблемы 4 и 5). Обе — маленькие, самодостаточные, покрыты юнит-тестами в той же
+итерации (правило 4). Опираются на реордер `handleClose` из Iteration 34 (Фаза 2).
+
+**Проблема 4 — QA-агент поднимает полный dev-стек внутри прогона.** Cyrus Smith
+(ST3-872) прогнал `docker compose`, `npm ci`, `nohup npm run start:dev` и живые
+JSON-RPC вызовы, спалив весь 45-минутный бюджет в `timed_out`. В
+`libs/executors/src/claude-cli/wrapper.ts` добавлена секция `## Verification and QA`
+(новый хелпер `verificationSection()`, стиль как у `callbackToolsSection()`),
+рендерится ТОЛЬКО на callback-канале (эскейп-хэтч ссылается на
+`mcp__brigadir__request_human(blocking=true)`, которого нет в Phase-0). Правила: не
+поднимать полный стек (`docker compose up`, `npm ci`, долгоживущий `start:dev`), если
+это >~5 минут; предпочитать unit/integration-тесты и статанализ; если live-тест
+критичен — сперва проверить, что сервисы УЖЕ подняты и доступны, иначе не поднимать
+самому, а звать человека blocking-запросом. Phase-0 (`useCallbackChannel = false`)
+остаётся байт-в-байт (гвардится существующими спеками).
+
+**Проблема 5 — stderr теряется на `timed_out`.** В
+`libs/executors/src/claude-cli/claude-cli.executor.ts` (`runProcess` → `handleClose`)
+ветка `abortReason === 'timeout'` (реордер `cancelled > rate_limited > timeout` из
+Фазы 2) перед `settle` персистит последний ≤16 KB хвост `stderrTail.text` как
+`run_event(type='error')` через уже существующий `persistRunEvent` (SC #4 «последние
+16 KB»). `StderrTail` уже режет буфер до `STDERR_TAIL_BYTES` на каждом `push`, поэтому
+доп. slice не нужен; `type='error'` — документированный валидный тип (`run-events.ts`,
+колонка free-form text, без enum), без миграции. `cancelled`/`rate_limited` (ветки выше)
+остаются молчаливыми — поведение не меняется.
+
+**Тесты.** `wrapper.spec.ts`: секция QA присутствует на callback-канале и отсутствует
+на Phase-0. `claude-cli.executor.spec.ts` (харнесс `FakeChild`/`makeGroup`/
+`fakeDb().insertedEvents`, NDJSON-фикстуры): timeout с непустым stderr пишет
+`error`-событие с хвостом, усечённым до 16 KB (endsWith последнего чанка, без первого);
+cancelled НЕ пишет `error`-событие.
+
+**Гейты.** `pnpm typecheck && pnpm lint && pnpm test` — зелёные (unit 410, +4 к
+baseline 406 из Iteration 34). `pnpm test:integration` НЕ запускался — в облачной сессии
+нет Docker (прецедент итераций 29/32/33/34); для этих двух юнит-уровневых правок
+интеграционное покрытие не требуется. Callback HTTP-контракт, Phase-0, схема БД — не
+тронуты; новых внешних зависимостей нет.

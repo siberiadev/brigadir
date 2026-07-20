@@ -362,6 +362,66 @@ describe('ClaudeCliExecutor.run (T082)', () => {
     expect(group.terminate).toHaveBeenCalledWith(1000);
   });
 
+  // Problem 5 (incident 2026-07-19): a timed_out run persists the last ≤16 KB
+  // of stderr as an `error` run_event so the failure is diagnosable.
+  it('timeout persists the stderr tail as an error run_event, truncated to 16 KB', async () => {
+    const group = makeGroup();
+    spawnGroupMock.mockReturnValue(group);
+    const db = fakeDb(executorConfig, {});
+    const fakeJira = { getFeatureContext: vi.fn().mockResolvedValue({ linked: [] }) };
+    const executor = new ClaudeCliExecutor(db as never, agentsConfig, fakeJira as never);
+    const controller = new AbortController();
+
+    const runPromise = executor.run(makeCtx(), controller.signal);
+    await waitForSpawn(spawnGroupMock);
+    // A stderr blob longer than the 16 KB tail cap: only the last bytes survive.
+    group.child.stderr.write('START' + 'x'.repeat(20_000) + 'END');
+    await flush();
+    controller.abort('timeout');
+
+    const result = await runPromise;
+    expect(result.exitStatus).toBe('timeout');
+
+    const errorEvent = (db.insertedEvents as unknown[])
+      .flatMap((v) => (Array.isArray(v) ? v : [v]))
+      .find((e) => (e as { type?: string })?.type === 'error') as
+      | { runId: string; type: string; payload: { source?: string; reason?: string; stderr?: string } }
+      | undefined;
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent!.runId).toBe('run-1');
+    expect(errorEvent!.payload.source).toBe('stderr-tail');
+    expect(errorEvent!.payload.reason).toBe('timeout');
+    const stderr = errorEvent!.payload.stderr!;
+    expect(stderr.length).toBe(16 * 1024); // truncated to the last 16 KB
+    expect(stderr.endsWith('END')).toBe(true); // last bytes kept
+    expect(stderr).not.toContain('START'); // earliest bytes dropped
+  });
+
+  // The stderr-persist path is a timeout affordance only — a cancelled run is a
+  // deliberate operator action, not a fault, and must stay silent.
+  it('cancelled does NOT persist a stderr error run_event', async () => {
+    const group = makeGroup();
+    spawnGroupMock.mockReturnValue(group);
+    const db = fakeDb(executorConfig, {});
+    const fakeJira = { getFeatureContext: vi.fn().mockResolvedValue({ linked: [] }) };
+    const executor = new ClaudeCliExecutor(db as never, agentsConfig, fakeJira as never);
+    const controller = new AbortController();
+
+    const runPromise = executor.run(makeCtx(), controller.signal);
+    await waitForSpawn(spawnGroupMock);
+    group.child.stderr.write('some noise on stderr\n');
+    await flush();
+    controller.abort('cancelled');
+
+    const result = await runPromise;
+    expect(result.exitStatus).toBe('cancelled');
+
+    const errorEvents = (db.insertedEvents as unknown[])
+      .flatMap((v) => (Array.isArray(v) ? v : [v]))
+      .filter((e) => (e as { type?: string })?.type === 'error');
+    expect(errorEvents).toHaveLength(0);
+  });
+
   it('cancelled: abort with reason "cancelled" resolves exitStatus cancelled', async () => {
     const group = makeGroup();
     spawnGroupMock.mockReturnValue(group);

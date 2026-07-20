@@ -48,6 +48,29 @@ describe('buildWrapperText (T103, D6)', () => {
     expect(text).not.toContain('ScheduleWakeup');
   });
 
+  // Problem 4 (incident 2026-07-19): QA/verification runs must not boot a full
+  // dev stack inside the run. Callback channel only.
+  it('callback path includes the QA/verification restriction on full dev-stack boots', () => {
+    const text = buildWrapperText(ctx, '/tmp/wt', { useCallbackChannel: true });
+    expect(text).toContain('## Verification and QA');
+    expect(text).toContain('docker compose up');
+    expect(text).toContain('npm ci');
+    expect(text).toContain('start:dev');
+    expect(text).toContain('5 minutes');
+    // Prefer cheap verification over live stacks.
+    expect(text).toContain('unit tests');
+    expect(text).toContain('static analysis');
+    // Reachability check before booting anything, else escalate to a human.
+    expect(text).toContain('ALREADY running and reachable');
+    expect(text).toContain("request_human(blocking=true, title='Live test environment unavailable'");
+  });
+
+  it('structured-output path does not contain the QA/verification section (Phase-0 byte-identical)', () => {
+    const text = buildWrapperText(ctx, '/tmp/wt', { useCallbackChannel: false });
+    expect(text).not.toContain('## Verification and QA');
+    expect(text).not.toContain('docker compose up');
+  });
+
   // feature 013: agents discover answer options from the wrapper alone —
   // stored instructions stay untouched. The Phase-0 section keeps its
   // byte-for-byte contract, so options are never mentioned there.
