@@ -503,18 +503,25 @@ export class ClaudeCliExecutor implements AgentExecutor {
       const handleClose = async (code: number | null): Promise<void> => {
         signal.removeEventListener('abort', onAbort);
 
-        if (abortReason) {
+        // Outcome precedence: cancelled > rate_limited > timeout (incident
+        // 2026-07-19). A user cancel is authoritative over everything. But a
+        // rate_limit we already parsed must outrank a LATE watchdog `timeout`:
+        // when terminate() outlives its grace (a wedged or setsid-escaped
+        // child), the run can linger until the processor aborts with
+        // 'timeout'. Reporting that as timed_out burns the attempt on a
+        // subscription limit the run should have been parked+requeued for.
+        if (abortReason === 'cancelled') {
           // The cancel-poll aborts a lingering process AFTER a callback
           // finalize/park flipped the run off 'running' — exactly the path
           // where a terminal event parsed before the kill carries the run's
           // only cost/usage data. handleClose runs after 'close', so
           // `terminal` holds whatever the parser captured; don't drop it.
           settle({
-            exitStatus: abortReason,
+            exitStatus: 'cancelled',
             externalRef,
             costUsd: terminal?.totalCostUsd,
             usage: terminal?.usage,
-            diagnostics: `run ${abortReason}`,
+            diagnostics: 'run cancelled',
           });
           return;
         }
@@ -529,6 +536,17 @@ export class ClaudeCliExecutor implements AgentExecutor {
             costUsd: terminal?.totalCostUsd,
             usage: terminal?.usage,
             diagnostics: 'subscription rate limit hit — retry later, attempt not spent',
+          });
+          return;
+        }
+
+        if (abortReason === 'timeout') {
+          settle({
+            exitStatus: 'timeout',
+            externalRef,
+            costUsd: terminal?.totalCostUsd,
+            usage: terminal?.usage,
+            diagnostics: 'run timeout',
           });
           return;
         }

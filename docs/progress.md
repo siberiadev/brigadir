@@ -1763,3 +1763,63 @@ select/map контроллера (оба слоя двигаются вмест
 инъекции env и floor-инвариант, zod-4 discriminatedUnion+superRefine, контроллерные
 правила ключа. Косметика: в списке executors тег `kimi` теперь читается как реальный
 бэкенд (primary), а не как fake `mock` (info).
+
+
+## Iteration 34 — Инцидент 2026-07-19, Фаза 2: rate_limit больше не превращается в timed_out (Problem 3)
+
+План: `docs/incident-2026-07-19-fix-plan.md` (Фаза 2). Фаза 1 (P0, MCP-callback,
+Problems 1–2) уже влита коммитом `8c12942`; отдельный kimi-429 TTL-фикс
+(`sanitizeRateLimitTtl`, `035ada8`) тоже. Эта итерация закрывает Problem 3.
+
+**Найденная первопричина (её НЕ было в исходном fix-plan).** `Captain Nemo` на
+`claude-opus-4-8` поймал `api_retry: rate_limit`, executor вызвал `terminate()`, но
+прогон висел ~50 мин до watchdog-таймаута и финализировался как `timed_out` вместо
+`rate_limited` (сжёг попытку вместо park+requeue). Корень — порядок веток в `handleClose`
+(`claude-cli.executor.ts`): `abortReason` проверялся ДО `rateLimited`. Когда `terminate()`
+не дожинает группу (escaped-потомок держит pipe-fd → `close` не приходит), промис висит,
+пока processor-watchdog не выставит `abortReason='timeout'`; на `close` ветка abortReason
+выигрывала → `timed_out`.
+
+**Изменения.**
+1. **Порядок исходов в `handleClose`** теперь `cancelled` > `rate_limited` > `timeout`
+   (`libs/executors/src/claude-cli/claude-cli.executor.ts`). Cancel по-прежнему
+   авторитетен; уже распарсенный rate_limit перебивает ПОЗДНИЙ watchdog-таймаут. Оба
+   `cancelled`/`timeout` сохраняют перенос `terminal?.totalCostUsd/usage` (путь cost-
+   preservation cancel-поллера — правило D7 — не задет).
+2. **Дожинание escaped-потомков в `terminate()`** (`process-group.ts`). После SIGTERM+grace,
+   если лидер жив, снимаем снапшот дерева потомков через рекурсивный `pgrep -P` (ПОКА лидер
+   жив — после SIGKILL потомки ре파рентятся к init и теряют ppid-связь), затем SIGKILL и по
+   группе (`-pid`), и по каждому пережившему pid. `setsid()`-потомок (docker) не в группе,
+   держит pipe-fd — из-за него `close` не приходил и слот висел до таймаута. Best-effort,
+   не бросает: `pgrep` отсутствует/падает → фолбэк на групповой сигнал; ESRCH проглатывается.
+3. **Дефолт/клэмп `killGraceMs`** (`claude-cli.config.ts` + `agents-config.schema.ts`).
+   Новый `normalizeKillGraceMs` в `resolveClaudeCliConfig` клэмпит рантайм-значение в
+   `[1000, 60000]`, дефолт `10_000` (не-finite/absent). zod-дефолт поднят `5000→10000`, но
+   `min(0)` в схеме СОХРАНЁН намеренно: жёсткий floor живёт только в рантайм-нормализаторе,
+   чтобы out-of-range значение в stored jsonb клэмпилось, а не валило boot-валидацию.
+   `0` раньше значил SIGTERM, тут же добиваемый SIGKILL — без окна graceful-shutdown.
+4. **TTL-override processor'а НЕ трогали** (Change 4 плана — отклонён). Явный
+   operator/test override в `resolveRateLimitTtl` документирован как «deliberately NOT
+   clamped ... exact by construction» и это доверенный вход; санитизация сломала бы
+   интеграционные `rate_limit_ttl_ms`-фикстуры с малым точным окном. Регрессия покрыта на
+   уровне маппера (`status-mapping.spec.ts`: `rate_limited → {action:'rate_limit'}`) и
+   executor'а (новые тесты ниже).
+
+**Тесты (правило 4, в той же итерации).**
+- `claude-cli.executor.spec.ts`: репродукция инцидента — `stream-rate-limit` + поздний
+  `abort('timeout')` ДО `close` (через `makeGroupNoClose`, чей `terminate` не эмитит
+  `close`) ⇒ `rate_limited` (падал до фикса); cancel-после-rate_limit ⇒ `cancelled`.
+  Фикстуры `killGraceMs 50→1000`, ассерт `terminate` → `1000`.
+- `process-group.spec.ts`: мок `execFile` (pgrep); escaped-внук `9001` получает
+  `SIGKILL` по pid + по группе; отказ `pgrep` ⇒ фолбэк без throw, только групповой сигнал.
+- `claude-cli.config.spec.ts`: матрица `normalizeKillGraceMs` (in-range/floor/ceiling/
+  round/дефолт) + клэмп через `resolveClaudeCliConfig`.
+- `agents-config.schema.spec.ts`: дефолт `killGraceMs` обновлён `5000→10000` (обе ветки).
+- Интеграционный harness `test/integration/claude-cli-harness.ts`: `killGraceMs 500→1000`
+  (иначе клэмпнулся бы рантаймом — держим в синхроне).
+
+**Гейты.** `pnpm typecheck && pnpm lint && pnpm test` — зелёные (unit 406;
+contracts/mcp/admin отдельными проектами зелёные). **`pnpm test:integration` НЕ
+запускался** — в сессии нет Docker (прецедент итераций 29/32/33). БД-миграций нет.
+Напоминание: `dist/` контрактов в gitignore — после деплоя пересобрать и рестартовать
+worker/backend, чтобы поднялся новый zod-дефолт `killGraceMs`.

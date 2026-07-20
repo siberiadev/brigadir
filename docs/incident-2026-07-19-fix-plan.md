@@ -254,3 +254,26 @@ Linked incident section: [Problem 7](incident-2026-07-19-fix-prompt.md#problem-7
 2. Each phase has passing unit tests.
 3. A single integration run demonstrates: 5-minute callback outage → `request_human`; slow Jira → `200` in <1s; `rate_limit` → `rate_limited` status; timeout → stderr persisted.
 4. The incident doc is updated with a "Resolution" section referencing this plan file and the merged PRs.
+
+---
+
+## Resolution
+
+- **Phase 1 (P0, Problems 1–2)** — merged in commit `8c12942` (MCP callback retry
+  hardening, async `complete_task` finalize, fail-fast wrapper rule, explicit
+  `127.0.0.1` callback default). The separate kimi-429 TTL sub-fix (`sanitizeRateLimitTtl`)
+  landed in `035ada8`.
+- **Phase 2 (P1, Problem 3 — `rate_limit` → `timed_out`)** — implemented on branch
+  `claude/incident-2026-07-19-phase-2-dc94f1`; see `docs/progress.md` "Iteration 34".
+  Root cause was a branch-precedence bug in `handleClose` (**not** in the original Phase 2
+  scope): `abortReason` was evaluated before `rateLimited`, so a rate-limit that outlived a
+  wedged `terminate()` was reclassified as `timed_out` once the watchdog fired. Fixed by
+  reordering to `cancelled > rate_limited > timeout`, hardening `terminate()` to reap
+  `setsid()`-escaped descendants (recursive `pgrep -P` snapshot → per-pid SIGKILL) so the
+  worker slot frees promptly, and clamping `killGraceMs` to `[1000, 60000]` (default 10s).
+  The processor's `rate_limit_ttl_ms` override was intentionally left un-sanitized (a
+  trusted, exact-by-construction operator/test input). Gates green (`pnpm typecheck && lint
+  && test`, unit 406); acceptance test = executor incident reproduction (rate_limit event +
+  late timeout abort ⇒ `rate_limited`), satisfying Success Criterion #3.
+- **Phases 3–5** — pending (QA live-stack restriction + stderr-on-timeout, durable
+  finalize/outbox, concurrency reduction).

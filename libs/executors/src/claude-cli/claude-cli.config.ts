@@ -188,6 +188,28 @@ export function applyProviderEnv(env: Record<string, string>, preset: ProviderPr
  * human inspection. `ensureCache` now heals a rotted cache on its own; this
  * keeps the rot from happening in the first place.
  */
+/** Bounds for the SIGTERM→SIGKILL grace, enforced at runtime (Phase 2). */
+const KILL_GRACE_MIN_MS = 1000;
+const KILL_GRACE_MAX_MS = 60_000;
+const KILL_GRACE_DEFAULT_MS = 10_000;
+
+/**
+ * Defensive floor/ceiling for `killGraceMs` (incident 2026-07-19). The zod
+ * schema defaults this on the boot/seed path, but the value is also read from
+ * stored jsonb and constructed directly in tests — both bypass the schema — so
+ * the single runtime consumer clamps it here. `0` (the schema's historical
+ * floor) meant SIGTERM immediately chased by SIGKILL, i.e. NO graceful window;
+ * an unbounded value would let `terminate()` block a worker slot for minutes.
+ * Out of range → clamped; non-finite/absent → the 10s default.
+ */
+export function normalizeKillGraceMs(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return KILL_GRACE_DEFAULT_MS;
+  const int = Math.round(raw);
+  if (int < KILL_GRACE_MIN_MS) return KILL_GRACE_MIN_MS;
+  if (int > KILL_GRACE_MAX_MS) return KILL_GRACE_MAX_MS;
+  return int;
+}
+
 export function resolveClaudeCliConfig(
   raw: ClaudeCliExecutorConfigInput,
   agentAllowedTools: readonly string[] = [],
@@ -201,7 +223,7 @@ export function resolveClaudeCliConfig(
     worktreeRoot: raw.worktreeRoot ?? join(homedir(), '.brigadir', 'worktrees'),
     repoCacheRoot: raw.repoCacheRoot ?? join(homedir(), '.brigadir', 'repos'),
     maxTurns: raw.maxTurns,
-    killGraceMs: raw.killGraceMs,
+    killGraceMs: normalizeKillGraceMs(raw.killGraceMs),
     cancelPollMs: raw.cancelPollMs,
     useCallbackChannel: raw.useCallbackChannel,
   };
