@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { Agent as HttpAgent } from 'node:http';
 import { Agent as HttpsAgent } from 'node:https';
 import { writeMarker } from './marker.js';
+import { writeOutbox, removeOutbox } from './outbox.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -309,6 +310,10 @@ export function createToolHandlers(config: ToolHandlersConfig): {
       // Attached by the tool server itself — outside the tool's input schema,
       // so the agent cannot author or spoof it.
       const observedHeads = await observeHeads(config.repoDirs, gitHeadResolver);
+      // Durable-finalize outbox (Phase 4, Problem 6): persist the report locally
+      // BEFORE the POST, so a callback that never reaches the backend (the
+      // incident's `fetch failed`) can still be reconciled by the worker.
+      await writeOutbox(config.markerPath, config.runId, args);
       const response = await postWithRetry(
         `${base}/runs/${config.runId}/complete`,
         args,
@@ -318,6 +323,8 @@ export function createToolHandlers(config: ToolHandlersConfig): {
       );
       if (response.status >= 200 && response.status < 300) {
         await writeMarker(config.markerPath);
+        // Callback confirmed — the durable fallback is no longer needed.
+        await removeOutbox(config.markerPath, config.runId);
       }
       return toResult(response);
     },

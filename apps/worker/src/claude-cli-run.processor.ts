@@ -6,10 +6,14 @@ import { DRIZZLE, type BrigadirDb, schema, getBrigadirAgentTemplate } from '@bri
 import { BRIGADIR_JWT_SECRET } from '@brigadir/app-config';
 import { runQueueName, backoffStrategy } from '@brigadir/queues';
 import { RunsService, mapExitStatusToRunStatus } from '@brigadir/runs';
+import { tmpdir } from 'node:os';
 import {
   ExecutorRegistry,
   RepositoryScopeUndeterminableError,
   composeScopeQuestion,
+  defaultMcpConfigRoot,
+  readOutboxReport,
+  consumeOutbox,
   type ExecutorResult,
   type RunContext,
 } from '@brigadir/executors';
@@ -327,6 +331,30 @@ export class ClaudeCliRunProcessor
           usage: result.usage,
         };
         if (loaded.useCallbackChannel) {
+          // Durable-finalize outbox (Phase 4, Problem 6): a run about to become
+          // `timed_out` may already carry a `complete_task` report that never
+          // reached the backend (the incident's `fetch failed`). The run is
+          // still `running` here, so finalizing from the outbox goes through the
+          // normal guarded path — reconcile it instead of losing the outcome.
+          // Only `timed_out`: `cancelled`/`rate_limited` are intentional stops
+          // and must not be clobbered by a stale local report.
+          if (decision.status === 'timed_out') {
+            const configRoot = defaultMcpConfigRoot(tmpdir());
+            const report = await readOutboxReport(configRoot, runId);
+            if (report !== null) {
+              try {
+                const reconciled = await this.runs.finalizeWithReport(runId, report, extra);
+                if (reconciled) {
+                  await consumeOutbox(configRoot, runId);
+                  await this.afterFinalize(runId);
+                  return;
+                }
+              } catch {
+                // Malformed outbox report (fails ReportSchema.parse) — fall
+                // through to the unchanged `timed_out` path below.
+              }
+            }
+          }
           // D7 generalized: the cancel-poll aborts a lingering process after a
           // blocking request_human parked the run (status left 'running'), and
           // the executor then resolves 'cancelled' — that process outcome must

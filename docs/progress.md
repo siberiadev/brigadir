@@ -1863,3 +1863,49 @@ baseline 406 из Iteration 34). `pnpm test:integration` НЕ запускалс
 нет Docker (прецедент итераций 29/32/33/34); для этих двух юнит-уровневых правок
 интеграционное покрытие не требуется. Callback HTTP-контракт, Phase-0, схема БД — не
 тронуты; новых внешних зависимостей нет.
+
+## Iteration 36 — Инцидент 2026-07-19, Фаза 4: durable finalize / outbox (P2, Problem 6, 2026-07-20)
+
+Последний слой надёжности из `docs/incident-2026-07-19-fix-plan.md` §Phase 4. В инциденте
+7 из 8 прогонов упали в `timed_out` с `outcome = NULL`: агент уже сформировал
+`complete_task`, но HTTP-callback не доходил до бэкенда (`TypeError: fetch failed`) и отчёт
+терялся. Фаза 4 добавляет локальный **outbox**, из которого воркер восстанавливает исход.
+
+**Запись (MCP-сервер).** Новый модуль `packages/mcp-server/src/outbox.ts` (по образцу
+`marker.ts`, только node-builtins — пакет держим тонким). В `tools.ts` `complete_task`
+пишет отчёт в `<dirname(BRIGADIR_MARKER_PATH)>/.brigadir-outbox/<runId>.json` ПЕРЕД POST и
+удаляет его на 2xx. Инвариант: outbox-файл существует ⇔ завершение произошло локально, но НЕ
+подтверждено бэкендом. `writeOutbox`/`removeOutbox` — best-effort (никогда не бросают:
+завершение не должно падать из-за outbox); `args` не валидированы на MCP-стороне, поэтому
+`outcome` читается защитно.
+
+**Реконсиляция (воркер).** Новый `libs/executors/src/claude-cli/outbox.ts`
+(`readOutboxReport`/`consumeOutbox`/`outboxFilePath`, `configRoot` = тот же
+`defaultMcpConfigRoot(os.tmpdir())`, экспорт добавлен в барель). В
+`apps/worker/src/claude-cli-run.processor.ts`, ветка `finalize` для callback-канала, ДО
+записи `timed_out` (прогон ещё `running`, поэтому гвард `finalizeWithReport`
+`status IN (queued,running,awaiting_human)` проходит штатно): при `decision.status ===
+'timed_out'` читаем outbox и, если отчёт есть, финализируем через обычный
+`RunsService.finalizeWithReport` — та же валидация / `run_checks` / `human_tasks`, что у
+живого callback'а — затем `consumeOutbox`. Только `timed_out`: `cancelled`/`rate_limited` —
+намеренные остановки, их нельзя затирать устаревшим локальным отчётом (перекликается с
+правилом 7). Битый отчёт (падает `ReportSchema.parse`) или проигранная гонка
+(`finalizeWithReport` → false) — проваливаемся в неизменённую ветку `timed_out`, без
+двойной финализации. Outbox переживает `WrittenMcpConfig.cleanup` (тот удаляет только
+config + `.marker`), поэтому файл ещё на диске в момент финализации; в executor-cleanup его
+НЕ трогаем (cleanup идёт до этой ветки). Watchdog из `libs/ingest` (страховка на случай
+смерти самого воркера) — задокументированный non-goal этой фазы.
+
+**Тесты.** `packages/mcp-server/src/tools.spec.ts`: network-error `complete_task` оставляет
+outbox с корректным JSON (`runId`/`outcome`/`report`/`timestamp`); 2xx удаляет outbox; сбой
+записи outbox (`.brigadir-outbox` заранее создан ФАЙЛОМ → mkdir падает, маркер-сосед пишется
+штатно) не ломает завершение. Новый `libs/executors/src/claude-cli/outbox.spec.ts`:
+`readOutboxReport` отдаёт отчёт / null на missing / битом JSON / несовпадении `runId`;
+`consumeOutbox` удаляет и идемпотентен. Проводка процессора покрыта интеграционно (юнит-спеки
+у процессора нет — прецедент).
+
+**Гейты.** `pnpm typecheck && pnpm lint && pnpm test` — зелёные (unit 416). `pnpm
+test:integration` НЕ запускался — в облачной сессии нет Docker (прецедент итераций
+29/32/33/34/35). Callback HTTP-контракт, Phase-0 (`useCallbackChannel = false` — вся
+реконсиляция внутри callback-ветки), схема БД — не тронуты; миграций нет; новых внешних
+зависимостей нет.

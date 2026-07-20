@@ -1,8 +1,9 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, access } from 'node:fs/promises';
+import { mkdtemp, rm, access, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createToolHandlers } from './tools';
+import { outboxFilePath } from './outbox';
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -49,6 +50,56 @@ describe('createToolHandlers (T095)', () => {
     expect(result.isError).toBeUndefined();
     expect(JSON.parse(result.content[0].text)).toMatchObject({ ok: true });
     expect(await exists(markerPath)).toBe(true);
+    // Phase 4: a confirmed callback drops the durable outbox.
+    expect(await exists(outboxFilePath(markerPath, 'run-1'))).toBe(false);
+  });
+
+  it('a network-error complete_task leaves a durable outbox with the report', async () => {
+    const markerPath = await setup();
+    const handlers = createToolHandlers({
+      callbackUrl: 'http://callback.test/api/callbacks',
+      runId: 'run-1',
+      runToken: 'tok',
+      markerPath,
+      maxNetworkErrorRetries: 1,
+      networkRetryDelayMs: () => 0,
+      fetchImpl: async () => {
+        throw new TypeError('fetch failed');
+      },
+    });
+
+    const report = { schema_version: 1, outcome: 'success', summary: 'done', checks: [] };
+    const result = await handlers.complete_task(report);
+
+    // The callback never landed — but the report is durably persisted.
+    expect(result.isError).toBe(true);
+    expect(await exists(markerPath)).toBe(false);
+    const outboxPath = outboxFilePath(markerPath, 'run-1');
+    expect(await exists(outboxPath)).toBe(true);
+    const persisted = JSON.parse(await readFile(outboxPath, 'utf8'));
+    expect(persisted).toMatchObject({ runId: 'run-1', outcome: 'success', report });
+    expect(typeof persisted.timestamp).toBe('string');
+    expect(dirname(outboxPath)).toBe(join(tmpDir, '.brigadir-outbox'));
+  });
+
+  it('an outbox write failure never breaks completion', async () => {
+    // Pre-create `.brigadir-outbox` as a FILE so the outbox mkdir fails — while
+    // the marker (a sibling of that dir) still writes fine. Isolates the failure
+    // to the outbox: the tool must still return the callback response.
+    const markerPath = await setup();
+    await writeFile(join(tmpDir, '.brigadir-outbox'), 'x');
+    const handlers = createToolHandlers({
+      callbackUrl: 'http://callback.test/api/callbacks',
+      runId: 'run-1',
+      runToken: 'tok',
+      markerPath,
+      fetchImpl: async () => jsonResponse(200, { ok: true, outcome: 'success' }),
+    });
+
+    const result = await handlers.complete_task({ schema_version: 1, outcome: 'success', summary: 'done', checks: [] });
+
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(result.content[0].text)).toMatchObject({ ok: true });
   });
 
   it('200 on non-blocking request_human does NOT write the marker', async () => {

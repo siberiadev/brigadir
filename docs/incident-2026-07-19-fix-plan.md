@@ -287,4 +287,23 @@ Linked incident section: [Problem 7](incident-2026-07-19-fix-prompt.md#problem-7
   (Success Criteria #4/#5); `cancelled`/`rate_limited` (handled above) stay silent. Unit
   tests in `wrapper.spec.ts` + `claude-cli.executor.spec.ts`. No callback HTTP-contract
   change, no DB migration, no new external deps.
-- **Phases 4–5** — pending (durable finalize/outbox, concurrency reduction + monitoring).
+- **Phase 4 (P2, Problem 6 — durable finalize / outbox)** — this branch; see
+  `docs/progress.md` "Iteration 36". The tool server now persists every `complete_task`
+  report to a local outbox file (`<marker-dir>/.brigadir-outbox/<runId>.json`) BEFORE the
+  HTTP callback and removes it on a 2xx (new `packages/mcp-server/src/outbox.ts`, wired into
+  `tools.ts`), so a callback that never reaches the backend (the incident's `fetch failed`)
+  no longer loses the outcome. The worker reconciles it in
+  `apps/worker/src/claude-cli-run.processor.ts`: in the callback-wired `finalize` branch,
+  before writing `timed_out` (run still `running`), it reads the outbox
+  (`libs/executors/src/claude-cli/outbox.ts` → `readOutboxReport`) and, if a report exists,
+  finalizes via the normal `RunsService.finalizeWithReport` — same validation / `run_checks`
+  / `human_tasks` path as a live callback — then consumes the file (Success Criterion #6).
+  Scoped to `timed_out` only (`cancelled`/`rate_limited` are intentional stops and must not
+  be clobbered); a malformed report or a lost race falls through to the unchanged `timed_out`
+  path. The `libs/ingest` watchdog (worker-death safety net) is a documented non-goal for this
+  phase. Unit tests: `packages/mcp-server/src/tools.spec.ts` (outbox written on network
+  failure, dropped on 2xx, write failure never breaks completion) + new
+  `libs/executors/src/claude-cli/outbox.spec.ts`; the processor wiring is integration-covered.
+  Gates green (`pnpm typecheck && lint && test`, unit 416). No callback HTTP-contract change,
+  no DB migration, no new external deps.
+- **Phase 5** — pending (concurrency reduction + monitoring).
