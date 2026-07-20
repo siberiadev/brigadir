@@ -71,6 +71,14 @@ describe('per-profile max_parallel_runs gate', () => {
     return row.id;
   }
 
+  async function seedProfileWithModel(name: string, maxParallelRuns: number, model: string) {
+    const [row] = await db.db
+      .insert(schema.executors)
+      .values({ type: 'mock', name, maxParallelRuns, enabled: true, config: { model } })
+      .returning({ id: schema.executors.id });
+    return row.id;
+  }
+
   async function seedAgentWithTicket(executorId: string, name: string, ticketKey: string) {
     const [agent] = await db.db
       .insert(schema.agents)
@@ -200,6 +208,55 @@ describe('per-profile max_parallel_runs gate', () => {
       if (r.status === 'succeeded') break;
       if (Date.now() > deadline) throw new Error(`held run never released (at ${r.status})`);
       await new Promise((rr) => setTimeout(rr, 50));
+    }
+  }, 60_000);
+
+  it('per-model cap holds the 3rd run across two profiles sharing a model; no attempt burned (Phase 5)', async () => {
+    // Two profiles, each limit 3 (so the PROFILE cap can never bite here), both
+    // running the same model with EXECUTOR_MODEL_LIMITS = 2 → the model tier
+    // must cap the union at 2 concurrent and hold the 3rd without an attempt.
+    const model = 'shared-model-x';
+    process.env.EXECUTOR_MODEL_LIMITS = JSON.stringify({ [model]: 2 });
+    try {
+      const mProfileA = await seedProfileWithModel('model-a', 3, model);
+      const mProfileB = await seedProfileWithModel('model-b', 3, model);
+      const ma = await seedAgentWithTicket(mProfileA, 'ma', 'GATE-6');
+      const mb = await seedAgentWithTicket(mProfileB, 'mb', 'GATE-7');
+      const mc = await seedAgentWithTicket(mProfileA, 'mc', 'GATE-8');
+
+      // Occupy both model slots first (distinct profiles), each long enough to
+      // overlap the 3rd run's whole gate-hold window.
+      const runMA = await triggerDelayRun(ma, 2000);
+      const runMB = await triggerDelayRun(mb, 2000);
+      const twoRunning = Date.now() + 10_000;
+      for (;;) {
+        const rows = await statusesOf([runMA, runMB]);
+        if (rows.length === 2 && rows.every((r) => r.status === 'running')) break;
+        if (Date.now() > twoRunning) throw new Error(`two model runs never both running: ${JSON.stringify(rows)}`);
+        await new Promise((r) => setTimeout(r, 30));
+      }
+
+      // The 3rd is over the model cap → held (queued, attempt untouched) while
+      // the first two run.
+      const runMC = await triggerDelayRun(mc, 300);
+      await new Promise((r) => setTimeout(r, 900));
+      const [heldRow] = await statusesOf([runMC]);
+      expect(heldRow.status).toBe('queued');
+      expect(heldRow.attempt).toBe(1); // markRunning never ran — nothing consumed
+
+      // Once a model slot frees, the held run completes on its first attempt.
+      const deadline = Date.now() + 20_000;
+      for (;;) {
+        const [r] = await statusesOf([runMC]);
+        if (r.status === 'succeeded') {
+          expect(r.attempt).toBe(1);
+          break;
+        }
+        if (Date.now() > deadline) throw new Error(`model-held run never released (at ${r.status})`);
+        await new Promise((rr) => setTimeout(rr, 50));
+      }
+    } finally {
+      delete process.env.EXECUTOR_MODEL_LIMITS;
     }
   }, 60_000);
 });

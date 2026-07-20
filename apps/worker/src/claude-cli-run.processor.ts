@@ -159,13 +159,22 @@ export class ClaudeCliRunProcessor
       return;
     }
 
-    // Per-profile max_parallel_runs gate (2026-07-14): saturated/disabled
-    // profile → back to waiting via the rate-limit path, no attempt burned.
-    const gate = await checkExecutorGate(this.db, runId);
+    // Per-profile / per-model max_parallel_runs gate (2026-07-14; model tier
+    // incident 2026-07-19 Phase 5): saturated/disabled profile OR a model at
+    // its configured cap → back to waiting via the rate-limit path, no attempt
+    // burned.
+    const gate = await checkExecutorGate(this.db, runId, this.logger);
     if (!gate.admit) {
-      this.logger.log(`run ${runId} held by profile "${gate.profile}" (${gate.reason}) — retrying in ${gate.ttlMs}ms`);
+      const heldBy = gate.model ? `profile "${gate.profile}" model "${gate.model}"` : `profile "${gate.profile}"`;
+      this.logger.log(`run ${runId} held by ${heldBy} (${gate.reason}) — retrying in ${gate.ttlMs}ms`);
       await this.worker.rateLimit(gate.ttlMs);
       throw Worker.RateLimitError();
+    }
+    // Overload signal (Phase 5, G3): admitted while ≥75% of the tightest
+    // applicable limit is occupied — operator-visible pressure building.
+    if (gate.nearCapacity) {
+      const { limitKind, running, limit } = gate.nearCapacity;
+      this.logger.warn(`run ${runId} admitted near capacity: ${limitKind} limit ${running}/${limit} (≥75%)`);
     }
 
     // markRunning guards status ∈ {queued, running}: false means the run is

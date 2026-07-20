@@ -22,7 +22,32 @@ import { type BrigadirDb, schema } from '@brigadir/database';
  * limit re-applies to the live worker within ~15 s with no restart. The DB is
  * read live on each call (constitution lazy-resolution). A no-op tick (the sum
  * is unchanged) neither reassigns nor logs, so the timer stays quiet.
+ *
+ * OPERATOR CEILING (incident 2026-07-19 Phase 5, Problem 7): the incident's
+ * profiles summed to a type capacity of 22 on one host. The sum is now clamped
+ * to an optional ceiling — `EXECUTOR_MAX_TYPE_CONCURRENCY_<TYPE>` (uppercased,
+ * e.g. `..._CLAUDE_CLI`) wins over the generic `EXECUTOR_MAX_TYPE_CONCURRENCY`
+ * — read lazily at call time (CLAUDE.md rule #1). Unset ⇒ pure sum, exactly
+ * the pre-Phase-5 behavior; a value that is not an integer ≥ 1 is ignored.
  */
+
+/** Lazy ceiling lookup; `source` feeds the log line when the clamp bites. */
+function typeCapacityCeiling(
+  executorType: string,
+): { value: number; source: string } | undefined {
+  const names = [
+    `EXECUTOR_MAX_TYPE_CONCURRENCY_${executorType.toUpperCase()}`,
+    'EXECUTOR_MAX_TYPE_CONCURRENCY',
+  ];
+  for (const name of names) {
+    const raw = process.env[name];
+    if (raw === undefined || raw === '') continue;
+    const value = Number(raw);
+    if (Number.isInteger(value) && value >= 1) return { value, source: `${name}=${value}` };
+  }
+  return undefined;
+}
+
 export async function applyExecutorConcurrency(
   db: BrigadirDb,
   worker: Worker,
@@ -36,11 +61,15 @@ export async function applyExecutorConcurrency(
 
   const total = row?.total;
   if (typeof total === 'number' && total > 0) {
+    const ceiling = typeCapacityCeiling(executorType);
+    const effective = ceiling !== undefined ? Math.min(total, ceiling.value) : total;
     const before = worker.concurrency;
-    if (total === before) return; // unchanged → quiet no-op
-    worker.concurrency = total;
+    if (effective === before) return; // unchanged → quiet no-op
+    worker.concurrency = effective;
     logger.log(
-      `run.${executorType} type capacity: ${total} (sum of enabled profiles' max_parallel_runs; was ${before})`,
+      ceiling !== undefined && effective < total
+        ? `run.${executorType} type capacity: ${effective} (sum ${total} clamped by ${ceiling.source}; was ${before})`
+        : `run.${executorType} type capacity: ${effective} (sum of enabled profiles' max_parallel_runs; was ${before})`,
     );
   }
 }
