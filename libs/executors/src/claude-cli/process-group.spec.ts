@@ -3,10 +3,16 @@ import { EventEmitter } from 'node:events';
 
 vi.mock('node:child_process', () => ({
   spawn: vi.fn(),
+  // Default: pgrep finds no children (exit 1, no stdout) → group-signal only.
+  execFile: vi.fn((_cmd: string, _args: string[], cb: (e: Error | null, out: string) => void) =>
+    cb(new Error('no matches'), ''),
+  ),
 }));
 
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import { spawnGroup } from './process-group';
+
+const execFileMock = execFile as unknown as ReturnType<typeof vi.fn>;
 
 type FakeChild = EventEmitter & { pid: number; exitCode: number | null; signalCode: string | null };
 
@@ -23,12 +29,18 @@ const spawnMock = spawn as unknown as ReturnType<typeof vi.fn>;
 describe('spawnGroup / terminate (T081)', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    // Default: pgrep reports no children unless a test overrides it.
+    execFileMock.mockImplementation(
+      (_cmd: string, _args: string[], cb: (e: Error | null, out: string) => void) =>
+        cb(new Error('no matches'), ''),
+    );
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     spawnMock.mockReset();
+    execFileMock.mockReset();
   });
 
   it('spawns detached, with no shell, and never calls unref()', () => {
@@ -112,5 +124,47 @@ describe('spawnGroup / terminate (T081)', () => {
       throw new Error('boom');
     });
     expect(() => group.killGroup('SIGTERM')).toThrow('boom');
+  });
+
+  it('SIGKILLs setsid-escaped descendants by pid after the grace window (incident 2026-07-19)', async () => {
+    const child = fakeChild(4242);
+    spawnMock.mockReturnValue(child);
+    // Leader 4242 has one escaped grandchild (9001) that ignored the group
+    // SIGTERM; 9001 itself has no children.
+    execFileMock.mockImplementation(
+      (_cmd: string, args: string[], cb: (e: Error | null, out: string) => void) => {
+        if (args[1] === '4242') cb(null, '9001\n');
+        else cb(new Error('no matches'), '');
+      },
+    );
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    const group = spawnGroup('claude', ['-p'], { cwd: '/tmp', env: {} });
+    const done = group.terminate(5000);
+    await vi.advanceTimersByTimeAsync(5000);
+    await done;
+
+    expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGTERM');
+    expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGKILL');
+    // The escaped grandchild the negative-pid signal never reached is reaped by pid.
+    expect(killSpy).toHaveBeenCalledWith(9001, 'SIGKILL');
+  });
+
+  it('falls back to group-signal-only (no throw) when descendant lookup fails', async () => {
+    const child = fakeChild();
+    spawnMock.mockReturnValue(child);
+    execFileMock.mockImplementation(() => {
+      throw new Error('pgrep: command not found');
+    });
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    const group = spawnGroup('claude', ['-p'], { cwd: '/tmp', env: {} });
+    const done = group.terminate(5000);
+    await vi.advanceTimersByTimeAsync(5000);
+    await expect(done).resolves.toBeUndefined();
+
+    expect(killSpy).toHaveBeenNthCalledWith(1, -4242, 'SIGTERM');
+    expect(killSpy).toHaveBeenNthCalledWith(2, -4242, 'SIGKILL');
+    expect(killSpy).toHaveBeenCalledTimes(2);
   });
 });

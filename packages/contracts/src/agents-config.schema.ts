@@ -82,7 +82,12 @@ export const ClaudeCliExecutorConfigSchema = z
     worktreeRoot: z.string().min(1).optional(),
     repoCacheRoot: z.string().min(1).optional(),
     maxTurns: z.number().int().min(1).optional(),
-    killGraceMs: z.number().int().min(0).default(5000),
+    // Default raised 5000→10000 (incident 2026-07-19) for a longer graceful
+    // shutdown window. The hard runtime floor/ceiling ([1000, 60000]) is applied
+    // by normalizeKillGraceMs in resolveClaudeCliConfig — kept out of the schema
+    // so an out-of-range stored jsonb value clamps at runtime instead of
+    // failing boot validation.
+    killGraceMs: z.number().int().min(0).default(10_000),
     cancelPollMs: z.number().int().min(1).default(3000),
     // Feature 004 (D6): explicit opt-in to the MCP callback channel. When
     // true, the executor drops --json-schema and wires the run onto
@@ -133,7 +138,9 @@ export const KimiExecutorConfigSchema = z
     worktreeRoot: z.string().min(1).optional(),
     repoCacheRoot: z.string().min(1).optional(),
     maxTurns: z.number().int().min(1).optional(),
-    killGraceMs: z.number().int().min(0).default(5000),
+    // See claude_cli branch: default raised 5000→10000, runtime clamp lives in
+    // resolveClaudeCliConfig (incident 2026-07-19).
+    killGraceMs: z.number().int().min(0).default(10_000),
     cancelPollMs: z.number().int().min(1).default(3000),
     useCallbackChannel: z.boolean().default(false),
   })
