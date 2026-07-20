@@ -504,6 +504,19 @@ export class ClaudeCliExecutor implements AgentExecutor {
         signal.removeEventListener('abort', onAbort);
 
         if (abortReason) {
+          // Problem 5 (incident 2026-07-19): a timed_out run otherwise discards
+          // the last thing the CLI / MCP server wrote to stderr — the one place
+          // the cause is visible. Persist the (already ≤16 KB) tail as an
+          // `error` run_event so a timeout is diagnosable. A `cancelled` run is
+          // a deliberate operator action, not a fault, and keeps its existing
+          // silent path.
+          if (abortReason === 'timeout' && stderrTail.text.length > 0) {
+            await persistRunEvent('error', {
+              source: 'stderr-tail',
+              reason: 'timeout',
+              stderr: stderrTail.text,
+            });
+          }
           // The cancel-poll aborts a lingering process AFTER a callback
           // finalize/park flipped the run off 'running' — exactly the path
           // where a terminal event parsed before the kill carries the run's

@@ -254,3 +254,21 @@ Linked incident section: [Problem 7](incident-2026-07-19-fix-prompt.md#problem-7
 2. Each phase has passing unit tests.
 3. A single integration run demonstrates: 5-minute callback outage → `request_human`; slow Jira → `200` in <1s; `rate_limit` → `rate_limited` status; timeout → stderr persisted.
 4. The incident doc is updated with a "Resolution" section referencing this plan file and the merged PRs.
+
+---
+
+## Resolution
+
+Status as of 2026-07-20. Phases 1–3 (P0/P1) are merged; Phases 4–5 (P2) remain open.
+
+| Phase | Status | Where | Notes |
+|-------|--------|-------|-------|
+| Phase 1 (P0, problems 1–2) | ✅ merged | commit `8c12942`; progress.md Iteration 34 | Network-error backoff + `fetch` timeout + stderr diagnostics in `mcp-server/tools.ts`; fast `complete_task` (sync `finalizeWithReport`, fire-and-forget `onRunFinished`) in `callback.service.ts`; fail-fast + no-sleep-loop rule in `wrapper.ts` `callbackToolsSection()`. |
+| Phase 2 (P1, problem 3) | ✅ merged (approach diverged) | commit `035ada8`; progress.md Iteration 34 | **Real root cause differed from the plan.** Instead of the §2.1–2.3 sketch (`killGraceMs` default + `process-group.ts` descendant-kill + worker wait cap), the fix sanitizes the CLI-reported rate-limit TTL in the worker before parking the run (`apps/worker/src/claude-cli-run.processor.ts` + `rate-limit-ttl.spec.ts`). `claude-cli.executor.ts` `handleClose` was **not** reordered — its `abortReason` branch still handles `cancelled`+`timeout` together, before `rate_limited`. |
+| Phase 3 (P1, problems 4–5) | ✅ merged | this branch; progress.md Iteration 35 | Problem 4: new `## Verification and QA` section in `wrapper.ts` (`verificationSection()`), callback-channel only — restricts full dev-stack boots, prefers tests/static analysis, escalates via `request_human(blocking=true)` when a live env is missing. Problem 5: `handleClose` persists the last ≤16 KB of `stderrTail.text` as a `run_events(type='error')` row via `persistRunEvent` when `abortReason === 'timeout'`; `cancelled` stays silent. No `handleClose` reorder (out of Phase-3 scope). Unit tests in `wrapper.spec.ts` + `claude-cli.executor.spec.ts`. |
+| Phase 4 (P2, problem 6) | ⬜ open | — | Durable finalize / outbox not yet implemented. |
+| Phase 5 (P2, problem 7) | ⬜ open | — | Concurrency reduction / monitoring not yet implemented. |
+
+**Success criteria (incident doc):** #1 (fail-fast on 5-min outage), #2 (`complete_task` <1s), #3 (`rate_limit` → parked) addressed by Phases 1–2; #4 (timeout persists last 16 KB of stderr) and #5 (QA does not boot `docker compose up` inside a run) addressed by Phase 3; #6 (unit tests pass) green after each phase.
+
+**Gates for Phase 3:** `pnpm typecheck && pnpm lint && pnpm test` green (unit 400). `pnpm test:integration` needs Docker — skipped in the cloud session (precedent: iterations 29/32/33/34). No callback HTTP-contract change, no DB migration, no new external deps.

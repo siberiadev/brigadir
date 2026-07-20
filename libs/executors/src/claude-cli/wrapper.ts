@@ -61,6 +61,35 @@ function callbackToolsSection(): string[] {
   ];
 }
 
+/**
+ * QA / verification conduct (incident 2026-07-19, Problem 4). A QA agent
+ * (Cyrus Smith on ST3-872) booted a full dev stack inside its run — `docker
+ * compose`, `npm ci`, `nohup npm run start:dev`, live JSON-RPC — and burned the
+ * entire 45-minute budget into a `timed_out`. Callback-channel only: the escape
+ * hatch is `mcp__brigadir__request_human(blocking=true)`, which does not exist
+ * on the Phase-0 structured-output channel (kept byte-identical). Mirrors the
+ * `callbackToolsSection()` style.
+ */
+function verificationSection(): string[] {
+  return [
+    '## Verification and QA',
+    'When you verify or QA changes, do the cheap thing first — do NOT stand up a full ' +
+      'development stack inside this run.',
+    '- Do not boot a full dev stack (`docker compose up`, `npm ci`, a long-running ' +
+      '`npm run start:dev` / `npm run dev`, or any equivalent) if bringing it up would take more ' +
+      'than about 5 minutes. It routinely eats the whole run budget and is a leading cause of ' +
+      'runs timing out with nothing to show.',
+    '- Prefer unit tests, integration tests, and static analysis (type-check, lint, build) — they ' +
+      'give you the same confidence in seconds instead of minutes, and are what the required ' +
+      'checks actually gate on.',
+    '- If live end-to-end testing is genuinely critical, first check whether the services are ' +
+      'ALREADY running and reachable (e.g. curl / health-check the expected host:port) and use ' +
+      'them if so. If they are NOT reachable, do not try to boot them yourself — call ' +
+      "mcp__brigadir__request_human(blocking=true, title='Live test environment unavailable', " +
+      'details=...) explaining exactly what environment you need, and stop.',
+  ];
+}
+
 /** One prepared repository as listed in the wrapper (feature 019, research D9). */
 export interface WrapperRepoInfo {
   name: string;
@@ -178,6 +207,9 @@ export function buildWrapperText(ctx: RunContext, worktreeDir: string, options: 
       : []),
     '## How to report your result',
     ...(options.useCallbackChannel ? callbackToolsSection() : structuredOutputSection()),
+    // Problem 4 (incident 2026-07-19): keep QA runs from booting a full dev
+    // stack. Callback channel only — Phase 0 stays byte-identical.
+    ...(options.useCallbackChannel ? ['', ...verificationSection()] : []),
     '',
     '## Rules',
     `- Work only inside this workspace directory (${worktreeDir}).`,
