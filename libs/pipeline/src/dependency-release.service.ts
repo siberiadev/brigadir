@@ -120,10 +120,27 @@ export class DependencyReleaseService {
   private async process(ws: ReleaseScope, jira: JiraClient, candidates: CandidateRow[]): Promise<void> {
     if (candidates.length === 0) return;
 
+    const scope = await this.loadScopeFilter(ws, jira);
     const keys = [...new Set(candidates.map((c) => c.ticketKey))];
-    const jql = `project = "${ws.projectKey}" AND key in (${keys.join(', ')})`;
+    const keyList = keys.join(', ');
+    // FR-038: the re-fetch must stay inside the workspace's board/sprint + scope_jql
+    // scope, same as every other reconciliation query — a candidate is purely a
+    // local-cache hit (candidates() has no Jira awareness) and may have drifted
+    // out of scope since it was cached (sprint ended, scope_jql narrowed, ...).
+    const jql = buildScopeJql({
+      boardType: ws.boardType,
+      projectKey: ws.projectKey,
+      sprintIds: scope.sprintIds,
+      scopeJql: scope.scopeJqlSetting ? `(${scope.scopeJqlSetting}) AND key in (${keyList})` : `key in (${keyList})`,
+    });
     const issues = await jira.searchUpdated(jql, [...POLL_FIELDS]);
     const byKey = new Map(issues.map((i) => [i.key, i]));
+    if (byKey.size < keys.length) {
+      const missing = keys.filter((k) => !byKey.has(k));
+      this.logger.debug(
+        `dependency re-eval: ${missing.length} cached candidate(s) dropped by the scope-filtered re-fetch (out of scope or deleted): [${missing.join(', ')}]`,
+      );
+    }
 
     // FR-006: deterministic release order — priority (ASC id, NULLS LAST) from
     // the fresh fetch, stable jira_key tiebreak. Sequential await below makes
@@ -165,7 +182,18 @@ export class DependencyReleaseService {
       }
     }
 
-    await this.classifyWaiting(ws, jira, waiting);
+    await this.classifyWaiting(ws, jira, waiting, scope);
+  }
+
+  /** Fetch scope_jql + active sprint ids once per pass, shared by process() and classifyWaiting(). */
+  private async loadScopeFilter(
+    ws: ReleaseScope,
+    jira: JiraClient,
+  ): Promise<{ scopeJqlSetting: string | undefined; sprintIds: number[] }> {
+    const scopeJqlSetting = await getScopeJql(this.db, ws.id);
+    const sprintIds =
+      ws.boardType === 'scrum' && ws.boardId != null ? await jira.getActiveSprintIds(ws.boardId) : [];
+    return { scopeJqlSetting, sprintIds };
   }
 
   /**
@@ -187,6 +215,7 @@ export class DependencyReleaseService {
     ws: ReleaseScope,
     jira: JiraClient,
     waiting: Map<string, { ticketId: string; issue: JiraIssue; blockers: string[] }>,
+    scope: { scopeJqlSetting: string | undefined; sprintIds: number[] },
   ): Promise<void> {
     if (waiting.size === 0) return;
 
@@ -217,14 +246,13 @@ export class DependencyReleaseService {
       // The `key in` clause rides inside the scope_jql parens so the builder's
       // trailing ORDER BY stays syntactically last (the `since` clause is
       // deliberately absent — this is a membership probe).
-      const scopeJqlSetting = await getScopeJql(this.db, ws.id);
-      const sprintIds =
-        ws.boardType === 'scrum' && ws.boardId != null ? await jira.getActiveSprintIds(ws.boardId) : [];
       const probeJql = buildScopeJql({
         boardType: ws.boardType,
         projectKey: ws.projectKey,
-        sprintIds,
-        scopeJql: scopeJqlSetting ? `(${scopeJqlSetting}) AND key in (${keyList})` : `key in (${keyList})`,
+        sprintIds: scope.sprintIds,
+        scopeJql: scope.scopeJqlSetting
+          ? `(${scope.scopeJqlSetting}) AND key in (${keyList})`
+          : `key in (${keyList})`,
       });
       inScopeBlockers = new Set((await jira.searchUpdated(probeJql, ['status'])).map((b) => b.key));
     }
