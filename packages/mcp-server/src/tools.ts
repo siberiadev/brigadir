@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { writeMarker } from './marker.js';
 import { writeOutbox, removeOutbox } from './outbox.js';
+import { appendChannelBreadcrumb } from './channel-breadcrumbs.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -77,6 +78,14 @@ interface CallbackResponse {
   body: unknown;
 }
 
+/** Feature 027: сводка исчерпания retry-бюджета — сырьё для breadcrumb-записи. */
+interface RetryExhaustion {
+  kind: 'network' | 'http';
+  attempts: number;
+  error: { name: string; message: string };
+  status?: number;
+}
+
 interface RetryConfig {
   fetchImpl: typeof fetch;
   maxRetries: number;
@@ -84,6 +93,12 @@ interface RetryConfig {
   maxNetworkErrorRetries: number;
   networkRetryDelayMs: (attempt: number) => number;
   fetchTimeoutMs: number;
+  /**
+   * Feature 027: вызывается РОВНО один раз при исчерпании любого из двух
+   * бюджетов (summary-per-exhaustion). Best-effort: ошибки хука проглатываются
+   * и не влияют на результат тулзы.
+   */
+  onExhausted?: (info: RetryExhaustion) => Promise<void> | void;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -156,6 +171,14 @@ async function fetchWithRetry(
       networkErrorsSeen++;
       logDiagnostic({ method: context.method, url }, networkErrorsSeen, networkError);
       if (networkErrorsSeen > cfg.maxNetworkErrorRetries) {
+        await notifyExhausted(cfg, {
+          kind: 'network',
+          attempts: networkErrorsSeen,
+          error:
+            networkError instanceof Error
+              ? { name: networkError.name, message: networkError.message }
+              : { name: 'Error', message: String(networkError) },
+        });
         return {
           status: 0,
           body: { ok: false, error: `network error: ${String(networkError)}` },
@@ -174,6 +197,12 @@ async function fetchWithRetry(
       serverErrorsSeen++;
       logDiagnostic({ method: context.method, url }, serverErrorsSeen, new Error('server error'), res.status);
       if (serverErrorsSeen > cfg.maxRetries) {
+        await notifyExhausted(cfg, {
+          kind: 'http',
+          attempts: serverErrorsSeen,
+          error: { name: 'HTTPError', message: `HTTP ${res.status}` },
+          status: res.status,
+        });
         return { status: res.status, body: await safeJson(res) };
       }
       await sleep(cfg.retryDelayMs(serverErrorsSeen));
@@ -229,6 +258,15 @@ async function getWithRetry(
   );
 }
 
+/** Best-effort вызов onExhausted — диагностика не должна ломать доставку. */
+async function notifyExhausted(cfg: RetryConfig, info: RetryExhaustion): Promise<void> {
+  try {
+    await cfg.onExhausted?.(info);
+  } catch {
+    // swallow — breadcrumbs никогда не влияют на результат тулзы
+  }
+}
+
 function toResult(response: CallbackResponse): ToolCallResult {
   const isError = response.status < 200 || response.status >= 300;
   return {
@@ -256,13 +294,36 @@ export function createToolHandlers(config: ToolHandlersConfig): {
   const gitHeadResolver = config.gitHeadResolver ?? defaultGitHeadResolver;
   const base = config.callbackUrl.replace(/\/+$/, '');
 
+  // Feature 027: цель breadcrumb-записи — ТОЛЬКО host:port (Constitution V).
+  const breadcrumbTarget = ((): string => {
+    try {
+      return new URL(config.callbackUrl).host;
+    } catch {
+      return 'unknown';
+    }
+  })();
+  /** Per-tool RetryConfig с breadcrumb-хуком на исчерпание бюджета. */
+  const cfgFor = (tool: string): RetryConfig => ({
+    ...cfg,
+    onExhausted: (info) =>
+      appendChannelBreadcrumb(config.markerPath, config.runId, {
+        ts: new Date().toISOString(),
+        tool,
+        kind: info.kind,
+        attempts: info.attempts,
+        error: info.error,
+        ...(info.status !== undefined ? { status: info.status } : {}),
+        target: breadcrumbTarget,
+      }),
+  });
+
   return {
     async report_progress(args: unknown): Promise<ToolCallResult> {
       const response = await postWithRetry(
         `${base}/runs/${config.runId}/progress`,
         args,
         config.runToken,
-        cfg,
+        cfgFor('report_progress'),
       );
       return toResult(response);
     },
@@ -272,7 +333,7 @@ export function createToolHandlers(config: ToolHandlersConfig): {
         `${base}/runs/${config.runId}/human`,
         args,
         config.runToken,
-        cfg,
+        cfgFor('request_human'),
       );
       if (response.status >= 200 && response.status < 300) {
         const body = response.body as { blocking?: boolean } | undefined;
@@ -296,7 +357,7 @@ export function createToolHandlers(config: ToolHandlersConfig): {
         `${base}/runs/${config.runId}/complete`,
         args,
         config.runToken,
-        cfg,
+        cfgFor('complete_task'),
         observedHeads !== undefined ? { [OBSERVED_HEADS_HEADER]: observedHeads } : {},
       );
       if (response.status >= 200 && response.status < 300) {
@@ -315,7 +376,7 @@ export function createToolHandlers(config: ToolHandlersConfig): {
       const response = await getWithRetry(
         `${base}/runs/${config.runId}/jira/overview`,
         config.runToken,
-        cfg,
+        cfgFor('get_project_overview'),
       );
       return toResult(response);
     },
@@ -325,7 +386,7 @@ export function createToolHandlers(config: ToolHandlersConfig): {
         `${base}/runs/${config.runId}/jira/search`,
         args ?? {},
         config.runToken,
-        cfg,
+        cfgFor('search_tickets'),
       );
       return toResult(response);
     },
@@ -341,7 +402,7 @@ export function createToolHandlers(config: ToolHandlersConfig): {
       const response = await getWithRetry(
         `${base}/runs/${config.runId}/jira/tickets/${encodeURIComponent(key)}`,
         config.runToken,
-        cfg,
+        cfgFor('get_ticket'),
       );
       return toResult(response);
     },

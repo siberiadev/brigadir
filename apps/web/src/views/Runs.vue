@@ -2,6 +2,7 @@
 import { computed, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { MailWarning } from 'lucide-vue-next';
 import type { RunCostPeriod, RunListItem, RunStatus } from '@brigadir/contracts';
 import { MAX_PAGE_SIZE } from '@brigadir/contracts/pagination';
 import { useRuns, useRunsCost, useCancelAllRuns } from '../composables/useRuns';
@@ -183,6 +184,15 @@ async function stopAllRuns() {
       <el-table-column label="Status">
         <template #default="{ row }">
           <RunStatusTag :status="row.status" size="small" />
+          <!-- Feature 027 (FR-015): у прогона есть недоставленные/сорвавшиеся
+               callbacks — статичная danger-иконка, детали в таймлайне прогона. -->
+          <el-tooltip
+            v-if="row.callback_alert"
+            content="Были недоставленные callbacks — детали в таймлайне прогона"
+            placement="top"
+          >
+            <MailWarning class="callback-alert" :size="14" :data-test="`callback-alert-${row.run_id}`" />
+          </el-tooltip>
         </template>
       </el-table-column>
       <el-table-column prop="attempt" label="Attempt" width="90" />
@@ -210,6 +220,13 @@ async function stopAllRuns() {
 
 <style scoped lang="scss">
 @use '@/styles/variables' as *;
+
+// Feature 027 (FR-015): маркер недоставленных callbacks в ячейке статуса.
+.callback-alert {
+  color: var(--el-color-danger);
+  vertical-align: middle;
+  margin-left: $space-xs;
+}
 
 .header-row {
   display: flex;

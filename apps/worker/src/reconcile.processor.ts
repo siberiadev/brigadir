@@ -9,7 +9,9 @@ import { ReconcileService } from '@brigadir/ingest';
  * `ReconcileService.run()` — one pass of the four ordered steps (poll & diff,
  * dependency re-eval, watchdog, drift repair). The iteration-1 no-op is gone.
  */
-@Processor(RECONCILE_QUEUE)
+// Feature 027: autorun:false — цикл стартует после взятия worker-lock'а
+// (WorkerLockBootstrap); реконсайлер тоже не должен работать в два процесса.
+@Processor(RECONCILE_QUEUE, { autorun: false })
 export class ReconcileProcessor extends WorkerHost {
   private readonly logger = new Logger(ReconcileProcessor.name);
 

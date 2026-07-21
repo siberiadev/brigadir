@@ -86,6 +86,13 @@ export class RunsController {
         finishedAt: schema.runs.finishedAt,
         costUsd: schema.runs.costUsd,
         createdAt: schema.runs.createdAt,
+        // Feature 027 (FR-015): маркер недоставленных/сорвавшихся callbacks —
+        // проекция существующих run_events (механизм 026), не новое хранилище.
+        callbackAlert: sql<boolean>`EXISTS (
+          SELECT 1 FROM ${schema.runEvents}
+          WHERE ${schema.runEvents.runId} = ${schema.runs.id}
+            AND ${schema.runEvents.type} IN ('undelivered_report', 'channel_failure')
+        )`,
       })
       .from(schema.runs)
       // Left join (feature 011): ticketless workspace-setup runs stay listed.
@@ -111,6 +118,7 @@ export class RunsController {
         started_at: r.startedAt ? r.startedAt.toISOString() : null,
         cost_usd: r.costUsd ?? null,
         created_at: r.createdAt.toISOString(),
+        callback_alert: r.callbackAlert,
       })),
       page,
       page_size: pageSize,

@@ -62,7 +62,11 @@ export class CallbackService {
     await this.db.insert(schema.runEvents).values({
       runId,
       type: 'progress',
-      payload: { stage: input.stage, message: scrubbedMessage, percent: input.percent },
+      // `via: 'callback'` (feature 027, additive): отличает progress, реально
+      // ПОЛУЧЕННЫЙ backend'ом по HTTP, от executor-наблюдений того же вызова
+      // из stream-parser'а (тот пишет 'progress' независимо от доставки).
+      // Источник `last_successful_callback_at` в /api/channel-health.
+      payload: { stage: input.stage, message: scrubbedMessage, percent: input.percent, via: 'callback' },
     });
 
     await this.updateJobProgressBestEffort(runId, { stage: input.stage, percent: input.percent });

@@ -9,6 +9,7 @@ logs/
 .env
 .env.*
 !.env.example
+.agents-mode/
 .DS_Store
 Thumbs.db
 .vscode/

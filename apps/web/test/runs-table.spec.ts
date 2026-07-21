@@ -215,4 +215,25 @@ describe('Runs — table + filters + cost', () => {
     const router = wrapper.vm.$router;
     expect(router.currentRoute.value.fullPath).toBe(`/runs/${sampleRunListItem.run_id}`);
   });
+
+  // Feature 027 (FR-015): маркер недоставленных callbacks в ячейке статуса.
+  it('shows the callback_alert marker only on flagged runs', async () => {
+    server.use(
+      http.get('/api/workspaces/:id/runs', () =>
+        HttpResponse.json({
+          ...sampleRunList,
+          items: [
+            { ...sampleRunListItem, run_id: 'run-alerted', callback_alert: true },
+            { ...sampleRunListItem, run_id: 'run-clean' },
+          ],
+          total: 2,
+        }),
+      ),
+    );
+    const wrapper = mountRuns();
+    await flush();
+
+    expect(wrapper.find('[data-test="callback-alert-run-alerted"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="callback-alert-run-clean"]').exists()).toBe(false);
+  });
 });

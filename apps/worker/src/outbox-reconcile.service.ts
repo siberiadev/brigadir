@@ -10,9 +10,14 @@ import {
   listOutboxEntries,
   readOutboxReport,
   consumeOutbox,
+  listChannelBreadcrumbFiles,
+  listOrphanedClaims,
+  consumeClaimedBreadcrumbs,
+  type ChannelBreadcrumbFile,
   type OutboxEntry,
 } from '@brigadir/executors';
 import { attachUndeliveredReport } from './undelivered-report';
+import { ingestChannelBreadcrumbs } from './channel-breadcrumb-ingest';
 
 /** Default retention for unresolvable outbox files (feature 026, Clarification Q4). */
 const DEFAULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -44,12 +49,10 @@ export class OutboxReconcileService {
 
   async run(): Promise<void> {
     const configRoot = resolveMcpConfigRoot();
-    const entries = await listOutboxEntries(configRoot);
-    if (entries.length === 0) return;
-
     const retentionMs = Number(process.env.BRIGADIR_OUTBOX_RETENTION_MS) || DEFAULT_RETENTION_MS;
     const nowMs = Date.now();
 
+    const entries = await listOutboxEntries(configRoot);
     for (const entry of entries) {
       try {
         await this.reconcileEntry(configRoot, entry, nowMs, retentionMs);
@@ -58,6 +61,91 @@ export class OutboxReconcileService {
         this.logger.error(`outbox reconcile failed for ${entry.filePath}: ${String(err)}`);
       }
     }
+
+    // Feature 027 (US3): второй скан — channel-failure breadcrumbs. Ловит
+    // файлы, которые exit-path не перелил (смерть worker'а, пропущенная
+    // ветка). Только терминальные прогоны: у активных агент ещё может
+    // дописывать. Идемпотентность с exit-path — rename-claim внутри ingest.
+    await this.sweepChannelBreadcrumbs(configRoot, nowMs, retentionMs);
+  }
+
+  private async sweepChannelBreadcrumbs(
+    configRoot: string,
+    nowMs: number,
+    retentionMs: number,
+  ): Promise<void> {
+    const files = await listChannelBreadcrumbFiles(configRoot);
+    for (const file of files) {
+      try {
+        await this.sweepBreadcrumbFile(file, nowMs, retentionMs);
+      } catch (err) {
+        this.logger.error(`channel breadcrumb sweep failed for ${file.filePath}: ${String(err)}`);
+      }
+    }
+    // Осиротевшие claim'ы (`.jsonl.ingesting` от умершего между claim и rm
+    // worker'а): только retention — повторный ingest мог бы задвоить строки,
+    // чьи insert'ы частично легли (contracts/channel-breadcrumbs.md).
+    for (const claim of await listOrphanedClaims(configRoot)) {
+      if (nowMs - claim.mtimeMs <= retentionMs) continue;
+      this.logger.warn(
+        `channel breadcrumbs: retention — deleting orphaned claim ${claim.filePath}`,
+      );
+      await consumeClaimedBreadcrumbs(claim.filePath);
+    }
+  }
+
+  private async sweepBreadcrumbFile(
+    file: ChannelBreadcrumbFile,
+    nowMs: number,
+    retentionMs: number,
+  ): Promise<void> {
+    const key = `channel:${file.runId}`;
+    if (!UUID_RE.test(file.runId)) {
+      this.warnOnceKey(key, `channel breadcrumb filename is not a run id (${file.filePath})`);
+      await this.applyBreadcrumbRetention(file, nowMs, retentionMs, key);
+      return;
+    }
+
+    const [run] = await this.db
+      .select({ status: schema.runs.status })
+      .from(schema.runs)
+      .where(eq(schema.runs.id, file.runId))
+      .limit(1);
+
+    if (!run) {
+      // Неатрибутируемое свидетельство: держим окно retention, потом удаляем
+      // с лог-строкой (та же поза, что у нечитабельного outbox'а).
+      this.warnOnceKey(key, `channel breadcrumbs for unknown run ${file.runId} (${file.filePath})`);
+      await this.applyBreadcrumbRetention(file, nowMs, retentionMs, key);
+      return;
+    }
+
+    if (run.status === 'queued' || run.status === 'running' || run.status === 'awaiting_human') {
+      // Активный прогон — файл может ещё пополняться; не трогаем.
+      return;
+    }
+
+    await ingestChannelBreadcrumbs(this.db, file.runId, 'reconcile');
+  }
+
+  private warnOnceKey(key: string, message: string): void {
+    if (this.warnedInvalid.has(key)) return;
+    this.warnedInvalid.add(key);
+    this.logger.warn(`${message} — keeping for inspection`);
+  }
+
+  private async applyBreadcrumbRetention(
+    file: ChannelBreadcrumbFile,
+    nowMs: number,
+    retentionMs: number,
+    key: string,
+  ): Promise<void> {
+    if (nowMs - file.mtimeMs <= retentionMs) return;
+    this.logger.warn(
+      `channel breadcrumbs: retention — deleting unresolvable file ${file.filePath}`,
+    );
+    await consumeClaimedBreadcrumbs(file.filePath);
+    this.warnedInvalid.delete(key);
   }
 
   private async reconcileEntry(

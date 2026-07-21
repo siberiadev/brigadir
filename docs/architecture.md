@@ -458,6 +458,51 @@ Phase-0 не затронут):
   `resolveMcpConfigRoot()` (env `BRIGADIR_MCP_CONFIG_ROOT`), один источник
   правды для писателя (executor), tool-сервера и всех читателей.
 
+Feature 027 (callback-channel resilience ops) добавляет поверх 026:
+
+- **Эксклюзивный worker-lock** (`apps/worker/src/worker-lock.service.ts` +
+  bootstrap): все консьюмеры очередей (`run.*` + оба реконсайлера) объявлены с
+  `autorun: false` и стартуют главный цикл ТОЛЬКО после взятия Redis-лока
+  `<BULLMQ_PREFIX>:worker-lock` (SET NX PX, TTL `BRIGADIR_WORKER_LOCK_TTL_MS`
+  дефолт 15 c, продление TTL/3 через compare-and-extend Lua). Второй worker на
+  том же неймспейсе не потребляет НИЧЕГО и каждые ~2 c пишет ERROR c identity
+  держателя + ставит contender-ключ, который держатель тоже логирует ERROR'ом
+  (громко с обеих сторон). Shutdown: свой drain (`worker.close()`), ПОТОМ
+  release — переключение режимов всегда drain-based; смерть держателя без
+  release ⇒ takeover ≤ TTL. Лок — transient-координация (Принцип I), три слоя
+  идемпотентности не заменяет.
+- **Стабильный режим для агент-прогонов** (`scripts/agents-mode.mjs`,
+  `pnpm agents:start|stop|status`, docs/local-setup.md §2a): вторая native
+  non-watch пара backend+worker из собранных бандлов на `BRIGADIR_AGENTS_PORT`
+  (дефолт 3210); worker пары получает
+  `BRIGADIR_CALLBACK_BASE_URL=http://127.0.0.1:<port>/api/callbacks`.
+  Callback-цель агентов отвязана от dev-стека человека на :3000 (SPOF
+  пост-мортема 2026-07-19/20). Guard/probe/outbox работают идентично: те же
+  dist-пути (cwd = корень репо) и тот же общий `resolveMcpConfigRoot()`.
+- **Channel-failure breadcrumbs** (`packages/mcp-server/src/channel-breadcrumbs.ts`
+  → `<configRoot>/.brigadir-channel/<runId>.jsonl`): при исчерпании retry-бюджета
+  любой callback-тулзы (network-бюджет ИЛИ 5xx-бюджет) tool-сервер append'ит одну
+  summary-строку (best-effort, кап 64 KB на прогон). Worker переливает файл в
+  `run_events` `channel_failure` на КАЖДОЙ терминальной ветке callback-wired
+  прогона и вторым сканом периодического реконсайлера (только терминальные
+  прогоны; активным агент ещё дописывает). Идемпотентность двух путей —
+  атомарный rename-claim (`.jsonl` → `.jsonl.ingesting`); ingestion никогда не
+  пишет статус/outcome (правило 7); ретеншн неатрибутируемых файлов и
+  осиротевших claim'ов — как у outbox (7 дней).
+- **`GET /api/channel-health`** (dashboard-bearer, additive; контракт
+  `ChannelHealthResponseSchema`): derived-on-demand агрегат — оконные счётчики
+  `channel_failure`/`channel_down` (окно `BRIGADIR_CHANNEL_HEALTH_WINDOW_MS`,
+  дефолт 15 мин), `last_successful_callback_at` (progress-события с
+  additive-тегом `via:'callback'` — только реально полученные backend'ом),
+  вердикт deployment guard'а (backend зовёт `checkMcpServerArtifact` сам —
+  общая ФС в native-pair режиме), `affected_runs` (distinct, cap 20).
+  degraded ⇔ probe-отказ ≥ 1 ИЛИ channel_failures ≥ порога
+  (`BRIGADIR_CHANNEL_HEALTH_FAILURE_THRESHOLD`, дефолт 3) ИЛИ guard не ok.
+  Observability-only: admission-контроль остаётся у pre-flight probe. UI:
+  индикатор в сайдбаре (5-секундный поллинг) + маркер `callback_alert` в
+  списке прогонов (EXISTS по `undelivered_report`/`channel_failure` — проекция
+  механизма 026, не второй механизм).
+
 ---
 
 ## 5. Протокол callback'ов (MCP + HTTP)
@@ -526,8 +571,12 @@ HTTP-стек бэкенда поднят и роутит (класс авари
 (`{report, run_status: cancelled|superseded, source: exit_reconcile|periodic_reconcile}`
 — спасённый вердикт на прогоне, чей статус менять нельзя; отчёт валиден по
 `ReportSchema` и проскраблен) и `channel_down`
-(`{probe_url, consecutive, retry_in_ms}` — неудачная проба, секретов нет). Дашборд
-рендерит оба (`RunTimeline`), неизвестные типы деградируют в generic-карточку.
+(`{probe_url, consecutive, retry_in_ms}` — неудачная проба, секретов нет). Feature 027
+добавляет третий тип `channel_failure` (`{ts, tool, kind: network|http, attempts,
+error:{name,message}, status?, target, occurred_at, source: exit|reconcile}` —
+переливка client-side breadcrumb'а «доставка callback'а исчерпала ретраи»;
+`target` — только host:port, `error.message` скрабится при ingestion'е). Дашборд
+рендерит все три (`RunTimeline`), неизвестные типы деградируют в generic-карточку.
 
 Аутентификация: **short-lived JWT per run** `{ sub: runId, wsp: workspaceId, tkt?: ticketKey (нет у бестикетных setup-прогонов, feature 011), exp = started_at + timeout + grace }` (единый набор claims фиксируется в `packages/contracts`), подписан ключом backend'а. Инжектируется в env MCP-процесса / в конфиг executor'а; **модель токен не видит** (он живёт в процессе тулзы), для Routines — видит (ограничение канала), поэтому токен максимально узкий: один run, короткий TTL, только callback-скоупы. Guard: подпись + `runId` из пути == `sub` + run в статусе `running/awaiting_human`.
 

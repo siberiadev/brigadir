@@ -184,7 +184,8 @@ describe('AppSidebar — platform Settings gear (2026-07-13)', () => {
       .findAll('[data-test]')
       .map((n) => n.attributes('data-test'))
       .filter((t) => t !== 'animated-icon');
-    expect(order).toEqual(['nav-settings', 'sidebar-sign-out']);
+    // Feature 027: индикатор здоровья канала закреплён над Settings/Sign out.
+    expect(order).toEqual(['channel-health-indicator', 'nav-settings', 'sidebar-sign-out']);
     expect(wrapper.find('[data-test="nav-settings"] .animated-icon--spin').exists()).toBe(true);
 
     const tip = tooltips(wrapper).find((t) => t.content === 'Settings');

@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue';
 import { RouterView } from 'vue-router';
 import { useAuthStore } from './stores/auth';
+import { useChannelHealth } from './composables/useChannelHealth';
 import { useHumanTaskCount } from './composables/useHumanTasks';
 import { useTheme } from './composables/useTheme';
 import AppSidebar from './components/AppSidebar.vue';
@@ -29,6 +30,11 @@ const authed = computed(() => !!auth.token);
 const countQuery = useHumanTaskCount(authed);
 const openCount = computed(() => countQuery.data.value?.open ?? 0);
 
+// Feature 027 (US4): channel-health агрегат для индикатора в сайдбаре — тот же
+// паттерн, что openCount: query здесь, сайдбар остаётся презентационным.
+const channelHealthQuery = useChannelHealth(authed);
+const channelHealth = computed(() => channelHealthQuery.data.value ?? null);
+
 // The 006 one-shot `/` → `/human-queue` landing redirect is gone (feature 017):
 // `/` now lands on /home, whose hero widget IS the "does the system need me"
 // answer — bouncing past it would defeat the landing page.
@@ -51,7 +57,7 @@ const openCount = computed(() => countQuery.data.value?.open ?? 0);
   </div>
 
   <div v-else class="app-shell">
-    <AppSidebar :open-count="openCount" @sign-out="auth.clear()" />
+    <AppSidebar :open-count="openCount" :channel-health="channelHealth" @sign-out="auth.clear()" />
     <main class="app-main">
       <RouterView />
     </main>

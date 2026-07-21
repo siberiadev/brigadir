@@ -17,6 +17,8 @@ import { ArtifactGuardBootstrap } from './artifact-guard.bootstrap';
 import { OutboxReconcileService } from './outbox-reconcile.service';
 import { OutboxReconcileProcessor } from './outbox-reconcile.processor';
 import { OutboxReconcileScheduler } from './outbox-reconcile.scheduler';
+import { WorkerLockService } from './worker-lock.service';
+import { WorkerLockBootstrap } from './worker-lock.bootstrap';
 
 /**
  * Worker composition. JiraModule.forRootAsync() is @Global and LAZY — it exposes
@@ -61,6 +63,9 @@ import { OutboxReconcileScheduler } from './outbox-reconcile.scheduler';
     OutboxReconcileService,
     OutboxReconcileProcessor,
     OutboxReconcileScheduler,
+    // Feature 027 (US2): эксклюзивный worker-lock — гейт всего потребления.
+    WorkerLockService,
+    WorkerLockBootstrap,
   ],
 })
 export class WorkerAppModule {}
