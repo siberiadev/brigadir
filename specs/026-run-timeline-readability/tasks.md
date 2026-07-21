@@ -38,8 +38,8 @@ Monorepo: `libs/executors/`, `packages/contracts/`, `apps/web/`, `test/integrati
 
 **⚠️ CRITICAL**: No user-story rendering work should begin until this phase is complete. This phase is itself a verifiable increment (quickstart §1–§3 pass with no frontend change).
 
-- [ ] T002 [P] Create `libs/executors/src/claude-cli/tool-input-sanitizer.ts` — pure `sanitizeToolInput(name, rawInput, scrub)` returning `{ input, truncated }` per `contracts/tool-call-payload.md`: `HUMAN_TEXT_FIELDS={message,title,details,summary}` never truncated (scrubbed); `FILE_CONTENT_FIELDS={content,new_string,old_string}` → `"<file content, N KB>"` placeholder; other strings scrubbed then capped at `MAX_FIELD_CHARS=2000` with `truncated=true` on cut; non-string + nested values pass through; total/never-throws.
-- [ ] T003 [P] Create `libs/executors/src/claude-cli/tool-input-sanitizer.spec.ts` — unit tests: human-text kept in full, file placeholder (size), generic cap + `truncated` flag, placeholder does NOT set `truncated`, non-string/nested passthrough, `scrub` invoked once per retained string (spy) and NOT for placeholdered content, empty `{}` and non-object input, never throws.
+- [ ] T002 [P] Create `libs/executors/src/claude-cli/tool-input-sanitizer.ts` — pure `sanitizeToolInput(name, rawInput, scrub)` returning `{ input, truncated }` per `contracts/tool-call-payload.md`: `HUMAN_TEXT_FIELDS={message,title,details,summary}` never truncated (scrubbed); `FILE_CONTENT_FIELDS={content,new_string,old_string}` → `"<file content, N KB>"` placeholder; other strings scrubbed then capped at `MAX_FIELD_CHARS=2000` with `truncated=true` on cut. **Recurse into nested objects/arrays**, applying the same by-key policy so every nested string is scrubbed (Constitution V — closes finding C1); non-string leaf values pass through; depth/cycle-guarded; total/never-throws.
+- [ ] T003 [P] Create `libs/executors/src/claude-cli/tool-input-sanitizer.spec.ts` — unit tests: human-text kept in full, file placeholder (size), generic cap + `truncated` flag, placeholder does NOT set `truncated`, non-string leaf passthrough, **nested strings scrubbed + capped (e.g. a `complete_task` report's `checks[].reason` and `artifacts.*` — the C1 regression guard)**, `scrub` invoked once per retained string (spy, incl. nested) and NOT for placeholdered content, empty `{}` / array / non-object input, cycle-safe, never throws.
 - [ ] T004 Wire the sanitizer into `libs/executors/src/claude-cli/stream-parser.ts` `mapAssistant`: emit `{ name, input: sanitized.input, truncated: sanitized.truncated }` instead of `truncate(JSON.stringify(input))`; add an injectable `scrub` to `StreamParserOptions` (default identity). (depends on T002)
 - [ ] T005 Inject the real `@brigadir/scrubber` `scrub` into the parser at its construction/parse site in `libs/executors/src/claude-cli/claude-cli.executor.ts` (Constitution V — the newly-persisted structured strings pass the scrubber). (depends on T004)
 - [ ] T006 Extend `libs/executors/src/claude-cli/stream-parser.spec.ts` for the structured `tool_call` payload: object `input`, `truncated` flag, file placeholder, human-text fidelity via the sanitizer. (depends on T004)
@@ -61,7 +61,7 @@ Monorepo: `libs/executors/`, `packages/contracts/`, `apps/web/`, `test/integrati
 
 - [ ] T010 [P] [US1] Extend `libs/executors/src/claude-cli/stream-parser.spec.ts`: assistant text persisted **untruncated** as a `progress` event; sampling cap raised (the ~101st text block dropped, ≤~100 kept). (impl: T015)
 - [ ] T011 [P] [US1] Update `packages/contracts/src/callback-tools.schema.spec.ts`: `ReportProgressSchema` accepts a 4000-char `message`, rejects 4001. (impl: T016)
-- [ ] T012 [P] [US1] Extend `test/integration/callback-progress.spec.ts`: `POST …/progress` with a ~4000-char `message` → 200 and the persisted `progress` run_event holds the message **in full** (scrubbed). (impl: T016)
+- [ ] T012 [P] [US1] Extend `test/integration/callback-progress.spec.ts`: `POST …/progress` with a ~4000-char `message` → 200 and the persisted `progress` run_event holds the message **in full** (scrubbed); and a `POST …/human` with multi-paragraph `details` persists the `human_tasks.details` in full (human-authored fidelity, FR-022). (impl: T016)
 - [ ] T013 [P] [US1] Presenter tests in `apps/web/test/run-timeline-presenter.spec.ts`: message-like bodies → `bodyFormat:'markdown'`; `command`/raw → `'mono'`; a `Write` with `content` placeholder renders as body. (impl: T017)
 - [ ] T014 [P] [US1] RunCard tests in `apps/web/test/run-card.spec.ts`: `markdown` renders via `MarkdownText`, `mono` via `<pre>`; a body over the threshold shows "show more" and toggling reveals full text; a short body shows no control. (impl: T018, T019)
 
@@ -71,7 +71,7 @@ Monorepo: `libs/executors/`, `packages/contracts/`, `apps/web/`, `test/integrati
 - [ ] T016 [P] [US1] In `packages/contracts/src/callback-tools.schema.ts` change `ReportProgressSchema.message` `.max(500)` → `.max(4000)` per `contracts/callback-cap-change.md`.
 - [ ] T017 [US1] In `apps/web/src/components/RunTimeline/presenter.ts` select `bodyFormat`: progress `message` / request `details` / complete `summary` → `'markdown'`; `command` / legacy raw / non-text raw → `'mono'`; nothing → `null`. (depends on T007)
 - [ ] T018 [US1] In `apps/web/src/components/RunTimeline/RunCard.vue` render `bodyFormat:'markdown'` via `MarkdownText.vue` and `'mono'` via the existing `<pre>` block; the file-content placeholder is a plain string and renders inline. (depends on T008, T017)
-- [ ] T019 [US1] In `apps/web/src/components/RunTimeline/RunCard.vue` add per-entry expand/collapse for long bodies (threshold ~12 lines / ~800 chars via CSS `max-height` clamp + "show more/less"), one control per entry, full text always in the DOM; static, honor `prefers-reduced-motion`. (depends on T008)
+- [ ] T019 [US1] In `apps/web/src/components/RunTimeline/RunCard.vue` add per-entry expand/collapse for long bodies (threshold ~8–12 lines / ~800 chars via CSS `max-height` clamp + "show more/less"), one control per entry, full text always in the DOM; static, honor `prefers-reduced-motion`. (depends on T008)
 
 **Checkpoint**: MVP — the timeline shows full, formatted narratives, elided file bodies, and collapsible long messages.
 
@@ -142,7 +142,7 @@ Monorepo: `libs/executors/`, `packages/contracts/`, `apps/web/`, `test/integrati
 
 - [ ] T033 [P] Add the iteration entry to `docs/progress.md` (payload-shape change, no DB migration, Constitution V scrub note, tunable constants).
 - [ ] T034 [P] Grep `packages/mcp-server` for a hard-coded 500 `message` bound in tool definitions/tests; update to 4000 if present.
-- [ ] T035 Run `pnpm typecheck && pnpm lint && pnpm test`, then `pnpm test:integration -- callback-progress`; fix any fallout. (depends on all prior)
+- [ ] T035 Run `pnpm typecheck && pnpm lint && pnpm test`, then `pnpm test:integration -- callback-progress`; fix any fallout. Confirm the negative constraints hold: no new `drizzle/` migration (FR-019), no change under the Jira write path (FR-020), and `presentEvents` still emits one item per non-deduped event (FR-018 — no event type filtered out). (depends on all prior)
 - [ ] T036 Execute `specs/026-run-timeline-readability/quickstart.md` (unit/integration + optional visual smoke); confirm SC-001…SC-007 observable. (depends on T035)
 
 ---

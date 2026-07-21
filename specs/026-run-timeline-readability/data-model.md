@@ -19,7 +19,7 @@ No relational schema change. `run_events` is unchanged (`id`, `run_id`, `type`, 
 }
 ```
 
-Field sanitization applied to **top-level string values** of `input` (see research R3):
+Field sanitization applied to **every string value by key, at any depth** (see research R3):
 
 | Class | Keys | Stored value |
 |-------|------|--------------|
@@ -27,7 +27,7 @@ Field sanitization applied to **top-level string values** of `input` (see resear
 | File content | `content`, `new_string`, `old_string` | `"<file content, N KB>"` (N ≈ round(len/1024)) |
 | Generic | all other strings (`command`, `query`, `file_path`, …) | `scrub()`-ed, capped at `MAX_FIELD_CHARS` (2000); cut ⇒ `truncated=true` |
 
-Non-string top-level values pass through. Nested arrays/objects (e.g. `complete_task.checks`, `artifacts`) pass through unchanged (bounded, schema-validated; presenter reads shape only).
+Non-string leaf values (numbers, booleans, null) pass through. Nested arrays/objects (e.g. `complete_task.checks[].reason`, `artifacts.branch`/`pr_url`/`commits[]`) are **recursed into** with the same by-key policy, so every nested agent string is `scrub()`-ed before it reaches `run_events` (Constitution V — the tool_call event is a DB sink). The presenter still reads only shape (e.g. `checks.length`), never dumps them.
 
 `truncated` semantics: `true` only for a genuine mid-value cut of a generic field. File-content placeholder does **not** set it (self-describing).
 
@@ -152,7 +152,7 @@ All static (no `AnimatedIcon`, no `.anim-trigger`), per project convention.
 
 ## 4. Collapse state (not in the view-model)
 
-Per-entry expand/collapse (FR-024) is **local state in `RunCard.vue`**, not a `TimelineItem` field: a boolean `expanded` ref + a threshold (start: clamp bodies taller than ~12 lines / longer than ~800 chars). The full body is always rendered; the toggle flips a CSS `max-height` clamp. Below-threshold bodies render with no control.
+Per-entry expand/collapse (FR-024) is **local state in `RunCard.vue`**, not a `TimelineItem` field: a boolean `expanded` ref + a threshold (start: clamp bodies taller than ~8–12 lines / longer than ~800 chars). The full body is always rendered; the toggle flips a CSS `max-height` clamp. Below-threshold bodies render with no control.
 
 ## 5. Constants
 
@@ -163,6 +163,6 @@ Per-entry expand/collapse (FR-024) is **local state in `RunCard.vue`**, not a `T
 | `FILE_CONTENT_FIELDS` | `{content,new_string,old_string}` | `tool-input-sanitizer.ts` | → size placeholder |
 | `maxProgressEvents` | 100 (was 20) | `stream-parser.ts` | sampling row cap |
 | `report_progress.message` max | 4000 (was 500) | `callback-tools.schema.ts` | contract |
-| collapse threshold | ~12 lines / ~800 chars | `RunCard.vue` | display only, tunable |
+| collapse threshold | ~8–12 lines / ~800 chars | `RunCard.vue` | display only, tunable |
 
 All tunable per spec Assumptions without behavior change.

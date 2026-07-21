@@ -94,9 +94,10 @@ An operator viewing older runs (recorded before this feature) or events whose pa
 **Data fidelity (recording side)**
 
 - **FR-001**: The system MUST persist a tool call's input as a structured object, never as a single stringified blob, so the timeline can always decompose it into fields.
-- **FR-002**: When persisting a tool call's input, the system MUST truncate individual string fields independently (not across the serialized whole) and MUST set a `truncated` flag on the persisted input when any field was cut.
-- **FR-003**: The system MUST never truncate human-authored texts: progress messages (whether derived from assistant text or from a progress report), human-request title and details, and completion summary MUST be stored in full.
-- **FR-004**: The system MUST raise the progress-report message length limit in the callback contract from 500 to 4000 characters so agents can report fuller messages.
+- **FR-002**: When persisting a tool call's input, the system MUST truncate individual string fields independently (not across the serialized whole) and MUST set a `truncated` flag on the persisted input when any *capped* string field was shortened. (A file-content field replaced by its self-describing size placeholder — FR-005 — does not by itself set the flag.)
+- **FR-003**: The system MUST never truncate human-authored texts: progress messages (whether derived from assistant text or from a progress report), human-request title and details, and completion summary MUST be stored in full. The one bound is the callback contract's acceptance limit (FR-004): a `report_progress` message longer than the cap is rejected at intake, never silently truncated — reject, not truncate.
+- **FR-004**: The system MUST raise the progress-report message length limit in the callback contract from 500 to 4000 characters so agents can report fuller messages. This 4000-character limit is the acceptance ceiling for the callback path (over-limit → rejected); assistant-text progress captured by the executor's parser carries no such ceiling.
+- **FR-004a**: Every agent-authored string persisted into the timeline MUST pass the secret scrubber before being written (Constitution V), including strings nested inside a structured tool input (e.g. a completion report's per-check reasons and artifact fields), not only top-level fields.
 - **FR-005**: The system MUST replace file-content fields in write/edit-style tool inputs with a short placeholder indicating the content's size (e.g. "<file content, 34 KB>") rather than storing the file body.
 - **FR-006**: The system MUST cap other (non-human-authored, non-file) string fields at approximately 2000 characters per field, setting the truncated flag when a cap is applied.
 - **FR-007**: The system MUST raise the per-run progress-sampling cap from 20 to approximately 100 kept progress events, retaining sampling as flood protection.
@@ -124,7 +125,7 @@ An operator viewing older runs (recorded before this feature) or events whose pa
 **Testing (delivered in the same iteration)**
 
 - **FR-021**: The recording-side changes MUST ship with stream-parser unit tests covering structured input persistence, per-field truncation and the truncated flag, file-content placeholder substitution, non-truncation of human-authored text, and the raised sampling cap.
-- **FR-022**: The callback changes MUST ship with integration tests (against real Postgres/Redis) covering the raised message limit and full-fidelity persistence of human-authored fields.
+- **FR-022**: The callback changes MUST ship with integration tests (against real Postgres/Redis) covering the raised message limit (a ~4000-character `report_progress` message persists in full) and full-fidelity persistence of a human-authored `request_human` `details` field.
 - **FR-023**: The presentation changes MUST ship with presenter and run-card unit tests covering typed cards, orchestrator icons and titles, Markdown vs. monospace selection, the key-value fallback, and legacy-event degradation.
 
 ### Key Entities *(include if feature involves data)*
@@ -153,6 +154,7 @@ An operator viewing older runs (recorded before this feature) or events whose pa
 - "Orchestrator callback tools" are exactly the three brigadir callback tools (progress report, human request, completion); no other tool family gets special affordances in this feature.
 - The per-field string cap (~2000 chars) and the raised progress-sampling cap (~100) are tuning values chosen to bound noise while preserving readability; exact constants may be adjusted during implementation without changing behavior.
 - The collapse threshold for "very long" bodies is a tuning value (e.g. a body taller than roughly 8–12 lines or longer than ~800 characters); the exact threshold and preview height may be adjusted during implementation. The expand/collapse control is per timeline entry, defaults to collapsed for over-threshold bodies, and is absent for shorter bodies. Collapse affects display only — the full text remains in the payload and in the page.
+- Human-authored narrative bodies are deliberately not length-capped (FR-003); scannability for a very long body is provided by the per-entry collapse (FR-024/SC-007), not by a size limit. SC-004's "bounded size" applies to machine-generated fields (file contents, non-human strings), not to narrative text.
 - The file-content placeholder needs only to convey approximate size (e.g. in KB); exact byte-accurate reporting is not required.
 - No database migration is needed because the run-events payload column already stores free-form JSON; only the shape of stored values changes.
 - The existing timeline layout (time · icon · title · body block) remains the frame for all new rendering. The 2026-07-15 "everything visible, no expand/collapse" decision is refined here, not reversed: every event stays a visible entry and no text is truncated, but very long message bodies gain a per-entry expand/collapse so they don't dominate the view.

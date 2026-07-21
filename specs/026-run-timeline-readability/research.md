@@ -20,7 +20,7 @@ Phase 0 decisions. Each resolves a design unknown the spec left open, grounded i
 
 ## R3 — Per-field sanitization policy (structured input + truncated flag)
 
-**Decision**: A pure helper `sanitizeToolInput(name, rawInput, scrub)` in `libs/executors/src/claude-cli/tool-input-sanitizer.ts` returns `{ input: Record<string, unknown>, truncated: boolean }`. Policy, applied to **top-level string fields** by key:
+**Decision**: A pure helper `sanitizeToolInput(name, rawInput, scrub)` in `libs/executors/src/claude-cli/tool-input-sanitizer.ts` returns `{ input: Record<string, unknown>, truncated: boolean }`. Policy, applied to **every string field by key, at any depth**:
 
 | Field class | Keys | Treatment |
 |-------------|------|-----------|
@@ -28,13 +28,13 @@ Phase 0 decisions. Each resolves a design unknown the spec left open, grounded i
 | File content | `content`, `new_string`, `old_string` | Replaced with `"<file content, N KB>"` placeholder (N ≈ `round(len/1024)`); no `scrub` (content is discarded) |
 | Other strings | everything else (incl. `command`, `query`, `file_path`) | `scrub()` then cap at `MAX_FIELD_CHARS` (2000); if the pre-cap length exceeded the cap, set `truncated = true` |
 
-Non-string top-level values (numbers, booleans) pass through. Nested arrays/objects (e.g. `complete_task`'s `checks`, `artifacts`) pass through unchanged — they originate from schema-validated, inherently bounded structured reports; the presenter reads only their shape (e.g. `checks.length`), never dumps them.
+Non-string leaf values (numbers, booleans, null) pass through. **Nested arrays/objects are recursed into** (e.g. `complete_task`'s `checks[].reason`, `artifacts.branch`/`pr_url`/`commits[]`), applying the same by-key policy so every retained nested string is scrubbed. This closes the Constitution V gap: the tool_call event is a real DB sink, and a `complete_task` input carries the full report — its nested agent free-text must not reach `run_events` unscrubbed. The presenter still reads only shape from these arrays (e.g. `checks.length`), never dumps them. The walk is depth/cycle-guarded; nested payloads are schema-bounded in practice.
 
 `truncated` is set **only** for a genuine mid-value cut of a generic field. A file-content placeholder does **not** set it: the placeholder is self-describing (states its size), so no "input truncated" note is warranted.
 
 **Rationale**: Field-name policy is the pragmatic way to protect human text and bound machine noise without the parser having to know each tool's full schema. The four human-text keys are exactly the brigadir callbacks' human fields; the three file-content keys cover Write (`content`) and Edit (`old_string`/`new_string`).
 
-**Alternatives considered**: (a) Recurse into nested values applying the same policy — rejected as unnecessary complexity for bounded, schema-validated nested data; documented as a limitation instead. (b) Tool-schema-aware sanitizer (import each tool's zod schema) — rejected: couples the executor to every tool definition and to future tools; the field-name heuristic is good enough for an internal tool and fails safe (unknown fields get the generic 2000 cap). (c) Keep stringifying but cap higher — rejected: still yields unparseable mid-JSON cuts (the core defect) and cannot decompose for typed cards.
+**Alternatives considered**: (a) Sanitize only top-level strings and let nested arrays/objects pass through unchanged — REJECTED after cross-artifact analysis (finding C1): nested `complete_task` report strings would reach `run_events` unscrubbed, conflicting with Constitution V; recursion by-key is cheap and closes the gap. (b) Tool-schema-aware sanitizer (import each tool's zod schema) — rejected: couples the executor to every tool definition and to future tools; the field-name heuristic is good enough for an internal tool and fails safe (unknown fields get the generic 2000 cap). (c) Keep stringifying but cap higher — rejected: still yields unparseable mid-JSON cuts (the core defect) and cannot decompose for typed cards.
 
 **Constants** (tunable, per spec Assumptions): `MAX_FIELD_CHARS = 2000`, `FILE_CONTENT_FIELDS = {content, new_string, old_string}`, `HUMAN_TEXT_FIELDS = {message, title, details, summary}`.
 
@@ -52,11 +52,13 @@ Non-string top-level values (numbers, booleans) pass through. Nested arrays/obje
 
 **Rationale**: FR-004. 4000 matches the established human-text bound already used for `details`.
 
+**Asymmetry (finding I1, intentional)**: the two progress sources have different ceilings — the callback path rejects a `report_progress` message over 4000 chars (contract validation, 422), while assistant-text progress captured by the parser (R4) is unbounded. Both honor FR-003 (never *truncate*): the callback path *rejects* rather than silently cutting, so no partial message is ever stored. The asymmetry is a consequence of one path being a validated contract and the other a passive capture; it is acceptable and now documented in FR-003/FR-004.
+
 **Note**: The schema also feeds the MCP tool definition (`packages/mcp-server`); raising the zod max propagates to the tool's advertised input bound automatically. No mcp-server code change required, but its tests (if any assert 500) are checked in tasks.
 
 ## R6 — Scrubbing the newly-persisted text (Constitution V)
 
-**Decision**: Inject the real `@brigadir/scrubber` `scrub` into `sanitizeToolInput` at the executor boundary (`claude-cli.executor.ts`), applied to every retained string field (human-text and generic). The sanitizer stays pure/testable by taking `scrub` as a parameter (tests pass an identity or a spy).
+**Decision**: Inject the real `@brigadir/scrubber` `scrub` into `sanitizeToolInput` at the executor boundary (`claude-cli.executor.ts`), applied to every retained string field (human-text and generic) **at any depth** — the sanitizer recurses into nested objects/arrays so a `complete_task` report's nested strings (`checks[].reason`, `artifacts.*`) are scrubbed too, not just top-level fields (see R3; closes finding C1). The sanitizer stays pure/testable by taking `scrub` as a parameter (tests pass an identity or a spy).
 
 **Rationale**: We now persist materially more agent-authored text into `run_events`. Constitution V requires outgoing text hit the scrubber before DB write; the callback path already scrubs `message`/`title`/`details`/`summary`, so the parser path should match rather than become a new unscrubbed sink. Cost is negligible (the sanitizer already visits each string).
 

@@ -13,14 +13,16 @@ type ToolCallPayload = {
 };
 ```
 
-### Sanitization invariants (applied to top-level string fields of `input`)
+### Sanitization invariants (applied to string fields of `input`, at any depth)
+
+Field-class is decided by the string's own key, whether the key sits at the top level or inside a nested object/array (e.g. `complete_task`'s report carries `checks[].reason`, `artifacts.branch`, `artifacts.repos[].commits[]`).
 
 1. **Human-text fields** (`message`, `title`, `details`, `summary`) MUST be stored in full — never truncated. Each is passed through `scrub()`.
 2. **File-content fields** (`content`, `new_string`, `old_string`) MUST be replaced by `"<file content, N KB>"` where `N = round(byteish_length / 1024)`. The original content is NOT stored.
 3. **All other string fields** MUST be `scrub()`-ed and then capped at `MAX_FIELD_CHARS` (2000). If the value exceeded the cap, `truncated` MUST be `true`.
-4. Non-string top-level values pass through unchanged. Nested arrays/objects pass through unchanged.
+4. **Every retained string is scrubbed** (Constitution V) — including strings nested inside objects/arrays. The sanitizer recurses through nested objects and arrays applying invariants 1–3 by key; non-string leaf values (numbers, booleans, null) pass through unchanged. Recursion depth/size is bounded by the schema-validated report; the walk is defensive against cycles.
 5. `truncated` is `true` ONLY for invariant-3 cuts. Invariant-2 placeholders MUST NOT set `truncated`.
-6. The function is pure and total: any input object (including empty `{}`) yields a valid `ToolCallPayload`; it never throws.
+6. The function is pure and total: any input value (including `{}`, arrays, non-objects → `{}`) yields a valid `ToolCallPayload`; it never throws.
 
 ### Signature
 
