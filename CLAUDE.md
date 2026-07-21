@@ -13,7 +13,7 @@
 
 ## Команды
 
-- `pnpm typecheck && pnpm lint && pnpm test` — статика + юниты
+- `pnpm typecheck && pnpm lint && pnpm test` — статика + юниты + веб (vue-tsc и компонентные тесты дашборда входят в корневые гейты; веб-скрипты сами собирают `@brigadir/contracts`, т.к. bare-импорт резолвится в gitignored `dist` пакета)
 - `pnpm test:integration` — интеграционные (vitest + testcontainers, нужен Docker; общие контейнеры на прогон — см. `test/integration/global-setup.ts`)
 - `docker compose up --build` — полный стек (postgres, redis, backend, worker)
 

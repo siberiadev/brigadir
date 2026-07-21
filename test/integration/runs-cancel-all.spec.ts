@@ -47,10 +47,20 @@ describe('runs cancel-all (bulk stop)', () => {
     await redis?.stop();
   });
 
+  // Each run gets its OWN ticket: the partial unique index `runs_one_active`
+  // allows at most one active run per (ticket, agent) pair (idempotency level
+  // 3, proven in db-constraints.spec.ts), so piling queued+running+parked runs
+  // onto the seed's single ticket violates it and aborts the insert.
+  let nextTicket = 100;
   const insertRun = async (seed: typeof p, status: string) => {
+    const n = nextTicket++;
+    const [t] = await db.db
+      .insert(schema.tickets)
+      .values({ workspaceId: seed.workspaceId, jiraKey: `CAN-${n}`, jiraId: String(20000 + n), summary: 'cancel-all fixture' })
+      .returning({ id: schema.tickets.id });
     const [r] = await db.db
       .insert(schema.runs)
-      .values({ workspaceId: seed.workspaceId, ticketId: seed.ticketId, agentId: seed.agentId, executorType: 'mock', status, attempt: 1 })
+      .values({ workspaceId: seed.workspaceId, ticketId: t.id, agentId: seed.agentId, executorType: 'mock', status, attempt: 1 })
       .returning({ id: schema.runs.id });
     return r.id;
   };

@@ -206,7 +206,12 @@ describe('dependency gate (T057 trigger-side, T066 reconcile-side)', () => {
     const status = 'Ready C';
     const agentId = await seedAgent('gate-reeval', status);
     const key = `BRIG-${++counter}`;
-    const blockerKey = `BLK-${counter}`;
+    // In-project key: the reconcile-side path runs the scope probe
+    // (DependencyReleaseService.classifyWaiting), and the mock's JQL project
+    // clause matches by key prefix — an out-of-project blocker (e.g. `BLK-…`)
+    // is legitimately classified `out_of_scope`, not `waiting` (that branch is
+    // exercised deliberately in sprint-sequencing.spec.ts with an `OTHER-` key).
+    const blockerKey = `BRIG-${900 + counter}`;
 
     // The blocked ticket sits in the trigger status; its `updated` never changes.
     mock.seedIssue(key, { status, updated: '2026-01-01T00:00:00.000Z' });

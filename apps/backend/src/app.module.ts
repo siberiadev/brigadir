@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { ServeStaticModule } from '@nestjs/serve-static';
-import { join } from 'node:path';
 import { DatabaseModule } from '@brigadir/database';
 import { AppConfigModule } from '@brigadir/app-config';
 import { QueuesModule } from '@brigadir/queues';
@@ -8,6 +7,7 @@ import { JiraModule } from '@brigadir/jira';
 import { CallbackModule } from '@brigadir/callback';
 import { HealthModule } from './health/health.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { SpaFallbackProvider, resolveWebDistPath } from './spa-fallback.provider';
 
 /**
  * Backend composition. Feature 004 additive: QueuesModule.register() — NOT
@@ -19,10 +19,14 @@ import { DashboardModule } from './dashboard/dashboard.module';
  * on first use, never at boot).
  *
  * Feature 005: DashboardModule adds the guarded `/api/workspaces*` + `/api/agents*`
- * REST surface. ServeStaticModule serves the built SPA (`apps/web/dist`) at `/`
- * with SPA fallback, EXCLUDING `/api/*` and `/health` so those always route to
- * their controllers (never shadowed). The dist path is read lazily (forRootAsync)
- * and tolerates a missing directory (dist may not be built yet).
+ * REST surface. ServeStaticModule serves the built SPA's ASSETS (`apps/web/dist`)
+ * at `/`; the client-route fallback to index.html is OURS (SpaFallbackProvider) —
+ * the module's own renderPath fallback sendFile()s without a `root` option and
+ * express's dotfiles policy then 404s any install whose absolute path contains a
+ * dot directory (e.g. `.claude/worktrees/…`), so it is parked on a never-matching
+ * path. `/api/*` and `/health` always route to their controllers (never
+ * shadowed). The dist path is read lazily (forRootAsync / onModuleInit) and
+ * tolerates a missing directory (dist may not be built yet).
  */
 @Module({
   imports: [
@@ -36,14 +40,19 @@ import { DashboardModule } from './dashboard/dashboard.module';
     ServeStaticModule.forRootAsync({
       useFactory: () => [
         {
-          rootPath: process.env.WEB_DIST_PATH ?? join(process.cwd(), 'apps', 'web', 'dist'),
+          rootPath: resolveWebDistPath(),
           // `/api/*` and `/health` must never be shadowed by the SPA fallback.
           exclude: ['/api/{*splat}', '/health'],
+          // Park the module's OWN index.html fallback on a path no client
+          // route uses: its renderFn sendFile()s without `root` and breaks
+          // under dot-directory install paths — SpaFallbackProvider owns the
+          // fallback instead (see its doc comment).
+          renderPath: '/__spa-fallback-disabled',
         },
       ],
     }),
   ],
   controllers: [],
-  providers: [],
+  providers: [SpaFallbackProvider],
 })
 export class BackendAppModule {}
