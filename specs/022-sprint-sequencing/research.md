@@ -10,6 +10,8 @@ All Technical Context unknowns resolved. Decisions R1–R8.
 
 **Alternatives considered**: (a) new event-driven release on blocker completion (push-only) — rejected in clarify: Jira never bumps a dependent's `updated`, push would need its own delivery guarantee; (b) leaving the logic in `ReconcileService` and duplicating it for the fast path — rejected: two copies of trigger-ordering logic drift apart.
 
+**Update (2026-07-21)**: the candidate re-fetch's documented independence above is from the HWM floor only — this research never documented, and the implementation never applied, the workspace's `scope_jql`/sprint scope to that same re-fetch, even though R4 immediately below reuses `scope_jql` for the blocker probe. That silence let a compliance gap against feature 002-jira-core's FR-038 regress unnoticed: a locally-cached candidate that had drifted out of `scope_jql` scope (sprint ended, `scope_jql` narrowed) still triggered. Fixed by folding the same `buildScopeJql(...)` call R4 already uses into the candidate re-fetch itself — see `specs/022-sprint-sequencing/spec.md` Revision History and FR-002.
+
 ## R2. Priority representation and ordering key
 
 **Decision**: Add `priority` to `POLL_FIELDS`; extend `JiraIssue['fields']` with optional `priority?: { id: string; name: string }`; persist on `tickets` as `priority_id int NULL` (parsed from Jira's numeric string id; NULL when absent/unparseable) + `priority_name text NULL`. Release order: `ORDER BY priority_id ASC NULLS LAST, jira_key ASC` (in SQL for the dashboard, and the same comparator in the release loop before triggering).
