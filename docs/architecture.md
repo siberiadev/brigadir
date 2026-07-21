@@ -408,6 +408,56 @@ export interface AgentExecutor {
 - Крэш/timeout → exponential backoff + jitter, `max_attempts` из агента; невосстановимое (auth, ToS-блок) → `UnrecoverableError`.
 - Reconciliation-sweeper (`upsertJobScheduler`, каждые 5 мин): (a) поллинг Jira против `last_seen_*`; (b) починка расхождений runs ↔ queue ↔ живость child-процессов; (c) webhook-refresh (3LO-фаза).
 
+### Durable-финализация: guard, проба, реконсайлер (feature 026)
+
+Пост-мортем прогона `3f60c1a1` (2026-07-20): QA-агент вычислил верный PASS,
+15 минут долбился в мёртвый callback-канал, прогон завершился `cancelled` с
+`outcome=NULL` — вердикт потерян, хотя целиком лежал в outbox агента. Четыре
+независимых страховки закрывают это (все — только для callback-wired прогонов;
+Phase-0 не затронут):
+
+- **Deployment guard («merged = deployed»).** Воркер спавнит вручную собранный
+  `packages/mcp-server/dist/main.js`. Гвард (`libs/executors/.../artifact-guard.ts`)
+  проверяет, что артефакт существует и не старше самого свежего файла в
+  `packages/mcp-server/src/**` (сравнение mtime на одной машине). Нарушение —
+  громкий отказ (Принцип «лучше упасть, чем тихо гонять устаревший код»):
+  на старте воркера — error-баннер (воркер стартует), на pickup callback-wired
+  прогона — жёсткий `failed` с явной ошибкой ДО спавна. Мемоизация 10 c ⇒
+  ребилд лечит без рестарта. Пути overridable: `BRIGADIR_MCP_SERVER_ENTRY` /
+  `BRIGADIR_MCP_SERVER_SRC`. Сборка вшита в `start:worker`, `build` и Docker-образ,
+  так что гвард — трипваер, срабатывающий почти никогда.
+- **Pre-flight channel probe.** Перед спавном воркер пробит `GET
+  /api/callbacks/health` (`AbortSignal.timeout(2s)`, alive ⇔ 2xx). Мёртвый
+  канал ⇒ прогон НЕ спавнится и НЕ жжёт попытку: hold через тот же
+  `worker.rateLimit(ttl)` + `Worker.RateLimitError()`, что и rate-limit, с
+  экспоненциальным backoff (30 c·2ⁿ, cap 5 мин) и событием `channel_down`
+  (операторская видимость; при ≥3 подряд — error-алерт). Защищает от
+  environment-outage (бэкенд лежит), НЕ от client-багов и не от смерти канала
+  посреди прогона — их закрывают outbox + реконсайл.
+- **Exit-time outbox reconcile (расширен).** При выходе процесса callback-wired
+  прогона, если complete_task так и не долетел, но в
+  `<configRoot>/.brigadir-outbox/<runId>.json` лежит валидный отчёт: ветка
+  `completed`-exit (fail-closed) финализирует его штатным guarded-путём
+  (`finalizeWithReport`, скрабится как живой callback); ветка `timed_out` —
+  как раньше, но теперь тоже скрабит (закрыт пробел Принципа V); `cancelled` —
+  статус НЕ трогаем, отчёт цепляем событием `undelivered_report` и файл
+  консьюмим. Невалидный/битый файл сохраняется на диске для разбора (FR-007).
+- **Периодический outbox-реконсайлер** (`OutboxReconcileScheduler`,
+  `upsertJobScheduler('outbox-reconcile', { every: 60_000 })`, идемпотентен по
+  id — паттерн reconcile-шедулера): скан `<configRoot>/.brigadir-outbox/*.json`
+  раз в минуту, решает по ТЕКУЩЕМУ статусу прогона (файл не переопределяет
+  Postgres, Принцип I): `running` / терминально-плохой с `outcome IS NULL`
+  (`failed`/`timed_out`) → `reconcileWithReport` (расширенный guard
+  `WHERE active OR (failed/timed_out AND outcome IS NULL)`, гонка с живым
+  callback безопасна через flipped-флаг); `cancelled`/`superseded` →
+  `undelivered_report`, статус не трогаем; финализированный с исходом /
+  неизвестный run → консьюм+лог; `awaiting_human` → skip, файл НЕ трогаем
+  (живой human-путь). Ретеншн: неразрешимые файлы (битые, не-UUID имя) хранятся
+  7 дней, затем удаляются. Жизнь outbox-директории развязана с per-run cleanup
+  (её убирает только реконсайлер). Config-root резолвится лениво через
+  `resolveMcpConfigRoot()` (env `BRIGADIR_MCP_CONFIG_ROOT`), один источник
+  правды для писателя (executor), tool-сервера и всех читателей.
+
 ---
 
 ## 5. Протокол callback'ов (MCP + HTTP)
@@ -464,7 +514,20 @@ POST /api/callbacks/runs/:runId/complete    body = structured report
 GET  /api/callbacks/runs/:runId/jira/overview          (feature 011, read-only)
 POST /api/callbacks/runs/:runId/jira/search            body = структурные фильтры
 GET  /api/callbacks/runs/:runId/jira/tickets/:key      403 out_of_scope вне проекта workspace'а
+GET  /api/callbacks/health                             (feature 026, БЕЗ авторизации) → 200 {status:'ok'}
 ```
+
+`GET /api/callbacks/health` (feature 026) — аддитивный неаутентифицированный
+liveness для pre-flight-пробы воркера: статичное тело, без БД, без версий/конфига
+(ничего чувствительного); отдельный контроллер, а не роут на гардированном
+`runs/:runId`, чтобы guard-поверхность осталась нетронутой. 200 доказывает, что
+HTTP-стек бэкенда поднят и роутит (класс аварии 2026-07-19). Два новых типа
+`run_events` (свободный text-столбец, миграций нет): `undelivered_report`
+(`{report, run_status: cancelled|superseded, source: exit_reconcile|periodic_reconcile}`
+— спасённый вердикт на прогоне, чей статус менять нельзя; отчёт валиден по
+`ReportSchema` и проскраблен) и `channel_down`
+(`{probe_url, consecutive, retry_in_ms}` — неудачная проба, секретов нет). Дашборд
+рендерит оба (`RunTimeline`), неизвестные типы деградируют в generic-карточку.
 
 Аутентификация: **short-lived JWT per run** `{ sub: runId, wsp: workspaceId, tkt?: ticketKey (нет у бестикетных setup-прогонов, feature 011), exp = started_at + timeout + grace }` (единый набор claims фиксируется в `packages/contracts`), подписан ключом backend'а. Инжектируется в env MCP-процесса / в конфиг executor'а; **модель токен не видит** (он живёт в процессе тулзы), для Routines — видит (ограничение канала), поэтому токен максимально узкий: один run, короткий TTL, только callback-скоупы. Guard: подпись + `runId` из пути == `sub` + run в статусе `running/awaiting_human`.
 

@@ -3,6 +3,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { RUN_QUEUE_EXECUTOR_TYPES } from '@brigadir/contracts';
 import {
   RECONCILE_QUEUE,
+  OUTBOX_RECONCILE_QUEUE,
   runQueueName,
   DEFAULT_JOB_OPTIONS,
   buildRedisConnection,
@@ -34,7 +35,10 @@ import {
 export class QueuesModule {
   static register(): DynamicModule {
     const runQueues = RUN_QUEUE_EXECUTOR_TYPES.map(runQueueName);
-    const allQueues = [...runQueues, RECONCILE_QUEUE];
+    // Queue NAMES are composition-time static structure (registerQueue needs
+    // them at decorator-eval): the reconcile queue and the feature-026
+    // outbox-reconcile queue are both fixed constants, not env/config reads.
+    const allQueues = [...runQueues, RECONCILE_QUEUE, OUTBOX_RECONCILE_QUEUE];
 
     return {
       module: QueuesModule,

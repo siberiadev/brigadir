@@ -3,6 +3,9 @@ import type { DefaultJobOptions } from 'bullmq';
 /** The reconcile scheduler queue (research F3 — no-op sweeper this iteration). */
 export const RECONCILE_QUEUE = 'reconcile';
 
+/** The outbox-reconcile scheduler queue (feature 026, US3 — periodic orphaned-report rescue). */
+export const OUTBOX_RECONCILE_QUEUE = 'outbox-reconcile';
+
 /** One queue per executor TYPE: `run.<type>` (iteration 1: `run.mock`). */
 export function runQueueName(executorType: string): string {
   return `run.${executorType}`;

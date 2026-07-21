@@ -19,6 +19,9 @@ export type TimelineTypeKey =
   | 'jira_action'
   | 'api_retry'
   | 'error'
+  // feature 026: durable-finalization safety-net events.
+  | 'undelivered_report'
+  | 'channel_down'
   | 'unknown';
 
 export type BodyFormat = 'markdown' | 'mono' | 'kv';
@@ -59,7 +62,16 @@ export interface TimelineItem {
   fieldTruncated: boolean;
 }
 
-const KNOWN_TYPES = new Set(['log', 'progress', 'tool_call', 'jira_action', 'api_retry', 'error']);
+const KNOWN_TYPES = new Set([
+  'log',
+  'progress',
+  'tool_call',
+  'jira_action',
+  'api_retry',
+  'error',
+  'undelivered_report',
+  'channel_down',
+]);
 
 /**
  * The first of these input fields that holds a string becomes the body, in this
@@ -319,6 +331,36 @@ function presentError(payload: unknown): Presented {
   return { title: 'Error', body, percent: null };
 }
 
+/**
+ * feature 026: a verdict rescued from the outbox on a run whose status must
+ * not change (cancelled/superseded). Surfaces the outcome + summary so the
+ * operator sees nothing was silently lost.
+ */
+function presentUndeliveredReport(payload: unknown): Presented {
+  const rec = asRecord(payload) ?? {};
+  const report = asRecord(rec.report) ?? {};
+  const outcome = asString(report.outcome);
+  const summary = asString(report.summary);
+  const runStatus = asString(rec.run_status);
+  const parts: string[] = [];
+  if (outcome) parts.push(`итог: ${outcome}`);
+  if (runStatus) parts.push(`статус прогона: ${runStatus}`);
+  const head = parts.join(' · ');
+  const body = summary ? (head ? `${head}\n${summary}` : summary) : head || null;
+  return { title: 'Недоставленный отчёт', body, percent: null };
+}
+
+/** feature 026: a pre-flight probe found the callback channel down; the run was held, not spawned. */
+function presentChannelDown(payload: unknown): Presented {
+  const rec = asRecord(payload) ?? {};
+  const parts: string[] = [];
+  const url = asString(rec.probe_url);
+  if (url) parts.push(url);
+  if (typeof rec.consecutive === 'number') parts.push(`подряд неудач: ${rec.consecutive}`);
+  if (typeof rec.retry_in_ms === 'number') parts.push(`повтор через ${rec.retry_in_ms}ms`);
+  return { title: 'Канал недоступен', body: parts.length ? parts.join(' · ') : null, percent: null };
+}
+
 function presentUnknown(payload: unknown, rawType: string): Presented {
   if (typeof payload === 'string' && payload.length > 0) {
     return { title: rawType, body: payload, percent: null };
@@ -353,6 +395,12 @@ export function presentEvent(e: RunCardEvent): TimelineItem {
       break;
     case 'error':
       presented = presentError(e.payload);
+      break;
+    case 'undelivered_report':
+      presented = presentUndeliveredReport(e.payload);
+      break;
+    case 'channel_down':
+      presented = presentChannelDown(e.payload);
       break;
     default:
       presented = presentUnknown(e.payload, e.type);

@@ -12,8 +12,10 @@ import {
   CircleDot,
   FlagTriangleRight,
   Info,
+  MailWarning,
   Megaphone,
   MessageCircleQuestion,
+  PlugZap,
   RotateCcw,
   Ticket,
   TriangleAlert,
@@ -51,6 +53,9 @@ const ICONS: Record<IconKey, Component> = {
   report_progress: Megaphone,
   request_human: MessageCircleQuestion,
   complete_task: FlagTriangleRight,
+  // feature 026 durable-finalization safety-net events.
+  undelivered_report: MailWarning,
+  channel_down: PlugZap,
 };
 
 const icon = computed<Component>(() => ICONS[props.item.iconKey] ?? CircleDot);
@@ -147,6 +152,14 @@ $body-indent: $time-width + $space-sm + $node-size + $space-sm;
   --type-color: var(--el-color-warning);
 }
 .event--error {
+  --type-color: var(--el-color-danger);
+}
+// feature 026: a rescued verdict on an intentionally-stopped run (warning),
+// and a dead-channel hold before spawn (danger — an environment outage).
+.event--undelivered_report {
+  --type-color: var(--el-color-warning);
+}
+.event--channel_down {
   --type-color: var(--el-color-danger);
 }
 .event--unknown {

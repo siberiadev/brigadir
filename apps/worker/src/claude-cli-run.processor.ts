@@ -6,20 +6,28 @@ import { DRIZZLE, type BrigadirDb, schema, getBrigadirAgentTemplate } from '@bri
 import { BRIGADIR_JWT_SECRET } from '@brigadir/app-config';
 import { runQueueName, backoffStrategy } from '@brigadir/queues';
 import { RunsService, mapExitStatusToRunStatus } from '@brigadir/runs';
-import { tmpdir } from 'node:os';
 import {
   ExecutorRegistry,
   RepositoryScopeUndeterminableError,
   composeScopeQuestion,
-  defaultMcpConfigRoot,
+  resolveMcpConfigRoot,
   readOutboxReport,
   consumeOutbox,
+  createMemoizedArtifactGuard,
+  formatArtifactGuardError,
+  type MemoizedArtifactGuard,
   type ExecutorResult,
   type RunContext,
 } from '@brigadir/executors';
 import { HumanTaskService } from '@brigadir/human-tasks';
 import { PipelineService, buildHandoffSection } from '@brigadir/pipeline';
-import { signRunToken, type TriggerEvent } from '@brigadir/contracts';
+import { ReportSchema, signRunToken, type AgentReport, type TriggerEvent } from '@brigadir/contracts';
+// feature 026 (research D10): the single scrubbing audit point, reused so the
+// outbox reconcile paths persist reports through the exact same scrubber as a
+// live callback.
+import { scrubAgentReport } from '@brigadir/callback';
+import { attachUndeliveredReport } from './undelivered-report';
+import { ChannelProbe } from './channel-probe';
 import { JiraClientFactory } from '@brigadir/jira';
 import { applyExecutorConcurrency, startConcurrencyReapply } from './executor-concurrency';
 import { checkExecutorGate } from './executor-gate';
@@ -123,6 +131,15 @@ export class ClaudeCliRunProcessor
   protected readonly executorType: string = 'claude_cli';
   private readonly logger = new Logger(this.constructor.name);
   private reapplyTimer?: NodeJS.Timeout;
+  // Feature 026 (US2): memoized deployment guard consulted per callback-wired
+  // pickup. TTL overridable so integration tests can prove a rebuild heals the
+  // worker without a restart within one poll.
+  private readonly artifactGuard: MemoizedArtifactGuard = createMemoizedArtifactGuard(
+    Number(process.env.BRIGADIR_ARTIFACT_GUARD_TTL_MS) || 10_000,
+  );
+  // Feature 026 (US4): pre-flight callback-channel probe (in-memory backoff
+  // counters, one instance per processor).
+  private readonly channelProbe = new ChannelProbe();
 
   constructor(
     @Inject(DRIZZLE) private readonly db: BrigadirDb,
@@ -157,6 +174,41 @@ export class ClaudeCliRunProcessor
     if (!loaded) {
       this.logger.warn(`run ${runId} not found — dropping job`);
       return;
+    }
+
+    // Feature 026 (US2, deployment guard): only callback-wired runs need the
+    // agent tool-server artifact. A missing/stale artifact fails the run
+    // LOUDLY here — before the gate, before markRunning, before any spawn —
+    // rather than letting agents run a stale binary (the 3f60c1a1 root cause).
+    // The run is still 'queued', so a plain guarded finalizeStatus owns the
+    // status cleanly (no attempt consumed elsewhere). Mock/Phase-0 runs skip
+    // this entirely. A rebuild heals within the guard's memo TTL, no restart.
+    if (loaded.useCallbackChannel) {
+      const verdict = await this.artifactGuard.check(Date.now());
+      if (!verdict.ok) {
+        const message = formatArtifactGuardError(verdict);
+        this.logger.error(`run ${runId}: ${message}`);
+        await this.runs.finalizeStatus(runId, 'failed', { error: message });
+        await this.afterFinalize(runId);
+        return;
+      }
+    }
+
+    // Feature 026 (US4, pre-flight channel check): a callback-wired run must
+    // not burn its 20-minute budget against a provably-dead channel. Probe the
+    // callback endpoint BEFORE the gate / markRunning; a dead channel holds the
+    // run via the rate-limit path (job back to waiting, NO attempt consumed,
+    // status stays 'queued') with backoff and an operator-visible channel_down
+    // event. Recovers automatically when the endpoint is back. Protects against
+    // environment outages (backend down), not client-side bugs (spec limit).
+    if (loaded.useCallbackChannel) {
+      const alive = await this.channelProbe.probe();
+      if (!alive) {
+        const ttl = await this.channelProbe.recordFailure(this.db, runId, this.logger);
+        await this.worker.rateLimit(ttl);
+        throw Worker.RateLimitError();
+      }
+      this.channelProbe.recordSuccess(runId);
     }
 
     // Per-profile / per-model max_parallel_runs gate (2026-07-14; model tier
@@ -278,13 +330,30 @@ export class ClaudeCliRunProcessor
 
     if (result.exitStatus === 'completed') {
       if (loaded.useCallbackChannel) {
-        // FR-010/011 (D7): callback-wired runs have NO structured-output
-        // rescue path — any report-shaped stdout text is diagnostics only,
-        // never a finalize source. A 'completed' exit here means the process
-        // ended without complete_task/blocking request_human ever landing.
-        // Fail closed, guarded WHERE status='running' ONLY: a legitimate
-        // awaiting_human park (or an already-finalized run — a callback
-        // could have landed a beat before this) is a no-op, never clobbered.
+        // Feature 026 (US1, the 3f60c1a1 case): a 'completed' exit while the
+        // run is still 'running' means no complete_task/request_human callback
+        // landed. Before failing closed, check the durable outbox — the agent
+        // may have computed a verdict and written it locally when the HTTP
+        // callback could not be delivered. A valid report finalizes through
+        // the SAME guarded path as a live callback (validation, checks, human
+        // tasks); a present-but-invalid file is left on disk for inspection
+        // (FR-007) and we fall through to fail-closed.
+        const outbox = await this.loadOutboxReport(runId);
+        if (outbox.kind === 'valid') {
+          const reconciled = await this.runs.finalizeWithReport(runId, outbox.report, {
+            costUsd: result.costUsd,
+            usage: result.usage,
+          });
+          // flip → the outbox verdict finalized this run; no-flip → a live
+          // callback (or park) already owns it. Either way the report is
+          // delivered, so consume the file and skip the fail-closed write.
+          await this.consumeOutbox(runId);
+          if (reconciled) await this.afterFinalize(runId);
+          return;
+        }
+        // FR-010/011 (D7): no valid outbox report — fail closed, guarded WHERE
+        // status='running' ONLY: a legitimate awaiting_human park (or an
+        // already-finalized run) is a no-op, never clobbered.
         const diagnostic =
           result.diagnostics ?? 'claude_cli exited without a complete_task or request_human callback';
         const flipped = await this.runs.failIfStillRunning(runId, diagnostic);
@@ -340,28 +409,42 @@ export class ClaudeCliRunProcessor
           usage: result.usage,
         };
         if (loaded.useCallbackChannel) {
-          // Durable-finalize outbox (Phase 4, Problem 6): a run about to become
-          // `timed_out` may already carry a `complete_task` report that never
-          // reached the backend (the incident's `fetch failed`). The run is
-          // still `running` here, so finalizing from the outbox goes through the
-          // normal guarded path — reconcile it instead of losing the outcome.
-          // Only `timed_out`: `cancelled`/`rate_limited` are intentional stops
-          // and must not be clobbered by a stale local report.
+          // Durable-finalize outbox (Phase 4, Problem 6; widened feature 026
+          // US1): a run about to become `timed_out` may already carry a
+          // `complete_task` report that never reached the backend (the
+          // incident's `fetch failed`). The run is still `running` here, so
+          // finalizing from the outbox goes through the normal guarded path —
+          // reconcile it instead of losing the outcome. The report is scrubbed
+          // first (Constitution V — this path previously bypassed the
+          // scrubber, feature 026 research D10). Only `timed_out`:
+          // `cancelled`/`rate_limited` are intentional stops that must not be
+          // clobbered by a local report.
           if (decision.status === 'timed_out') {
-            const configRoot = defaultMcpConfigRoot(tmpdir());
-            const report = await readOutboxReport(configRoot, runId);
-            if (report !== null) {
-              try {
-                const reconciled = await this.runs.finalizeWithReport(runId, report, extra);
-                if (reconciled) {
-                  await consumeOutbox(configRoot, runId);
-                  await this.afterFinalize(runId);
-                  return;
-                }
-              } catch {
-                // Malformed outbox report (fails ReportSchema.parse) — fall
-                // through to the unchanged `timed_out` path below.
+            const outbox = await this.loadOutboxReport(runId);
+            if (outbox.kind === 'valid') {
+              const reconciled = await this.runs.finalizeWithReport(runId, outbox.report, extra);
+              if (reconciled) {
+                await this.consumeOutbox(runId);
+                await this.afterFinalize(runId);
+                return;
               }
+              // no-flip: a callback already owns the run — the report is
+              // delivered, so consume and fall through (the guarded write below
+              // is then a no-op).
+              await this.consumeOutbox(runId);
+            }
+            // 'invalid' / 'absent' ⇒ leave the file on disk (FR-007) and fall
+            // through to the unchanged `timed_out` path below.
+          }
+          // Feature 026 (US1): a `cancelled` stop is intentional — never flip
+          // the status — but a present outbox verdict must not be silently
+          // discarded. Attach it as an operator-visible undelivered_report and
+          // consume the file so the periodic reconciler won't reprocess it.
+          if (decision.status === 'cancelled') {
+            const outbox = await this.loadOutboxReport(runId);
+            if (outbox.kind === 'valid') {
+              await attachUndeliveredReport(this.db, runId, outbox.report, 'cancelled', 'exit_reconcile');
+              await this.consumeOutbox(runId);
             }
           }
           // D7 generalized: the cancel-poll aborts a lingering process after a
@@ -386,6 +469,32 @@ export class ClaudeCliRunProcessor
     } catch (err) {
       this.logger.error(`onRunFinished failed for run ${runId} (will be repaired on reconcile): ${String(err)}`);
     }
+  }
+
+  /**
+   * Feature 026 (US1): read the durable outbox report for a run and classify
+   * it. `valid` carries the schema-validated + scrubbed report ready for the
+   * same finalize path a live callback uses; `invalid` (present but fails
+   * ReportSchema) and `absent` (no readable file) both leave the file on disk
+   * so a malformed verdict is preserved for inspection (FR-007). The config
+   * root is resolved lazily (Constitution lazy-resolution) so it matches the
+   * writer's dir in prod and a per-suite scratch dir under test.
+   */
+  private async loadOutboxReport(
+    runId: string,
+  ): Promise<{ kind: 'valid'; report: AgentReport } | { kind: 'invalid' } | { kind: 'absent' }> {
+    const raw = await readOutboxReport(resolveMcpConfigRoot(), runId);
+    if (raw === null) return { kind: 'absent' };
+    try {
+      return { kind: 'valid', report: scrubAgentReport(ReportSchema.parse(raw)) };
+    } catch {
+      return { kind: 'invalid' };
+    }
+  }
+
+  /** Best-effort removal of a consumed outbox file (feature 026). */
+  private async consumeOutbox(runId: string): Promise<void> {
+    await consumeOutbox(resolveMcpConfigRoot(), runId);
   }
 
   private async loadStatus(runId: string): Promise<string | undefined> {

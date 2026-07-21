@@ -7,4 +7,6 @@ export * from './claude-cli/claude-cli.executor';
 export * from './claude-cli/claude-cli.config';
 export * from './claude-cli/scope-ticket';
 export * from './claude-cli/mcp-config';
+export * from './claude-cli/mcp-server-path';
+export * from './claude-cli/artifact-guard';
 export * from './claude-cli/outbox';

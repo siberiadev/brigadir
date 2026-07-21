@@ -2014,3 +2014,67 @@ payload, полный текст, кап 100, C1-регрессия на вло�
 web-сьют — 281. `pnpm test:integration callback-progress` — требует Docker (в этой сессии не
 запускался; контрактный кап 4000 покрыт юнитом). Схема БД / запись в Jira / дедуп — не тронуты;
 миграций и новых внешних зависимостей нет.
+
+## Iteration 39 — Durable finalization v2: deployment guard + рабочая outbox-страховка (feature 026 durable-run-finalization-v2, 2026-07-21)
+
+> Примечание: номер фичи 026 занят двумя параллельными работами — читаемость
+> таймлайна (Iteration 38, `specs/026-run-timeline-readability`) и эта
+> durable-финализация (`specs/026-durable-run-finalization-v2`). Обе слиты; здесь
+> — вторая.
+
+**Контекст.** Пост-мортем прогона `3f60c1a1` (2026-07-20) поверх инцидента
+2026-07-19: у callback-финализации нет рабочей страховки. QA-агент вычислил PASS,
+15 минут ретраил `complete_task`/`request_human` в мёртвый канал, прогон закрылся
+`cancelled` с `outcome=NULL` — вердикт потерян, хотя целиком лежал в outbox. Четыре
+независимых дыры: (2) merged≠deployed — воркер спавнит вручную собранный
+`dist/main.js`, Phase-4-фикс был смёржен, но dist не пересобран; (3) exit-reconcile
+жил только в ветке `timed_out`; (4) нет ретроактивного спасения осиротевших outbox;
+(5) нет pre-flight-проверки канала. (Клиентский баг канала — P0/#44, предпосылка.)
+
+**Сделано (4 независимо мержимых среза, все — только callback-wired; Phase-0 байт-в-байт).**
+- **A. Deployment guard.** `libs/executors/.../artifact-guard.ts` (+ `mcp-server-path.ts`,
+  вынесен из executor'а): артефакт существует и не старше `packages/mcp-server/src/**`
+  (mtime). Нарушение — громко: на старте воркера error-баннер (`artifact-guard.bootstrap.ts`,
+  воркер стартует), на pickup callback-wired прогона — `failed` с явной ошибкой ДО спавна
+  (Clarification Q1, гибрид). Мемо 10 c ⇒ ребилд лечит без рестарта. `start:worker` и
+  `test:integration` теперь собирают mcp-server первым шагом (Docker-образ уже собирал).
+- **B. Exit-time reconcile расширен** (`claude-cli-run.processor.ts`): ветка `completed`-exit
+  до fail-closed читает outbox → валидный отчёт финализирует штатным `finalizeWithReport`
+  (+ скраб, как живой callback); `timed_out` — как раньше, но теперь ТОЖЕ скрабит (закрыт
+  пробел Принципа V); `cancelled` — статус не трогаем, отчёт цепляем событием
+  `undelivered_report`, файл консьюмим; невалидный файл сохраняем (FR-007).
+- **C. Периодический реконсайлер** (`OutboxReconcileService/Processor/Scheduler`,
+  `every: 60_000`, идемпотентен по id): скан `<configRoot>/.brigadir-outbox/*.json`,
+  решение по текущему статусу (Принцип I). `RunsService.reconcileWithReport` — расширенный
+  guard `active OR (failed/timed_out AND outcome IS NULL)`, гонка с живым callback
+  безопасна (flipped). `cancelled`/`superseded` → `undelivered_report`; `awaiting_human` →
+  skip+keep; неизвестный/финализированный → консьюм; неразрешимые (битые, не-UUID) →
+  ретеншн 7 дней. `resolveMcpConfigRoot()` (env `BRIGADIR_MCP_CONFIG_ROOT`) — один источник
+  правды для писателя и всех читателей.
+- **D. Pre-flight probe** (`channel-probe.ts` + `GET /api/callbacks/health`, аддитивный,
+  без гарда): проба перед спавном; мёртвый канал ⇒ hold через `worker.rateLimit`
+  (попытка не жжётся, статус `queued`), backoff 30 c·2ⁿ cap 5 мин, событие `channel_down`,
+  при ≥3 подряд — error-алерт (Clarification Q3, переиспользование hold-пути). Защищает от
+  environment-outage (класс 2026-07-19), не от client-багов/смерти посреди прогона.
+- Скрабинг вынесен в `libs/callback/report-scrub.ts` (`scrubAgentReport`) — единая точка
+  аудита Принципа V для живого callback И всех reconcile-путей. Дашборд: `RunTimeline`
+  рендерит `undelivered_report`/`channel_down` (неизвестные типы деградируют в generic).
+
+**Тесты.** Юниты (+16): `artifact-guard.spec` (missing/stale/fresh/no-src/memo),
+`outbox.spec` (+listOutboxEntries), `channel-probe.spec` (ladder/reset/threshold/url),
+`callback-health.controller.spec` (200/без гарда/без deps), `queues.module.spec` (+outbox-queue).
+Интеграционные (real PG/Redis, +12): `artifact-guard` (stale→failed / Phase-0 не затронут /
+heal без рестарта), `claude-cli-exit-reconcile` (completed-rescue / invalid→fail-closed+файл /
+cancelled→undelivered), `outbox-reconcile` (матрица / гонка-no-op / ретеншн / один шедулер),
+`preflight-channel` (down→hold без спавна и без попытки → recovery / mock не пробит).
+
+**Гейты.** `pnpm typecheck && pnpm lint && pnpm test` — зелёные (unit 459). `pnpm exec vitest
+run --project integration` по срезам feature-026 — 12/12 зелёные (Docker доступен). Схема БД /
+`architecture.md` §3 — не тронуты (миграций нет; `run_events.type` — свободный text, оба новых
+типа аддитивны); callback HTTP-контракт существующих тулз — не тронут (`/health` аддитивен);
+новых внешних зависимостей нет. Предвестники не из feature 026 (`serve-static`,
+`sprint-sequencing`, `runs-cancel-all`, `dependency-gate`) падают идентично на чистой базе
+(окруженческое: web не собран, тайминги Jira-моков) — не регресс. Новые env (все опциональные,
+дефолт = прежнее поведение) — в `.env.example`. Отклонения от плана: `superseded` сгруппирован
+с `cancelled` (намеренный стоп), джиттер реконсайлера опущен (один воркер) — см.
+`research.md` D6.

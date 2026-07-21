@@ -13,6 +13,10 @@ import { ReconcileScheduler } from './reconcile.scheduler';
 import { RunProcessor } from './run.processor';
 import { ClaudeCliRunProcessor } from './claude-cli-run.processor';
 import { KimiRunProcessor } from './kimi-run.processor';
+import { ArtifactGuardBootstrap } from './artifact-guard.bootstrap';
+import { OutboxReconcileService } from './outbox-reconcile.service';
+import { OutboxReconcileProcessor } from './outbox-reconcile.processor';
+import { OutboxReconcileScheduler } from './outbox-reconcile.scheduler';
 
 /**
  * Worker composition. JiraModule.forRootAsync() is @Global and LAZY — it exposes
@@ -51,6 +55,12 @@ import { KimiRunProcessor } from './kimi-run.processor';
     ReconcileProcessor,
     ReconcileScheduler,
     HumanTaskService,
+    // Feature 026: loud startup banner if the mcp-server artifact is stale/missing.
+    ArtifactGuardBootstrap,
+    // Feature 026 (US3): periodic orphaned-outbox rescue.
+    OutboxReconcileService,
+    OutboxReconcileProcessor,
+    OutboxReconcileScheduler,
   ],
 })
 export class WorkerAppModule {}

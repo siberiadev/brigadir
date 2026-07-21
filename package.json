@@ -16,9 +16,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && pnpm --filter @brigadir/contracts typecheck && pnpm --filter @brigadir/mcp-server typecheck && pnpm --filter @brigadir/admin-mcp typecheck",
     "lint": "eslint \"{apps,libs,packages}/**/*.ts\"",
     "test": "pnpm --filter @brigadir/contracts test && pnpm --filter @brigadir/mcp-server test && pnpm --filter @brigadir/admin-mcp test && vitest run --project unit",
-    "test:integration": "vitest run --project integration",
+    "test:integration": "pnpm build:mcp-server && vitest run --project integration",
     "start:backend": "node dist/apps/backend/main.api.js",
-    "start:worker": "node dist/apps/worker/main.worker.js",
+    "start:worker": "pnpm build:mcp-server && node dist/apps/worker/main.worker.js",
     "smoke:run": "nest build smoke && node dist/apps/smoke/main.smoke.js"
   },
   "devDependencies": {

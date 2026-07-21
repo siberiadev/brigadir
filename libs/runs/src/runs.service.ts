@@ -1,10 +1,12 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import { ReportSchema, type AgentReport } from '@brigadir/contracts';
 import type { TerminalStatus } from './status-mapping';
 
 const ACTIVE_STATUSES = ['queued', 'running', 'awaiting_human'];
+/** Terminal-bad statuses a durable-outbox report may still rescue (feature 026, US3). */
+const RESCUABLE_TERMINAL_STATUSES = ['failed', 'timed_out'];
 
 export interface FinalizeExtra {
   externalRef?: string;
@@ -12,6 +14,20 @@ export interface FinalizeExtra {
   usage?: unknown;
   error?: string;
   exitCode?: number;
+}
+
+/**
+ * Report outcome → terminal run status. `routed` is a terminal SUCCESS of the
+ * orchestrator's triage turn (feature 010): the run did its job and produced a
+ * decision; the pipeline's orchestrator-completion branch then acts on it.
+ * Only `needs_human` parks.
+ */
+function reportTerminalStatus(report: AgentReport): TerminalStatus {
+  return report.outcome === 'success' || report.outcome === 'routed'
+    ? 'succeeded'
+    : report.outcome === 'failure'
+      ? 'failed'
+      : 'awaiting_human';
 }
 
 /**
@@ -70,15 +86,7 @@ export class RunsService {
     extra: FinalizeExtra = {},
   ): Promise<boolean> {
     const report = ReportSchema.parse(rawReport);
-    // `routed` is a terminal SUCCESS of the orchestrator's triage turn (feature
-    // 010): the run did its job and produced a decision; the pipeline's
-    // orchestrator-completion branch then acts on it. Only `needs_human` parks.
-    const status: TerminalStatus =
-      report.outcome === 'success' || report.outcome === 'routed'
-        ? 'succeeded'
-        : report.outcome === 'failure'
-          ? 'failed'
-          : 'awaiting_human';
+    const status = reportTerminalStatus(report);
 
     const finalized = await this.guardedFinalize(runId, status, {
       outcome: report.outcome,
@@ -90,11 +98,56 @@ export class RunsService {
       return false;
     }
 
+    await this.applyReportEffects(runId, report);
+    return true;
+  }
+
+  /**
+   * Reconcile a run from a durable outbox report during the periodic sweep
+   * (feature 026, US3). Widens `finalizeWithReport`'s guard to ALSO rescue a
+   * run whose PROCESS outcome finalized it WITHOUT a report outcome
+   * (`failed`/`timed_out`, `outcome IS NULL`) — e.g. an exit-time fail-close
+   * that raced the outbox, or a worker death that left the run mid-flight and
+   * a later watchdog stamped it `timed_out`. Still ONE atomic guarded UPDATE
+   * (race-safe, returns the flipped flag; a live callback that already applied
+   * an outcome makes this a 0-row no-op), and writes run_checks / the
+   * needs_human task on flip exactly like the live path.
+   */
+  async reconcileWithReport(
+    runId: string,
+    rawReport: unknown,
+    extra: FinalizeExtra = {},
+  ): Promise<boolean> {
+    const report = ReportSchema.parse(rawReport);
+    const status = reportTerminalStatus(report);
+
+    const rows = await this.db
+      .update(schema.runs)
+      .set({ status, finishedAt: sql`now()`, outcome: report.outcome, report, ...(extra as Record<string, never>) })
+      .where(
+        and(
+          eq(schema.runs.id, runId),
+          or(
+            inArray(schema.runs.status, ACTIVE_STATUSES),
+            and(inArray(schema.runs.status, RESCUABLE_TERMINAL_STATUSES), isNull(schema.runs.outcome)),
+          ),
+        ),
+      )
+      .returning({ id: schema.runs.id });
+    if (rows.length === 0) {
+      this.logger.log(`reconcileWithReport: run ${runId} no-op (already finalized with an outcome)`);
+      return false;
+    }
+
+    await this.applyReportEffects(runId, report);
+    return true;
+  }
+
+  private async applyReportEffects(runId: string, report: AgentReport): Promise<void> {
     await this.writeChecks(runId, report);
     if (report.outcome === 'needs_human' && report.human_task) {
       await this.createHumanTask(runId, report.human_task);
     }
-    return true;
   }
 
   /**
