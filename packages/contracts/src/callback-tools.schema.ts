@@ -14,7 +14,10 @@ export const ReportProgressSchema = z
   .object({
     percent: z.number().min(0).max(100).optional(),
     stage: z.string(),
-    message: z.string().max(500),
+    // feature 026 (FR-004): raised 500 → 4000 so agents can report fuller
+    // messages; matches RequestHumanSchema.details. Over-limit is rejected at
+    // intake (422), never silently truncated.
+    message: z.string().max(4000),
   })
   .strict();
 

@@ -34,6 +34,7 @@ import {
 } from './claude-cli.config';
 import { buildArgs } from './args';
 import { buildChildEnv } from './env-allowlist';
+import { scrub } from '@brigadir/scrubber';
 import { ClaudeStreamParser, type TerminalResult } from './stream-parser';
 import {
   prepareAll,
@@ -429,7 +430,9 @@ export class ClaudeCliExecutor implements AgentExecutor {
         : 'Carry out the workspace task exactly as described in your system prompt. Begin now.\n',
     );
 
-    const parser = new ClaudeStreamParser();
+    // feature 026 (Constitution V): scrub every tool_call string the parser
+    // persists, including strings nested in a complete_task report.
+    const parser = new ClaudeStreamParser({ scrub });
     const stderrTail = new StderrTail();
     let externalRef: string | undefined;
     let terminal: TerminalResult | undefined;
