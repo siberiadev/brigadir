@@ -6,6 +6,11 @@ import {
   prettifyToolName,
 } from '../src/components/RunTimeline/presenter';
 
+/** feature 026: the parser now persists tool_call `input` as a structured object. */
+function toolEvent(name: string, input: Record<string, unknown>, truncated = false, id = 'e-1') {
+  return { id, type: 'tool_call', payload: { name, input, truncated }, created_at: '2026-07-12T10:00:05.000Z' };
+}
+
 /**
  * Pure presenter units: RunCardEvent → TimelineItem (`time · icon · title` +
  * an always-visible body block). Payload is untyped in the contract, and
@@ -135,6 +140,126 @@ describe('presentEvent — other types', () => {
     expect(presentEvent(event('whatever', 'short note')).body).toBe('short note');
     expect(presentEvent(event('whatever', 42)).body).toBe('42');
     expect(presentEvent(event('tool_call', 'not-an-object')).title).toBe('tool_call');
+  });
+});
+
+describe('presentEvent — body format (feature 026, US1)', () => {
+  it('message-like fields (message/details/summary) render as Markdown', () => {
+    expect(presentEvent(toolEvent('mcp__jira__report_progress', { message: 'stage done' })).bodyFormat).toBe(
+      'markdown',
+    );
+    expect(
+      presentEvent(toolEvent('mcp__brigadir__request_human', { kind: 'question', title: 'T', details: '## Hi' }))
+        .bodyFormat,
+    ).toBe('markdown');
+    const complete = presentEvent(
+      toolEvent('mcp__brigadir__complete_task', { outcome: 'success', summary: '- did it' }),
+    );
+    expect(complete.bodyFormat).toBe('markdown');
+    expect(complete.body).toBe('- did it');
+  });
+
+  it('a command renders as a monospace block', () => {
+    const item = presentEvent(toolEvent('Bash', { command: 'pnpm test' }));
+    expect(item.body).toBe('pnpm test');
+    expect(item.bodyFormat).toBe('mono');
+  });
+
+  it('a Write file-content placeholder renders inline as the body', () => {
+    const item = presentEvent(toolEvent('Write', { content: '<file content, 34 KB>' }));
+    expect(item.body).toBe('<file content, 34 KB>');
+    expect(item.bodyFormat).toBe('mono');
+  });
+
+  it('surfaces the truncated flag from the structured payload', () => {
+    expect(presentEvent(toolEvent('Grep', { pattern: 'x' }, true)).fieldTruncated).toBe(true);
+    expect(presentEvent(toolEvent('Grep', { pattern: 'x' }, false)).fieldTruncated).toBe(false);
+  });
+
+  it('a legacy cut string input renders monospace and flags legacyTruncated', () => {
+    const raw = `{"file_path":"/a/b.ts","content":"${'x'.repeat(500)}`.slice(0, 500);
+    const item = presentEvent({
+      id: 'e-legacy',
+      type: 'tool_call',
+      payload: { name: 'Write', input: raw },
+      created_at: '2026-07-12T10:00:05.000Z',
+    });
+    expect(item.bodyFormat).toBe('mono');
+    expect(item.legacyTruncated).toBe(true);
+    expect(item.body?.endsWith('…')).toBe(true);
+  });
+});
+
+describe('presentEvent — orchestrator affordance & typed cards (feature 026, US2/US3)', () => {
+  it('report_progress: arrow title, megaphone iconKey, orchestrator flag', () => {
+    const item = presentEvent(toolEvent('mcp__brigadir__report_progress', { stage: 's', message: 'working' }));
+    expect(item.orchestrator).toBe(true);
+    expect(item.iconKey).toBe('report_progress');
+    expect(item.title).toBe('report_progress → Brigadir');
+    expect(item.body).toBe('working');
+    expect(item.bodyFormat).toBe('markdown');
+  });
+
+  it('request_human: title from its title, kind + blocking tags, details as Markdown', () => {
+    const item = presentEvent(
+      toolEvent('mcp__brigadir__request_human', {
+        kind: 'question',
+        title: 'Clarify empty-input behavior',
+        details: '## Context\n- detail',
+        blocking: true,
+      }),
+    );
+    expect(item.orchestrator).toBe(true);
+    expect(item.iconKey).toBe('request_human');
+    expect(item.title).toBe('Clarify empty-input behavior');
+    expect(item.tags).toEqual([
+      { label: 'question', tone: 'info' },
+      { label: 'blocking', tone: 'warning' },
+    ]);
+    expect(item.body).toBe('## Context\n- detail');
+    expect(item.bodyFormat).toBe('markdown');
+  });
+
+  it('request_human non-blocking gets a non-blocking tag', () => {
+    const item = presentEvent(
+      toolEvent('mcp__brigadir__request_human', { kind: 'review', title: 'T', details: 'd', blocking: false }),
+    );
+    expect(item.tags).toContainEqual({ label: 'non-blocking' });
+  });
+
+  it('complete_task: "Complete · outcome" title, summary Markdown, checks-count tag, flag icon', () => {
+    const item = presentEvent(
+      toolEvent('mcp__brigadir__complete_task', {
+        outcome: 'success',
+        summary: '- shipped it',
+        checks: [{ name: 'a' }, { name: 'b' }],
+      }),
+    );
+    expect(item.title).toBe('Complete · success');
+    expect(item.iconKey).toBe('complete_task');
+    expect(item.tags).toEqual([{ label: '2 checks', tone: 'info' }]);
+    expect(item.body).toBe('- shipped it');
+    expect(item.bodyFormat).toBe('markdown');
+  });
+
+  it('a non-brigadir MCP tool keeps the "(server)" form and is not an orchestrator call', () => {
+    const item = presentEvent(toolEvent('mcp__jira__get_ticket', { key: 'BRIG-1' }));
+    expect(item.orchestrator).toBe(false);
+    expect(item.title).toBe('get_ticket (jira)');
+    expect(item.iconKey).toBe('tool_call');
+  });
+});
+
+describe('presentEvent — key/value fallback (feature 026, US4)', () => {
+  it('a structured input with no primary text field renders as a kv list, not a JSON dump', () => {
+    const item = presentEvent(toolEvent('SomeTool', { alpha: 'one', beta: 2, gamma: true }));
+    expect(item.bodyFormat).toBe('kv');
+    expect(item.body).toBeNull();
+    expect(item.kv).toEqual([
+      { key: 'alpha', value: 'one' },
+      { key: 'beta', value: '2' },
+      { key: 'gamma', value: 'true' },
+    ]);
   });
 });
 

@@ -1973,7 +1973,54 @@ test:integration executor-gate` — зелёные (3/3, включая пер-�
 затронуты. Новые env (все опциональные, дефолт = прежнее поведение) задокументированы в
 `.env.example`.
 
-## Iteration 38 — Durable finalization v2: deployment guard + рабочая outbox-страховка (feature 026, 2026-07-21)
+## Iteration 38 — Читаемый таймлайн прогона: без JSON-дампов, видно обращения к Бригадиру (feature 026, 2026-07-21)
+
+**Проблема.** Оператор не мог прочитать, что сказал агент: ассистентский текст и `tool_call.input`
+резались (`snippetMaxChars=500`, `truncate(JSON.stringify(input))` → неразборный обрезок посреди
+JSON, который UI показывал сырым), контрактный кап `report_progress.message` = 500, а обращения
+агента к оркестратору (`mcp__brigadir__*`) выглядели как обычные тул-коллы с гаечным ключом.
+
+**Достоверность данных (запись).** Новый чистый `tool-input-sanitizer.ts`: `tool_call.input`
+персистится СТРУКТУРНЫМ объектом (не строкой). Политика по имени поля на любой глубине:
+человеческий текст (`message/title/details/summary`) — целиком, скраб; файловые тела
+(`content/new_string/old_string`) → плейсхолдер `"<file content, N KB>"`; прочие строки — скраб +
+кап 2000, флаг `truncated`. **Рекурсия в вложенные объекты/массивы** (`checks[].reason`,
+`artifacts.*` у `complete_task`) — каждая вложенная строка проходит скраб (Принцип V; закрывает
+находку C1 из `/speckit-analyze`). Парсер больше не режет ассистентский текст, сэмплинг поднят
+20→100 строк; `report_progress.message` контракт 500→4000 (reject, не обрезка). Исполнитель
+прокидывает реальный `@brigadir/scrubber.scrub`. Схема БД не тронута — `run_events.payload` уже
+`jsonb`, изменилась только форма значений; запись в Jira не тронута.
+
+**Презентация (чтение).** Пресентер стал типизированным view-model'ом (`bodyFormat
+markdown|mono|kv`, `tags`, `orchestrator`/`iconKey`, `legacyTruncated`/`fieldTruncated`). Выделен
+компонент `RunTimeline/TimelineEvent.vue` (имя `RunCard.vue` уже занято детальным вью прогона):
+message/details/summary → Markdown через `MarkdownText.vue`, команды/сырьё → моноблок, файловое
+тело → плейсхолдер, длинное тело — пер-элементный «Show more/less» (полный текст всегда в DOM —
+уточнение решения 2026-07-15, не отмена). Типизированные карточки brigadir-коллов: `request_human`
+(заголовок из `title`, теги `kind`+`blocking`, `details` Markdown, иконка MessageCircleQuestion);
+`complete_task` («Complete · outcome», `summary` Markdown, тег «N checks», FlagTriangleRight);
+`report_progress` («report_progress → Brigadir», Megaphone) — дедуп с progress-событием сохранён.
+Структурный payload без текстового поля → компактный key/value список, не JSON-дамп. Все иконки
+статичные (правило: hover-анимация только в сайдбаре).
+
+**Тесты.** `tool-input-sanitizer.spec.ts` (новый), расширен `stream-parser.spec.ts` (структурный
+payload, полный текст, кап 100, C1-регрессия на вложенных строках), `callback-tools.schema.spec.ts`
+(+4000/−4001), `run-timeline-presenter.spec.ts` (форматы тела, orchestrator/карточки/kv, дедуп),
+новый `run-timeline-event.spec.ts` (Markdown vs `<pre>`, коллапс, иконки, теги, kv, статичность),
+`test/integration/callback-progress.spec.ts` (+4000-символьное сообщение целиком, фиделити
+`request_human.details`).
+
+**Гейты.** `pnpm typecheck` + web `vue-tsc` + `pnpm lint` — зелёные; `pnpm test` — unit 458;
+web-сьют — 281. `pnpm test:integration callback-progress` — требует Docker (в этой сессии не
+запускался; контрактный кап 4000 покрыт юнитом). Схема БД / запись в Jira / дедуп — не тронуты;
+миграций и новых внешних зависимостей нет.
+
+## Iteration 39 — Durable finalization v2: deployment guard + рабочая outbox-страховка (feature 026 durable-run-finalization-v2, 2026-07-21)
+
+> Примечание: номер фичи 026 занят двумя параллельными работами — читаемость
+> таймлайна (Iteration 38, `specs/026-run-timeline-readability`) и эта
+> durable-финализация (`specs/026-durable-run-finalization-v2`). Обе слиты; здесь
+> — вторая.
 
 **Контекст.** Пост-мортем прогона `3f60c1a1` (2026-07-20) поверх инцидента
 2026-07-19: у callback-финализации нет рабочей страховки. QA-агент вычислил PASS,

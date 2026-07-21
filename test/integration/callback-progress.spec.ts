@@ -138,4 +138,36 @@ describe('progress events + non-blocking human notes (T111)', () => {
     expect(tasks).toHaveLength(1);
     expect(tasks[0]).toMatchObject({ blocking: false, title: 'FYI: using the v2 endpoint' });
   });
+
+  // feature 026 (FR-004/FR-022): a ~4000-char progress message is accepted and
+  // persisted in full; a multi-paragraph human-request details survives intact.
+  it('a 4000-char progress message persists in full, and request_human details keep full fidelity', async () => {
+    const { runId, workspaceId, ticketKey } = await seedRunningRun();
+    const token = tokenFor(runId, workspaceId, ticketKey);
+
+    const longMessage = 'A'.repeat(4000);
+    const p = await post(runId, 'progress', token, { stage: 'implementing', message: longMessage });
+    expect(p.status).toBe(200);
+
+    const [event] = await db.db
+      .select()
+      .from(schema.runEvents)
+      .where(and(eq(schema.runEvents.runId, runId), eq(schema.runEvents.type, 'progress')))
+      .orderBy(schema.runEvents.id);
+    expect((event.payload as { message: string }).message).toBe(longMessage);
+
+    const details = '## Context\n\nFirst paragraph.\n\n- point one\n- point two\n\nSecond paragraph.';
+    const humanRes = await post(runId, 'human', token, {
+      kind: 'question',
+      title: 'Multi-paragraph question',
+      details,
+      blocking: false,
+    });
+    expect(humanRes.status).toBe(200);
+    const [task] = await db.db
+      .select()
+      .from(schema.humanTasks)
+      .where(and(eq(schema.humanTasks.runId, runId), eq(schema.humanTasks.title, 'Multi-paragraph question')));
+    expect(task.details).toBe(details);
+  });
 });
