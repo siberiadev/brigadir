@@ -1,8 +1,9 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, access, readFile, writeFile } from 'node:fs/promises';
+import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { createToolHandlers } from './tools';
+import { createToolHandlers, type ToolHandlersConfig } from './tools';
 import { outboxFilePath } from './outbox';
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -493,5 +494,143 @@ describe('createToolHandlers (T095)', () => {
 
     const missing = await handlers.get_ticket({});
     expect(missing.isError).toBe(true);
+  });
+});
+
+/**
+ * Contract tests over REAL HTTP with the REAL global fetch — no `fetchImpl`
+ * injection. The 2026-07-19/20 incident shipped a fetch option (`dispatcher:
+ * node:http.Agent`) that only ever executed on the production path, which the
+ * mock-based suite above never exercises; every real tool call failed with
+ * `TypeError: fetch failed`. These tests pin the production fetch path to a
+ * live `node:http` server so a client-side transport regression can never be
+ * mock-blind again.
+ */
+describe('createToolHandlers over real HTTP (no fetchImpl — production fetch path)', () => {
+  interface SeenRequest {
+    method: string;
+    url: string;
+    headers: Record<string, string | string[] | undefined>;
+    body: string;
+  }
+
+  let tmpDir: string;
+  let server: Server | undefined;
+  let seen: SeenRequest[];
+  /** Status/body per request, in order; the last entry repeats. */
+  let responses: { status: number; body: unknown }[];
+
+  afterEach(async () => {
+    if (server) {
+      // Undici's fetch keep-alives its sockets — drop them so close() resolves.
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server!.close(() => resolve()));
+      server = undefined;
+    }
+    if (tmpDir) await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function setup(
+    responseQueue: { status: number; body: unknown }[],
+  ): Promise<{ markerPath: string; config: ToolHandlersConfig; port: number }> {
+    tmpDir = await mkdtemp(join(tmpdir(), 'brigadir-mcp-http-'));
+    seen = [];
+    responses = responseQueue;
+    server = createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk: Buffer) => (body += chunk.toString('utf8')));
+      req.on('end', () => {
+        seen.push({ method: req.method ?? '', url: req.url ?? '', headers: req.headers, body });
+        const next = responses.length > 1 ? responses.shift()! : responses[0];
+        res.writeHead(next.status, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(next.body));
+      });
+    });
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+    const address = server!.address();
+    if (address === null || typeof address === 'string') throw new Error('no ephemeral port');
+    const port = address.port;
+    return {
+      markerPath: join(tmpDir, 'run.marker'),
+      port,
+      config: {
+        callbackUrl: `http://127.0.0.1:${port}/api/callbacks`,
+        runId: 'run-1',
+        runToken: 'real-http-token',
+        markerPath: join(tmpDir, 'run.marker'),
+        retryDelayMs: () => 1,
+        networkRetryDelayMs: () => 1,
+        maxNetworkErrorRetries: 1,
+      },
+    };
+  }
+
+  it('report_progress delivers a Bearer-authed JSON POST and returns success on 200', async () => {
+    const { config } = await setup([{ status: 200, body: { ok: true } }]);
+    const handlers = createToolHandlers(config);
+
+    const result = await handlers.report_progress({ stage: 'build', message: 'compiling' });
+
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(result.content[0].text)).toMatchObject({ ok: true });
+    expect(seen).toHaveLength(1);
+    expect(seen[0].method).toBe('POST');
+    expect(seen[0].url).toBe('/api/callbacks/runs/run-1/progress');
+    expect(seen[0].headers.authorization).toBe('Bearer real-http-token');
+    expect(seen[0].headers['content-type']).toBe('application/json');
+    expect(JSON.parse(seen[0].body)).toEqual({ stage: 'build', message: 'compiling' });
+  });
+
+  it('complete_task on 2xx writes the marker and removes the outbox file', async () => {
+    const { config, markerPath } = await setup([{ status: 200, body: { ok: true, outcome: 'success' } }]);
+    const handlers = createToolHandlers(config);
+
+    const result = await handlers.complete_task({ schema_version: 1, outcome: 'success', summary: 'done', checks: [] });
+
+    expect(result.isError).toBeUndefined();
+    expect(await exists(markerPath)).toBe(true);
+    expect(await exists(outboxFilePath(markerPath, 'run-1'))).toBe(false);
+    expect(seen[0].url).toBe('/api/callbacks/runs/run-1/complete');
+  });
+
+  it('complete_task against a refused connection surfaces a network error and keeps the outbox', async () => {
+    const { config, markerPath } = await setup([{ status: 200, body: { ok: true } }]);
+    // Close the server so the port actively refuses connections.
+    await new Promise<void>((resolve) => server!.close(() => resolve()));
+    server = undefined;
+    const handlers = createToolHandlers(config);
+
+    const report = { schema_version: 1, outcome: 'success', summary: 'done', checks: [] };
+    const result = await handlers.complete_task(report);
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text).error).toMatch(/network error/);
+    expect(await exists(markerPath)).toBe(false);
+    const outboxPath = outboxFilePath(markerPath, 'run-1');
+    expect(await exists(outboxPath)).toBe(true);
+    expect(JSON.parse(await readFile(outboxPath, 'utf8'))).toMatchObject({ runId: 'run-1', report });
+  });
+
+  it('a 4xx returns immediately as a tool error with zero retries', async () => {
+    const { config } = await setup([{ status: 422, body: { ok: false, errors: [{ path: ['human_task'] }] } }]);
+    const handlers = createToolHandlers(config);
+
+    const result = await handlers.complete_task({ schema_version: 1, outcome: 'needs_human', summary: 's', checks: [] });
+
+    expect(result.isError).toBe(true);
+    expect(seen).toHaveLength(1);
+  });
+
+  it('a 500 then 200 succeeds over real HTTP (retry works end to end)', async () => {
+    const { config } = await setup([
+      { status: 500, body: { ok: false } },
+      { status: 200, body: { ok: true } },
+    ]);
+    const handlers = createToolHandlers(config);
+
+    const result = await handlers.report_progress({ stage: 'x', message: 'y' });
+
+    expect(result.isError).toBeUndefined();
+    expect(seen).toHaveLength(2);
   });
 });

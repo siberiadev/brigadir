@@ -1,7 +1,5 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { Agent as HttpAgent } from 'node:http';
-import { Agent as HttpsAgent } from 'node:https';
 import { writeMarker } from './marker.js';
 import { writeOutbox, removeOutbox } from './outbox.js';
 
@@ -81,7 +79,6 @@ interface CallbackResponse {
 
 interface RetryConfig {
   fetchImpl: typeof fetch;
-  usesCustomFetch: boolean;
   maxRetries: number;
   retryDelayMs: (attempt: number) => number;
   maxNetworkErrorRetries: number;
@@ -99,20 +96,6 @@ function defaultHttpRetryDelayMs(attempt: number): number {
 
 function defaultNetworkRetryDelayMs(attempt: number): number {
   return Math.min(2 ** attempt * 100, 30000);
-}
-
-const sharedHttpAgent = new HttpAgent({ keepAlive: true });
-const sharedHttpsAgent = new HttpsAgent({ keepAlive: true });
-
-function pickAgent(url: string): HttpAgent | HttpsAgent | undefined {
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol === 'http:') return sharedHttpAgent;
-    if (parsed.protocol === 'https:') return sharedHttpsAgent;
-  } catch {
-    // malformed URL — proceed without keep-alive agent
-  }
-  return undefined;
 }
 
 function logDiagnostic(
@@ -209,7 +192,6 @@ async function postWithRetry(
   cfg: RetryConfig,
   extraHeaders: Record<string, string> = {},
 ): Promise<CallbackResponse> {
-  const agent = cfg.usesCustomFetch ? undefined : pickAgent(url);
   return fetchWithRetry(
     url,
     (signal) =>
@@ -222,8 +204,7 @@ async function postWithRetry(
         },
         body: JSON.stringify(body),
         signal,
-        ...(agent ? { dispatcher: agent } : {}),
-      } as RequestInit),
+      }),
     cfg,
     { method: 'POST' },
   );
@@ -235,7 +216,6 @@ async function getWithRetry(
   runToken: string,
   cfg: RetryConfig,
 ): Promise<CallbackResponse> {
-  const agent = cfg.usesCustomFetch ? undefined : pickAgent(url);
   return fetchWithRetry(
     url,
     (signal) =>
@@ -243,8 +223,7 @@ async function getWithRetry(
         method: 'GET',
         headers: { authorization: `Bearer ${runToken}` },
         signal,
-        ...(agent ? { dispatcher: agent } : {}),
-      } as RequestInit),
+      }),
     cfg,
     { method: 'GET' },
   );
@@ -268,7 +247,6 @@ export function createToolHandlers(config: ToolHandlersConfig): {
 } {
   const cfg: RetryConfig = {
     fetchImpl: config.fetchImpl ?? fetch,
-    usesCustomFetch: config.fetchImpl !== undefined,
     maxRetries: config.maxRetries ?? 3,
     retryDelayMs: config.retryDelayMs ?? defaultHttpRetryDelayMs,
     maxNetworkErrorRetries: config.maxNetworkErrorRetries ?? 10,
