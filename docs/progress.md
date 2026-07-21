@@ -2116,3 +2116,48 @@ run --project integration` по срезам feature-026 — 12/12 зелёны�
 **Гейты.** Полный `pnpm test:integration` — впервые целиком зелёный. `pnpm typecheck &&
 pnpm lint && pnpm test` (теперь с вебом) — зелёные. Прод-код затронут одной точкой —
 SPA-fallback бэкенда; схема БД, контракты, пайплайн — не тронуты.
+
+## Iteration 41 — Устойчивость callback-канала: стабильный режим + worker-lock + breadcrumbs + channel-health (feature 027, 2026-07-21)
+
+Закрывает два оставшихся пробела пост-мортема 2026-07-19/20 (спека
+`specs/027-callback-channel-resilience/`, clarify-решения от 2026-07-21).
+
+- **A. Стабильный режим для агент-прогонов** (`scripts/agents-mode.mjs`,
+  `pnpm agents:start|stop|status`, docs/local-setup.md §2a): вторая native
+  non-watch пара из собранных бандлов на `BRIGADIR_AGENTS_PORT` (3210);
+  callback-цель агентов отвязана от dev-стека человека. Guard/probe/outbox —
+  идентичны dev-режиму (тот же cwd и configRoot). Живая проверка: пара
+  поднята против одноразовых контейнеров, health 200, drain-based stop.
+- **A. Эксклюзивный worker-lock** (`worker-lock.service.ts` + bootstrap; все
+  процессоры → `autorun: false`): один консьюмер на BullMQ-неймспейс. Контендер
+  не потребляет НИЧЕГО и орёт ERROR'ом каждые ~2 c; держатель видит contender-ключ
+  и орёт со своей стороны; смерть держателя ⇒ takeover ≤ TTL (15 c). Интеграция:
+  `worker-lock.spec.ts` (блокировка, handover, TTL-takeover, изоляция префиксов).
+  Живой drill: dev-worker против agents-пары — ERROR ≤ 1 c с обеих сторон.
+- **B. Channel-failure breadcrumbs**: tool-сервер пишет summary-строку в
+  `<configRoot>/.brigadir-channel/<runId>.jsonl` при исчерпании ЛЮБОГО
+  retry-бюджета (network 11 попыток / 5xx 4; поза outbox'а — never throws, кап
+  64 KB). Worker переливает в `run_events` `channel_failure` на всех терминальных
+  ветках + вторым сканом реконсайлера; идемпотентность — атомарный rename-claim;
+  статус/outcome не пишутся никогда (правило 7); скраббер на error.message.
+  Таймлайн: карточка «Сбой callback-канала» (kv, danger, Unplug). Тесты: юниты
+  писателя/ридера + real-fetch contract case (refused connection ⇒ breadcrumb) +
+  `channel-breadcrumbs.spec.ts` (exit/reconcile/гонка/ретеншн).
+- **C. Channel-health**: `GET /api/channel-health` (dashboard-bearer, additive;
+  `ChannelHealthResponseSchema`) — оконные счётчики failures/probe-отказов,
+  `last_successful_callback_at` (тег `via:'callback'` на живых progress-событиях),
+  вердикт deployment guard'а из процесса backend'а, `affected_runs` cap 20.
+  degraded ⇔ probe ≥ 1 | failures ≥ 3 | guard не ok (окно 15 мин; env-тюнинг,
+  ленивое чтение). UI: индикатор в сайдбаре (поллинг 5 c, `placeholderData`),
+  поповер с фактами и ссылками на прогоны; маркер `callback_alert` в списке
+  прогонов (EXISTS-проекция механизма 026). Живой drill: seed `channel_down` →
+  индикатор красный + поповер с BRG-1 → старение события → healthy.
+- **Решения**: наблюдаемость НЕ гейтит прогоны (admission — только pre-flight
+  probe); общий configRoot между режимами намеренно (реконсайлер активного
+  worker'а дорезолвит чужие файлы); `run_events.type` — без миграций.
+
+**Гейты.** `pnpm typecheck && pnpm lint && pnpm test`, полный
+`pnpm test:integration` — зелёные (новые сьюты: worker-lock,
+channel-breadcrumbs, channel-health; веб: индикатор, маркер, presenter).
+Phase-0 прогоны не затронуты; callback-эндпоинты и Jira-путь не тронуты;
+схема БД без изменений.

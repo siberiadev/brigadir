@@ -18,3 +18,4 @@ export * from './global-settings.schema';
 export * from './admin-tools.schema';
 export * from './orchestrator-defaults';
 export * from './orchestrator-template.schema';
+export * from './channel.schema';

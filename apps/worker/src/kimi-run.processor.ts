@@ -25,6 +25,9 @@ import { ClaudeCliRunProcessor } from './claude-cli-run.processor';
   concurrency: 2,
   maxStalledCount: 0,
   settings: { backoffStrategy },
+  // Feature 027: consumption is gated by the exclusive worker lock
+  // (WorkerLockBootstrap starts the run loop only once the lock is held).
+  autorun: false,
 })
 export class KimiRunProcessor extends ClaudeCliRunProcessor {
   protected override readonly executorType: string = 'kimi';

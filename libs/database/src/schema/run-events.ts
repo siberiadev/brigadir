@@ -3,6 +3,8 @@ import { runs } from './runs';
 
 // architecture.md §3 — run_events (run timeline).
 // type: progress | log | tool_call | api_retry | error | jira_action
+//       | undelivered_report | channel_down (feature 026)
+//       | channel_failure (feature 027 — доставка callback'а исчерпала ретраи)
 export const runEvents = pgTable(
   'run_events',
   {

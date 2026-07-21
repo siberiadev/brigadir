@@ -63,6 +63,11 @@ export const RunListItemSchema = z
     started_at: z.string().nullable(),
     cost_usd: z.string().nullable(),
     created_at: z.string(),
+    // Feature 027 (FR-015): у прогона есть недоставленные/сорвавшиеся
+    // callbacks — EXISTS по run_events типов undelivered_report /
+    // channel_failure (переиспользование механизма 026, не второй механизм).
+    // Per-run факт, НЕ оконный (в отличие от глобального channel-health).
+    callback_alert: z.boolean(),
   })
   .strict();
 export type RunListItem = z.infer<typeof RunListItemSchema>;

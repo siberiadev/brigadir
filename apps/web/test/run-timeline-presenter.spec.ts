@@ -294,3 +294,52 @@ describe('presentEvents — report_progress dedup', () => {
     expect(items).toHaveLength(2);
   });
 });
+
+describe('presentEvent — channel_failure (feature 027)', () => {
+  const payload = {
+    ts: '2026-07-21T10:00:00.000Z',
+    tool: 'complete_task',
+    kind: 'network',
+    attempts: 11,
+    error: { name: 'TypeError', message: 'fetch failed' },
+    target: '127.0.0.1:3210',
+    occurred_at: '2026-07-21T10:00:00.000Z',
+    source: 'exit',
+  };
+
+  it('renders a kv card: tool, attempts, error, target, occurred_at', () => {
+    const item = presentEvent(event('channel_failure', payload));
+    expect(item.typeKey).toBe('channel_failure');
+    expect(item.title).toBe('Сбой callback-канала');
+    expect(item.bodyFormat).toBe('kv');
+    const kv = Object.fromEntries((item.kv ?? []).map((p) => [p.key, p.value]));
+    expect(kv['тулза']).toBe('complete_task');
+    expect(kv['попыток']).toBe('11');
+    expect(kv['ошибка']).toBe('TypeError: fetch failed');
+    expect(kv['цель']).toBe('127.0.0.1:3210');
+    expect(kv['когда']).toBeTruthy(); // occurred_at, не created_at строки
+    expect(item.tags).toEqual([{ label: 'network', tone: 'warning' }]);
+  });
+
+  it('http-exhaustion adds the HTTP status row', () => {
+    const item = presentEvent(
+      event('channel_failure', {
+        ...payload,
+        kind: 'http',
+        attempts: 4,
+        status: 502,
+        error: { name: 'HTTPError', message: 'HTTP 502' },
+      }),
+    );
+    const kv = Object.fromEntries((item.kv ?? []).map((p) => [p.key, p.value]));
+    expect(kv['HTTP']).toBe('502');
+    expect(item.tags?.[0]?.label).toBe('http');
+  });
+
+  it('malformed payload never crashes and still shows the title', () => {
+    const item = presentEvent(event('channel_failure', 'garbage'));
+    expect(item.title).toBe('Сбой callback-канала');
+    expect(item.bodyFormat).toBeNull();
+    expect(item.kv).toBeNull();
+  });
+});

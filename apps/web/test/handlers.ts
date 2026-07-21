@@ -222,6 +222,7 @@ export const sampleRunListItem: RunListResponse['items'][number] = {
   started_at: '2026-07-12T10:00:05.000Z',
   cost_usd: '0.1234',
   created_at: '2026-07-12T10:00:00.000Z',
+  callback_alert: false,
 };
 
 /** A currently-active run — pulse dot + live-ticking Duration in the table.
@@ -238,6 +239,7 @@ export const sampleRunningListItem: RunListResponse['items'][number] = {
   started_at: '2026-07-12T11:00:00.000Z',
   cost_usd: null,
   created_at: '2026-07-12T11:00:00.000Z',
+  callback_alert: false,
 };
 
 export const sampleRunList: RunListResponse = {
@@ -573,6 +575,35 @@ export const sampleHomeWorkspaces: HomeWorkspacesResponse = {
   ],
 };
 
+
+// --- feature 027: channel health (US4) ---
+
+export const sampleChannelHealth = {
+  status: 'healthy' as const,
+  generated_at: '2026-07-21T17:20:00.000Z',
+  window_ms: 900_000,
+  failure_threshold: 3,
+  last_successful_callback_at: '2026-07-21T17:04:12.345Z',
+  channel_failures_in_window: 0,
+  probe_failures_in_window: 0,
+  deployment_guard: { ok: true, reason: null },
+  affected_runs: [],
+};
+
+export const degradedChannelHealth = {
+  ...sampleChannelHealth,
+  status: 'degraded' as const,
+  channel_failures_in_window: 4,
+  probe_failures_in_window: 1,
+  affected_runs: [
+    {
+      run_id: 'run-degraded-1',
+      ticket_key: 'BRIG-42',
+      last_event_at: '2026-07-21T17:18:03.000Z',
+    },
+  ],
+};
+
 export const defaultHandlers = [
   http.get('/api/workspaces', () =>
     HttpResponse.json<WorkspaceListResponse>(paginated([sampleWorkspace])),
@@ -600,6 +631,8 @@ export const defaultHandlers = [
   // Home dashboard (feature 017): atomic summary, workspace cards, and the
   // bounded global runs list (dispatched on the mandatory `status` filter).
   http.get('/api/home/summary', () => HttpResponse.json(sampleHomeSummary)),
+  // feature 027: channel-health индикатор (healthy по умолчанию).
+  http.get('/api/channel-health', () => HttpResponse.json(sampleChannelHealth)),
   http.get('/api/home/workspaces', () => HttpResponse.json(sampleHomeWorkspaces)),
   http.get('/api/runs', ({ request }) => {
     const status = new URL(request.url).searchParams.get('status') ?? '';

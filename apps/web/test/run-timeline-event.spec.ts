@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { mount } from '@vue/test-utils';
-import { Megaphone, MessageCircleQuestion, FlagTriangleRight, Wrench } from 'lucide-vue-next';
+import { Megaphone, MessageCircleQuestion, FlagTriangleRight, Unplug, Wrench } from 'lucide-vue-next';
 import TimelineEvent from '../src/components/RunTimeline/TimelineEvent.vue';
 import MarkdownText from '../src/components/MarkdownText.vue';
 import type { TimelineItem } from '../src/components/RunTimeline/presenter';
@@ -124,5 +124,30 @@ describe('TimelineEvent', () => {
     expect(dl.findAll('dt').map((n) => n.text())).toEqual(['alpha', 'beta']);
     expect(dl.findAll('dd').map((n) => n.text())).toEqual(['one', '2']);
     expect(wrapper.find('pre.mono').exists()).toBe(false);
+  });
+});
+
+describe('TimelineEvent — channel_failure (feature 027)', () => {
+  it('uses the Unplug icon with the danger accent class and renders the kv block', () => {
+    const wrapper = mount(TimelineEvent, {
+      props: {
+        item: item({
+          typeKey: 'channel_failure',
+          iconKey: 'channel_failure',
+          title: 'Сбой callback-канала',
+          body: null,
+          bodyFormat: 'kv',
+          kv: [
+            { key: 'тулза', value: 'complete_task' },
+            { key: 'попыток', value: '11' },
+          ],
+          tags: [{ label: 'network', tone: 'warning' }],
+        }),
+      },
+    });
+    expect(wrapper.findComponent(Unplug).exists()).toBe(true);
+    expect(wrapper.find('li.event').classes()).toContain('event--channel_failure');
+    expect(wrapper.find('dl.kv').text()).toContain('complete_task');
+    expect(wrapper.find('.tag').text()).toBe('network');
   });
 });

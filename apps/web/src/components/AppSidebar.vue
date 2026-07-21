@@ -2,7 +2,9 @@
 import type { Component } from 'vue';
 import { useRoute, type RouteLocationRaw } from 'vue-router';
 import { House, LayoutGrid, Inbox, LogOut, Settings } from 'lucide-vue-next';
+import type { ChannelHealthResponse } from '@brigadir/contracts';
 import AnimatedIcon from './AnimatedIcon.vue';
+import ChannelHealthIndicator from './ChannelHealthIndicator.vue';
 
 /**
  * Icon rail (feature 009). PURE presentational: it takes the open-human-task
@@ -10,7 +12,9 @@ import AnimatedIcon from './AnimatedIcon.vue';
  * inside. `App.vue` owns the count query + the 006 landing watch and passes
  * `openCount` down; sign-out flows up as an emit (contracts/app-sidebar.md).
  */
-defineProps<{ openCount: number }>();
+// `channelHealth` (feature 027): агрегат здоровья callback-канала — тем же
+// маршрутом, что openCount (query в App.vue, сайдбар остаётся презентационным).
+defineProps<{ openCount: number; channelHealth?: ChannelHealthResponse | null }>();
 const emit = defineEmits<{ (e: 'sign-out'): void }>();
 
 // Static, two-item nav config (data-model.md NavItem). `LogOut` is imported for
@@ -100,6 +104,9 @@ const route = useRoute();
       </el-tooltip>
     </nav>
     <div class="sidebar-bottom">
+      <!-- Feature 027: глобальный индикатор здоровья callback-канала (US4).
+           Статичная иконка — state-индикатор, не пункт меню (без hover-анимации). -->
+      <ChannelHealthIndicator :health="channelHealth ?? null" />
       <!-- Platform Settings (2026-07-13): pinned above Sign out, active for /settings/*. -->
       <el-tooltip content="Settings" placement="right">
         <RouterLink

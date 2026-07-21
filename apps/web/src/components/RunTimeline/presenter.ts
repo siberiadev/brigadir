@@ -22,6 +22,8 @@ export type TimelineTypeKey =
   // feature 026: durable-finalization safety-net events.
   | 'undelivered_report'
   | 'channel_down'
+  // feature 027: доставка callback'а исчерпала ретраи (breadcrumb → run_events).
+  | 'channel_failure'
   | 'unknown';
 
 export type BodyFormat = 'markdown' | 'mono' | 'kv';
@@ -71,6 +73,7 @@ const KNOWN_TYPES = new Set([
   'error',
   'undelivered_report',
   'channel_down',
+  'channel_failure',
 ]);
 
 /**
@@ -361,6 +364,42 @@ function presentChannelDown(payload: unknown): Presented {
   return { title: 'Канал недоступен', body: parts.length ? parts.join(' · ') : null, percent: null };
 }
 
+/**
+ * feature 027: доставка callback'а исчерпала ретраи — tool-сервер оставил
+ * breadcrumb, worker перелил его в run_events. Компактный key/value: когда,
+ * какая тулза, сколько попыток, последняя ошибка, цель. `occurred_at` — момент
+ * отказа доставки (created_at строки — момент ingestion'а, может отставать).
+ */
+function presentChannelFailure(payload: unknown): Presented {
+  const rec = asRecord(payload) ?? {};
+  const error = asRecord(rec.error) ?? {};
+  const kv: { key: string; value: string }[] = [];
+  const occurredAt = asString(rec.occurred_at);
+  if (occurredAt) kv.push({ key: 'когда', value: new Date(occurredAt).toLocaleString() });
+  const tool = asString(rec.tool);
+  if (tool) kv.push({ key: 'тулза', value: tool });
+  if (typeof rec.attempts === 'number') kv.push({ key: 'попыток', value: String(rec.attempts) });
+  const errName = asString(error.name);
+  const errMessage = asString(error.message);
+  if (errName || errMessage) {
+    kv.push({ key: 'ошибка', value: [errName, errMessage].filter(Boolean).join(': ') });
+  }
+  if (typeof rec.status === 'number') kv.push({ key: 'HTTP', value: String(rec.status) });
+  const target = asString(rec.target);
+  if (target) kv.push({ key: 'цель', value: target });
+
+  const kind = asString(rec.kind);
+  const tags: TimelineTag[] = kind ? [{ label: kind, tone: 'warning' }] : [];
+  return {
+    title: 'Сбой callback-канала',
+    body: null,
+    bodyFormat: kv.length ? 'kv' : null,
+    kv: kv.length ? kv : null,
+    tags,
+    percent: null,
+  };
+}
+
 function presentUnknown(payload: unknown, rawType: string): Presented {
   if (typeof payload === 'string' && payload.length > 0) {
     return { title: rawType, body: payload, percent: null };
@@ -401,6 +440,9 @@ export function presentEvent(e: RunCardEvent): TimelineItem {
       break;
     case 'channel_down':
       presented = presentChannelDown(e.payload);
+      break;
+    case 'channel_failure':
+      presented = presentChannelFailure(e.payload);
       break;
     default:
       presented = presentUnknown(e.payload, e.type);

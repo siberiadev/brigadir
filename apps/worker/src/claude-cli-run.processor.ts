@@ -27,6 +27,7 @@ import { ReportSchema, signRunToken, type AgentReport, type TriggerEvent } from 
 // live callback.
 import { scrubAgentReport } from '@brigadir/callback';
 import { attachUndeliveredReport } from './undelivered-report';
+import { ingestChannelBreadcrumbs } from './channel-breadcrumb-ingest';
 import { ChannelProbe } from './channel-probe';
 import { JiraClientFactory } from '@brigadir/jira';
 import { applyExecutorConcurrency, startConcurrencyReapply } from './executor-concurrency';
@@ -116,6 +117,9 @@ export function sanitizeRateLimitTtl(reported: unknown): number {
   concurrency: 2,
   maxStalledCount: 0,
   settings: { backoffStrategy },
+  // Feature 027: consumption is gated by the exclusive worker lock
+  // (WorkerLockBootstrap starts the run loop only once the lock is held).
+  autorun: false,
 })
 export class ClaudeCliRunProcessor
   extends WorkerHost
@@ -349,6 +353,9 @@ export class ClaudeCliRunProcessor
           // delivered, so consume the file and skip the fail-closed write.
           await this.consumeOutbox(runId);
           if (reconciled) await this.afterFinalize(runId);
+          // Feature 027 (US3): терминальная ветка — перелить breadcrumb-файл
+          // канала (если был) в run_events; best-effort, статус не трогает.
+          await ingestChannelBreadcrumbs(this.db, runId, 'exit');
           return;
         }
         // FR-010/011 (D7): no valid outbox report — fail closed, guarded WHERE
@@ -360,6 +367,8 @@ export class ClaudeCliRunProcessor
         if (flipped) {
           await this.afterFinalize(runId);
         }
+        // Feature 027 (US3): fail-closed — тоже терминальная ветка.
+        await ingestChannelBreadcrumbs(this.db, runId, 'exit');
         return;
       }
 
@@ -453,6 +462,9 @@ export class ClaudeCliRunProcessor
           // NOT clobber the park. Same for a timeout/crash racing a callback.
           const flipped = await this.runs.finalizeStatusIfRunning(runId, decision.status, extra);
           if (flipped) await this.afterFinalize(runId);
+          // Feature 027 (US3): любой финализирующий исход callback-wired
+          // прогона переливает breadcrumb-файл канала в run_events.
+          await ingestChannelBreadcrumbs(this.db, runId, 'exit');
           return;
         }
         await this.runs.finalizeStatus(runId, decision.status, extra);

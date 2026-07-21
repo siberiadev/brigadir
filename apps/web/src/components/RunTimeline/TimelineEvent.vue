@@ -19,6 +19,7 @@ import {
   RotateCcw,
   Ticket,
   TriangleAlert,
+  Unplug,
   Wrench,
 } from 'lucide-vue-next';
 import MarkdownText from '../MarkdownText.vue';
@@ -56,6 +57,8 @@ const ICONS: Record<IconKey, Component> = {
   // feature 026 durable-finalization safety-net events.
   undelivered_report: MailWarning,
   channel_down: PlugZap,
+  // feature 027: доставка callback'а исчерпала ретраи (breadcrumb-событие).
+  channel_failure: Unplug,
 };
 
 const icon = computed<Component>(() => ICONS[props.item.iconKey] ?? CircleDot);
@@ -160,6 +163,10 @@ $body-indent: $time-width + $space-sm + $node-size + $space-sm;
   --type-color: var(--el-color-warning);
 }
 .event--channel_down {
+  --type-color: var(--el-color-danger);
+}
+// feature 027: клиентская сторона того же отказа — доставка callback'а сдалась.
+.event--channel_failure {
   --type-color: var(--el-color-danger);
 }
 .event--unknown {

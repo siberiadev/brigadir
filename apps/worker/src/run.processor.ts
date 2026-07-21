@@ -42,6 +42,9 @@ interface LoadedRun {
   concurrency: 2,
   maxStalledCount: 0,
   settings: { backoffStrategy },
+  // Feature 027: главный цикл стартует ТОЛЬКО после взятия worker-lock'а
+  // (WorkerLockBootstrap.resumeAll) — окно потребления до гейта отсутствует.
+  autorun: false,
 })
 export class RunProcessor extends WorkerHost implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = new Logger(RunProcessor.name);

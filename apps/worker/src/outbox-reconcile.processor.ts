@@ -8,7 +8,9 @@ import { OutboxReconcileService } from './outbox-reconcile.service';
  * Periodic outbox-reconcile job (feature 026, US3). Delegates one scan pass to
  * `OutboxReconcileService.run()`. Scheduled by `OutboxReconcileScheduler`.
  */
-@Processor(OUTBOX_RECONCILE_QUEUE)
+// Feature 027: autorun:false — цикл стартует после взятия worker-lock'а
+// (WorkerLockBootstrap); переливка outbox/breadcrumbs — тоже single-consumer.
+@Processor(OUTBOX_RECONCILE_QUEUE, { autorun: false })
 export class OutboxReconcileProcessor extends WorkerHost {
   private readonly logger = new Logger(OutboxReconcileProcessor.name);
 

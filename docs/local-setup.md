@@ -66,6 +66,49 @@ pnpm --filter @brigadir/web dev
 
 ⚠️ `node --env-file` обязателен: `.env` сам по себе никем не читается, а `pnpm start:backend` переменные из него не подхватит.
 
+## 2a. Стабильный режим для агент-прогонов (feature 027)
+
+**Проблема, которую режим закрывает** (пост-мортем 2026-07-19/20): пока
+агент-прогоны идут через дев-пару на :3000, каждый рестарт/битый ребилд
+dev-стека под правки человека роняет callback-канал живых прогонов. Все
+реальные окна отказа коррелировали с активностью человека в редакторе.
+
+**Решение**: вторая native non-watch пара backend+worker из собранных
+бандлов на отдельном порту (`BRIGADIR_AGENTS_PORT`, дефолт 3210). Worker
+стабильной пары получает `BRIGADIR_CALLBACK_BASE_URL=http://127.0.0.1:3210/api/callbacks`;
+дев-стек на :3000 остаётся человеку — правь/ломай что угодно, канал агентов
+не шелохнётся.
+
+```bash
+pnpm agents:start    # сборка (contracts → mcp-server → backend → worker) + запуск пары
+pnpm agents:status   # живость процессов + /health + /api/callbacks/health на agents-порту
+pnpm agents:stop     # SIGTERM: worker дренит in-flight прогоны, потом гаснет backend
+```
+
+Pidfiles и логи — в `.agents-mode/` (gitignored). Оба процесса стартуют с
+`--env-file=.env` и cwd = корень репо, поэтому deployment guard и pre-flight
+probe (feature 026) работают в этом режиме ИДЕНТИЧНО дев-режиму: те же
+`packages/mcp-server/dist`-пути, тот же `BRIGADIR_MCP_CONFIG_ROOT`
+(outbox/breadcrumbs общие для обоих режимов — реконсайлер активного worker'а
+дорезолвит файлы, написанные при другом режиме).
+
+**Двойное потребление исключено worker-lock'ом**: все консьюмеры очередей
+гейтятся эксклюзивным локом в Redis (`<BULLMQ_PREFIX>:worker-lock`, TTL
+`BRIGADIR_WORKER_LOCK_TTL_MS`, дефолт 15 с). Забытый dev-worker + стабильный
+worker на одном Redis — второй НЕ потребляет ни одной джобы и каждые ~2 с
+пишет ERROR с identity держателя; держатель видит контендера и тоже пишет
+ERROR (SC-002 «громко с обеих сторон»).
+
+**Переключение режимов — через дренаж**: остановите текущего держателя
+(`pnpm agents:stop` или Ctrl-C дев-worker'а) — его in-flight прогоны
+доработают, лок отдаётся ПОСЛЕ дренажа, ждущий worker подхватит его за ~2 с.
+Если держатель умер некрасиво (kill -9) — takeover за ≤ TTL лока. Прогон
+никогда не остаётся без владельца.
+
+Диагностика: `pnpm agents:status`; состояние лока — последние строки
+`worker-lock` в `.agents-mode/worker.log`; здоровье канала — индикатор в
+сайдбаре дашборда и `GET /api/channel-health` (feature 027, фаза C).
+
 ## 3. Полный docker compose
 
 `docker-compose.yml` не содержит секретов. Добавьте им pass-through (списком, БЕЗ `${}`-интерполяции значений) в сервисы `backend` и `worker`:

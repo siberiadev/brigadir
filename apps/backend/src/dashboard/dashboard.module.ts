@@ -8,6 +8,8 @@ import { RunsController } from './runs.controller';
 import { HomeController } from './home.controller';
 import { HumanTasksController } from './human-tasks.controller';
 import { BrigadirAgentSettingsController } from './brigadir-agent-settings.controller';
+import { ChannelHealthController } from './channel-health.controller';
+import { ChannelHealthService } from './channel-health.service';
 import { ExecutorBackfillService } from './executor-backfill.service';
 import { OrchestratorBackfillService } from './orchestrator-backfill.service';
 import { dashboardTokenProvider } from './dashboard-token.provider';
@@ -34,12 +36,15 @@ import { DashboardTokenGuard } from './dashboard-token.guard';
     HomeController,
     HumanTasksController,
     BrigadirAgentSettingsController,
+    // Feature 027 (US4): channel-health агрегат.
+    ChannelHealthController,
   ],
   providers: [
     dashboardTokenProvider,
     DashboardTokenGuard,
     ExecutorBackfillService,
     OrchestratorBackfillService,
+    ChannelHealthService,
   ],
 })
 export class DashboardModule {}

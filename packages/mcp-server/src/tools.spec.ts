@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createToolHandlers, type ToolHandlersConfig } from './tools';
 import { outboxFilePath } from './outbox';
+import { channelBreadcrumbFilePath } from './channel-breadcrumbs';
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -215,6 +216,78 @@ describe('createToolHandlers (T095)', () => {
     expect(calls).toBe(11); // 1 initial + 10 retries
     expect(result.isError).toBe(true);
     expect(JSON.parse(result.content[0].text).error).toMatch(/network error/);
+  });
+
+  // --- feature 027 (US3): channel-failure breadcrumbs on retry exhaustion ---
+
+  it('network-budget exhaustion writes ONE breadcrumb record (kind=network, attempts=11)', async () => {
+    const markerPath = await setup();
+    const handlers = createToolHandlers({
+      callbackUrl: 'http://callback.test:8080/api/callbacks',
+      runId: 'run-1',
+      runToken: 'tok',
+      markerPath,
+      networkRetryDelayMs: () => 0,
+      fetchImpl: async () => {
+        throw new TypeError('fetch failed');
+      },
+    });
+
+    await handlers.report_progress({ stage: 'x', message: 'y' });
+
+    const lines = (await readFile(channelBreadcrumbFilePath(markerPath, 'run-1'), 'utf8'))
+      .trim()
+      .split('\n');
+    expect(lines).toHaveLength(1); // summary-per-exhaustion, не per-attempt
+    expect(JSON.parse(lines[0])).toMatchObject({
+      tool: 'report_progress',
+      kind: 'network',
+      attempts: 11,
+      error: { name: 'TypeError', message: 'fetch failed' },
+      target: 'callback.test:8080', // host:port ONLY — никаких путей
+    });
+  });
+
+  it('5xx-budget exhaustion writes ONE breadcrumb record (kind=http, attempts=4, status)', async () => {
+    const markerPath = await setup();
+    const handlers = createToolHandlers({
+      callbackUrl: 'http://callback.test/api/callbacks',
+      runId: 'run-1',
+      runToken: 'tok',
+      markerPath,
+      retryDelayMs: () => 0,
+      fetchImpl: async () => jsonResponse(502, { ok: false }),
+    });
+
+    await handlers.complete_task({ schema_version: 1, outcome: 'success', summary: 's', checks: [] });
+
+    const lines = (await readFile(channelBreadcrumbFilePath(markerPath, 'run-1'), 'utf8'))
+      .trim()
+      .split('\n');
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0])).toMatchObject({
+      tool: 'complete_task',
+      kind: 'http',
+      attempts: 4,
+      status: 502,
+    });
+  });
+
+  it('success and 4xx write NO breadcrumbs', async () => {
+    const markerPath = await setup();
+    const responses = [jsonResponse(200, { ok: true }), jsonResponse(422, { ok: false })];
+    const handlers = createToolHandlers({
+      callbackUrl: 'http://callback.test/api/callbacks',
+      runId: 'run-1',
+      runToken: 'tok',
+      markerPath,
+      fetchImpl: async () => responses.shift()!,
+    });
+
+    await handlers.report_progress({ stage: 'x', message: 'ok' });
+    await handlers.report_progress({ stage: 'x', message: 'rejected' });
+
+    expect(await exists(channelBreadcrumbFilePath(markerPath, 'run-1'))).toBe(false);
   });
 
   it('network error backoff increases exponentially up to a 30 s ceiling', async () => {
@@ -609,6 +682,34 @@ describe('createToolHandlers over real HTTP (no fetchImpl — production fetch p
     const outboxPath = outboxFilePath(markerPath, 'run-1');
     expect(await exists(outboxPath)).toBe(true);
     expect(JSON.parse(await readFile(outboxPath, 'utf8'))).toMatchObject({ runId: 'run-1', report });
+  });
+
+  it('a refused connection over real undici leaves a breadcrumb (attempts = budget + 1) AND the outbox', async () => {
+    const { config, markerPath } = await setup([{ status: 200, body: { ok: true } }]);
+    const port = new URL(config.callbackUrl).port;
+    // Close the server so the port actively refuses connections.
+    await new Promise<void>((resolve) => server!.close(() => resolve()));
+    server = undefined;
+    const handlers = createToolHandlers(config);
+
+    const result = await handlers.complete_task({ schema_version: 1, outcome: 'success', summary: 'done', checks: [] });
+
+    expect(result.isError).toBe(true);
+    // Breadcrumb (feature 027): реальный путь undici, kind=network,
+    // attempts = 1 + maxNetworkErrorRetries (в этом setup — бюджет 1 → 2).
+    const lines = (await readFile(channelBreadcrumbFilePath(markerPath, 'run-1'), 'utf8'))
+      .trim()
+      .split('\n');
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0])).toMatchObject({
+      tool: 'complete_task',
+      kind: 'network',
+      attempts: 2,
+      error: { name: 'TypeError' },
+      target: `127.0.0.1:${port}`,
+    });
+    // Outbox не тронут — breadcrumb его не заменяет и не ломает.
+    expect(await exists(outboxFilePath(markerPath, 'run-1'))).toBe(true);
   });
 
   it('a 4xx returns immediately as a tool error with zero retries', async () => {
