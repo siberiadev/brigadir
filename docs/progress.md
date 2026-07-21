@@ -2078,3 +2078,41 @@ run --project integration` по срезам feature-026 — 12/12 зелёны�
 дефолт = прежнее поведение) — в `.env.example`. Отклонения от плана: `superseded` сгруппирован
 с `cancelled` (намеренный стоп), джиттер реконсайлера опущен (один воркер) — см.
 `research.md` D6.
+
+## Iteration 40 — Санация тестовой базы: 4 красных сьюта + прод-фикс SPA-fallback + веб-гейты (2026-07-21)
+
+**Контекст.** Полный `pnpm test:integration` никогда не был зелёным: 4 сьюта падали и на
+чистом main (доказано стэшем). Диагностика до строк показала: три — баги самих тестов
+(писались без прогона под Docker), четвёртый вскрыл настоящий прод-баг. Плюс веб-проверки
+падали на свежем чекауте 45 фантомными ошибками из-за протухшего `packages/contracts/dist`.
+
+**Сделано.**
+- `runs-cancel-all.spec`: хелпер вставлял несколько АКТИВНЫХ прогонов на одну пару
+  (ticket, agent) — ловил собственный `runs_one_active` (уровень идемпотентности №3).
+  Теперь каждый прогон на своём тикете (паттерн `runs-global.spec`).
+- `dependency-gate.spec` (reconcile-side): блокер `BLK-*` лежал вне проекта `BRIG` —
+  scope-probe корректно давал `out_of_scope` вместо ожидаемого `waiting`. Ключ блокера
+  теперь внутрипроектный (`BRIG-9xx`); ветка `out_of_scope` по-прежнему намеренно
+  покрыта в `sprint-sequencing` (`OTHER-*`).
+- `sprint-sequencing.spec`: (a) chain-тест читал `transitionsFor` сразу после
+  `status='succeeded'`, гоняясь с Jira-transition, который прод пишет ПОСЛЕ финализации —
+  добавлен `waitFor` на наблюдаемый эффект борды; (b) one-shot 500 взводился ПОСЛЕ
+  триггера G и мог пережить fast-path, детонируя на прямом (не обёрнутом в
+  `ReconcileService.step()`) вызове `reEvaluateDependencies` — порядок детерминизирован
+  (F ждёт → arm → G триггерится) + барьер `mock.search500Armed()` (новый геттер).
+- **Прод-баг SPA-fallback** (`serve-static.spec` его и поймал): renderFn
+  `ServeStaticModule` зовёт `res.sendFile(<абсолютный путь>, null)` БЕЗ `root`, и
+  `send` применяет дефолтную политику `dotfiles:'ignore'` ко ВСЕМ сегментам пути —
+  любой чекаут под dot-директорией (git-worktree `.claude/worktrees/…`) получал 404 на
+  существующий index.html (статика при этом работала — там root задан). Фикс:
+  `SpaFallbackProvider` (`apps/backend/src/spa-fallback.provider.ts`) регистрирует свой
+  fallback `res.sendFile('index.html', { root: dist })` на onModuleInit; модульный
+  fallback запаркован на несматчащийся `renderPath`. `/api/*` и `/health` не затеняются
+  (T145 сохранён).
+- **Веб-гейты**: `apps/web` `typecheck`/`test` сами собирают `@brigadir/contracts`
+  (bare-импорт резолвится в gitignored `dist`); корневые `typecheck`/`test` теперь
+  включают веб (реш. 2026-07-21). CLAUDE.md / docs/local-setup.md обновлены.
+
+**Гейты.** Полный `pnpm test:integration` — впервые целиком зелёный. `pnpm typecheck &&
+pnpm lint && pnpm test` (теперь с вебом) — зелёные. Прод-код затронут одной точкой —
+SPA-fallback бэкенда; схема БД, контракты, пайплайн — не тронуты.

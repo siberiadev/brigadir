@@ -83,6 +83,8 @@ export interface MockJira {
   setResolution(key: string, resolution: string | undefined): void;
   /** feature 022: arm a one-shot 500 on the next POST /search/jql (fast-path kill-switch tests). */
   arm500OnNextSearch(): void;
+  /** True while the one-shot search 500 is armed — false once a search consumed it (sync barrier for tests). */
+  search500Armed(): boolean;
   /** feature 020: replace the component names a ticket serves (repo-scoping round trips). */
   setComponents(key: string, components: string[]): void;
   setCategory(status: string, category: StatusCategoryKey): void;
@@ -414,6 +416,9 @@ export function mockJira(config: MockJiraConfig = {}): MockJira {
     },
     arm500OnNextSearch() {
       armed500Search = true;
+    },
+    search500Armed() {
+      return armed500Search;
     },
     setComponents(key, components) {
       const i = issues.get(key);

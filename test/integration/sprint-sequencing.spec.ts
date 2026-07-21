@@ -195,7 +195,12 @@ describe('sprint sequencing (feature 022)', () => {
     // Chain order: A started before B, B before C.
     expect(runsA[0].createdAt.getTime()).toBeLessThanOrEqual(runsB[0].createdAt.getTime());
     expect(runsB[0].createdAt.getTime()).toBeLessThanOrEqual(runsC[0].createdAt.getTime());
-    // Every ticket walked through the success transition on the board.
+    // Every ticket walked through the success transition on the board. The
+    // Done transition lands AFTER the run row flips to `succeeded` (finalize
+    // commits first, then onRunFinished performs the Jira write), so wait for
+    // the observable board effect instead of asserting the instant C's run
+    // status changes — reading immediately races C's in-flight transition.
+    await waitFor(() => [keyA, keyB, keyC].every((k) => mock.transitionsFor(k).includes('Done')));
     for (const key of [keyA, keyB, keyC]) {
       expect(mock.transitionsFor(key)).toContain('Done');
     }
@@ -221,14 +226,12 @@ describe('sprint sequencing (feature 022)', () => {
     const ticketG = await seedTicket(keyG, status);
     const ticketF = await seedTicket(keyF, status);
 
-    // G triggers; F waits on G.
-    await pipeline.onStatusChanged({
-      ticketId: ticketG,
-      issue: issueWith(keyG, status, []),
-      fromStatus: null,
-      toStatus: status,
-      source: 'scope_entry',
-    });
+    // F registers as waiting FIRST and the 500 is armed BEFORE G triggers.
+    // With the old order (G first, arm last) G's run raced the setup: its
+    // post-success fast path could fire before F's waiting row existed (no
+    // candidates → no dependent search), leaving the one-shot 500 alive to
+    // detonate on the direct reEvaluateDependencies call below — which
+    // bypasses the ReconcileService.step() guard production wraps it in.
     await pipeline.onStatusChanged({
       ticketId: ticketF,
       issue: issueWith(keyF, status, [blockedByLink(keyG, 'new')]),
@@ -240,9 +243,21 @@ describe('sprint sequencing (feature 022)', () => {
     // Kill the fast path's dependent fetch: the next search 500s.
     mock.arm500OnNextSearch();
 
+    // G triggers; F is already waiting on it.
+    await pipeline.onStatusChanged({
+      ticketId: ticketG,
+      issue: issueWith(keyG, status, []),
+      fromStatus: null,
+      toStatus: status,
+      source: 'scope_entry',
+    });
+
     // G's run must still finalize cleanly (transition + comment + marker).
     await waitFor(async () => (await runsFor(ticketG)).some((r) => r.status === 'succeeded'));
     await waitFor(() => mock.transitionsFor(keyG).includes('Done'));
+    // Sync barrier: the fast path's dependent search has consumed the armed
+    // 500 — without this the clean-reconcile call below could eat it instead.
+    await waitFor(() => !mock.search500Armed());
     expect((await runsFor(ticketF)).length).toBe(0); // fast path swallowed the failure
 
     // The guarantee: the next reconcile pass releases F.

@@ -119,10 +119,15 @@ docker compose up --build
 ## 5. Тесты
 
 ```bash
-pnpm typecheck && pnpm lint && pnpm test   # статика + юниты (быстро, без Docker)
+pnpm typecheck && pnpm lint && pnpm test   # статика + юниты + веб (без Docker; vue-tsc и веб-тесты входят)
 pnpm test:integration                       # testcontainers: нужен Docker, ~15-20 сек
-pnpm --filter @brigadir/web test            # компонентные тесты дашборда
 ```
+
+Веб-проверки входят в корневые `typecheck`/`test` и сами собирают
+`@brigadir/contracts` первым шагом (bare-импорт `@brigadir/contracts` в вебе
+резолвится в собранный `dist` пакета, который в gitignore — без сборки свежий
+чекаут падал с десятками фантомных ошибок типов). Отдельно веб можно гонять
+как раньше: `pnpm --filter @brigadir/web test`.
 
 ## 6. Частые грабли
 

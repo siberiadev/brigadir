@@ -6,9 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
-    "typecheck": "vue-tsc --noEmit",
+    "typecheck": "pnpm --filter @brigadir/contracts build && vue-tsc --noEmit",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "pnpm --filter @brigadir/contracts build && vitest run"
   },
   "dependencies": {
     "@brigadir/contracts": "workspace:*",
