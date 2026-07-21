@@ -1,4 +1,5 @@
 import { mkdir, writeFile, rm, chmod } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 /**
@@ -38,6 +39,22 @@ export interface WrittenMcpConfig {
 /** Directory OUTSIDE any worktree that holds ephemeral per-run mcp-config + marker files. */
 export function defaultMcpConfigRoot(baseTmpDir: string): string {
   return join(baseTmpDir, 'brigadir', 'mcp-config');
+}
+
+/**
+ * The live config root: `BRIGADIR_MCP_CONFIG_ROOT` if set, else
+ * `defaultMcpConfigRoot(os.tmpdir())` (feature 026). Read lazily at call
+ * time (Constitution lazy-resolution) so it is one source of truth for the
+ * mcp-config WRITER (executor), the marker-derived outbox dir the tool
+ * server writes into, and every outbox READER — the exit-time reconcile and
+ * the periodic reconciler. The env override exists so integration suites can
+ * point the outbox at a per-suite scratch dir; without it, a shared global
+ * tmpdir path would let a concurrent suite's periodic reconciler scan (and
+ * consume) foreign outbox files. Unset in production ⇒ byte-identical to the
+ * previous `defaultMcpConfigRoot(tmpdir())` behavior.
+ */
+export function resolveMcpConfigRoot(): string {
+  return process.env.BRIGADIR_MCP_CONFIG_ROOT ?? defaultMcpConfigRoot(tmpdir());
 }
 
 export async function writeMcpConfig(input: McpConfigInput, configRoot: string): Promise<WrittenMcpConfig> {

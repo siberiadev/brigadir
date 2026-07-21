@@ -12,6 +12,8 @@ import {
   Activity,
   CircleDot,
   Info,
+  MailWarning,
+  PlugZap,
   RotateCcw,
   Ticket,
   TriangleAlert,
@@ -33,6 +35,8 @@ const ICONS: Record<TimelineTypeKey, Component> = {
   jira_action: Ticket,
   api_retry: RotateCcw,
   error: TriangleAlert,
+  undelivered_report: MailWarning,
+  channel_down: PlugZap,
   unknown: CircleDot,
 };
 </script>
@@ -114,6 +118,14 @@ $body-indent: $time-width + $space-sm + $node-size + $space-sm;
   --type-color: var(--el-color-warning);
 }
 .event--error {
+  --type-color: var(--el-color-danger);
+}
+// feature 026: a rescued verdict on an intentionally-stopped run (warning),
+// and a dead-channel hold before spawn (danger — an environment outage).
+.event--undelivered_report {
+  --type-color: var(--el-color-warning);
+}
+.event--channel_down {
   --type-color: var(--el-color-danger);
 }
 .event--unknown {

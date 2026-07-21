@@ -1,4 +1,4 @@
-import { readFile, rm } from 'node:fs/promises';
+import { readFile, readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
@@ -18,9 +18,50 @@ import { join } from 'node:path';
  */
 const OUTBOX_DIR_NAME = '.brigadir-outbox';
 
+/** `<configRoot>/.brigadir-outbox`. */
+export function outboxDirPath(configRoot: string): string {
+  return join(configRoot, OUTBOX_DIR_NAME);
+}
+
 /** `<configRoot>/.brigadir-outbox/<runId>.json`. */
 export function outboxFilePath(configRoot: string, runId: string): string {
-  return join(configRoot, OUTBOX_DIR_NAME, `${runId}.json`);
+  return join(outboxDirPath(configRoot), `${runId}.json`);
+}
+
+/** One orphaned outbox file: the run id (filename stem), its full path, and mtime for retention. */
+export interface OutboxEntry {
+  runId: string;
+  filePath: string;
+  mtimeMs: number;
+}
+
+/**
+ * List `*.json` outbox files for the periodic reconciler (feature 026, US3).
+ * The filename stem is the candidate runId. A missing directory yields an
+ * empty scan (fresh machine / tmpdir cleared on reboot). Never throws;
+ * non-`.json` entries and subdirectories are ignored.
+ */
+export async function listOutboxEntries(configRoot: string): Promise<OutboxEntry[]> {
+  const dir = outboxDirPath(configRoot);
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return [];
+  }
+  const entries: OutboxEntry[] = [];
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    const filePath = join(dir, name);
+    try {
+      const s = await stat(filePath);
+      if (!s.isFile()) continue;
+      entries.push({ runId: name.slice(0, -'.json'.length), filePath, mtimeMs: s.mtimeMs });
+    } catch {
+      // vanished between readdir and stat — skip.
+    }
+  }
+  return entries;
 }
 
 /**

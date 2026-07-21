@@ -48,7 +48,8 @@ import {
   type NarrowResult,
 } from './scope-ticket';
 import { buildWrapperText } from './wrapper';
-import { writeMcpConfig, defaultMcpConfigRoot, type WrittenMcpConfig } from './mcp-config';
+import { writeMcpConfig, resolveMcpConfigRoot, type WrittenMcpConfig } from './mcp-config';
+import { resolveMcpServerEntryPath } from './mcp-server-path';
 import { buildFeatureContextSection } from './feature-context';
 import {
   getPriorWork,
@@ -296,14 +297,14 @@ export class ClaudeCliExecutor implements AgentExecutor {
             runId: ctx.runId,
             callbackUrl: ctx.callback.httpBaseUrl,
             runToken: ctx.callback.runToken,
-            mcpServerEntryPath: this.resolveMcpServerEntryPath(),
+            mcpServerEntryPath: resolveMcpServerEntryPath(),
             // Feature 024: the gate observes these worktrees' HEADs at
             // complete_task. Empty for no-repo runs (workspace is null).
             repoDirs: Object.fromEntries(
               (workspace?.repos ?? []).map((r) => [r.repo.name, r.worktreeDir]),
             ),
           },
-          defaultMcpConfigRoot(tmpdir()),
+          resolveMcpConfigRoot(),
         );
       }
 
@@ -376,11 +377,6 @@ export class ClaudeCliExecutor implements AgentExecutor {
     } catch (err) {
       this.logger.error(`workspace cleanup failed for run ${runId}: ${String(err)}`);
     }
-  }
-
-  /** Resolves to the built `packages/mcp-server/dist/main.js`; overridable for deployments/tests. */
-  private resolveMcpServerEntryPath(): string {
-    return process.env.BRIGADIR_MCP_SERVER_ENTRY ?? join(process.cwd(), 'packages', 'mcp-server', 'dist', 'main.js');
   }
 
   private runProcess(

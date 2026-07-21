@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { outboxFilePath, readOutboxReport, consumeOutbox } from './outbox';
+import { outboxFilePath, readOutboxReport, consumeOutbox, listOutboxEntries } from './outbox';
 
 describe('outbox (Phase 4 — durable finalize reconcile)', () => {
   let root: string;
@@ -58,5 +58,27 @@ describe('outbox (Phase 4 — durable finalize reconcile)', () => {
     expect(await readOutboxReport(root, 'run-1')).toBeNull();
     // Idempotent — a second consume must not throw.
     await expect(consumeOutbox(root, 'run-1')).resolves.toBeUndefined();
+  });
+
+  // --- feature 026 (US3): listOutboxEntries for the periodic reconciler ---
+
+  it('listOutboxEntries returns [] when the outbox dir is missing', async () => {
+    root = await mkdtemp(join(tmpdir(), 'brigadir-outbox-test-'));
+    expect(await listOutboxEntries(root)).toEqual([]);
+  });
+
+  it('listOutboxEntries returns one entry per *.json, ignoring other files and subdirs', async () => {
+    root = await mkdtemp(join(tmpdir(), 'brigadir-outbox-test-'));
+    await seed('run-a', { runId: 'run-a', report: {}, timestamp: 't' });
+    await seed('run-b', { runId: 'run-b', report: {}, timestamp: 't' });
+    // Noise that must be ignored: a non-json file and a nested subdirectory.
+    await writeFile(join(root, '.brigadir-outbox', 'notes.txt'), 'ignore me');
+    await mkdir(join(root, '.brigadir-outbox', 'sub'), { recursive: true });
+
+    const entries = await listOutboxEntries(root);
+    const byId = Object.fromEntries(entries.map((e) => [e.runId, e]));
+    expect(Object.keys(byId).sort()).toEqual(['run-a', 'run-b']);
+    expect(byId['run-a'].filePath).toBe(outboxFilePath(root, 'run-a'));
+    expect(typeof byId['run-a'].mtimeMs).toBe('number');
   });
 });
