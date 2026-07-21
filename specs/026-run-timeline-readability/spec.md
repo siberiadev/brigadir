@@ -24,6 +24,7 @@ An operator opens a run's timeline to understand what the agent did and why. Eve
 2. **Given** an agent asks a human a question with a title and multi-paragraph details, **When** the operator views the timeline, **Then** the details render as formatted Markdown (headings/lists/code preserved) in full.
 3. **Given** an agent completes a task with a Markdown summary, **When** the operator views the timeline, **Then** the summary renders in full as formatted text.
 4. **Given** a tool call whose input contains a very large file body (e.g. a file write), **When** the operator views the timeline, **Then** the file content is replaced by a short placeholder indicating its size, and no multi-kilobyte blob is shown.
+5. **Given** a progress message or completion summary that is very long, **When** the operator views the timeline, **Then** its body is collapsed to a preview with a per-entry expand control, and expanding reveals the complete text in place with nothing truncated.
 
 ---
 
@@ -83,6 +84,8 @@ An operator viewing older runs (recorded before this feature) or events whose pa
 - **Empty or absent bodies**: An event with no displayable text shows only its title and time, with no empty grey block.
 - **Mixed truncation**: A tool input where some fields were truncated and others were not sets the truncated flag and still shows every field's (possibly capped) value structurally.
 - **Markdown containing code that looks like JSON**: A human-authored message containing a JSON snippet renders as a formatted code block, not mistaken for a raw payload dump.
+- **Very long body block**: A body that exceeds the length threshold is collapsed to a preview with a per-entry "show more" / "show less" control; expanding reveals the full text in place (no navigation away) and collapsing restores the compact view. The complete text is always present — the control only affects visibility, never fidelity.
+- **Body just under vs. just over the threshold**: A body below the threshold renders fully with no control; only over-threshold bodies get the expand affordance, so short messages are never cluttered by an unused control.
 
 ## Requirements *(mandatory)*
 
@@ -113,7 +116,8 @@ An operator viewing older runs (recorded before this feature) or events whose pa
 
 **Preserved behavior**
 
-- **FR-018**: The system MUST keep the timeline fully expanded with every message and command visible, retaining the existing decision to have no expand/collapse controls.
+- **FR-018**: The system MUST keep every run event present in the timeline as its own visible entry — no entries hidden, filtered, or grouped behind a control — so the operator still sees the full sequence of what happened at a glance.
+- **FR-024**: For a message body that exceeds a length threshold, the system MUST collapse it by default to a preview and provide a per-entry expand/collapse control ("show more" / "show less") that reveals or re-hides the full text in place; exactly one such control per timeline entry, and no control for bodies below the threshold (they render in full). This refines the 2026-07-15 "everything visible" decision rather than reversing it: fidelity is preserved — nothing is truncated or removed, the full text is one click away — while a wall of very long text no longer forces the operator to scroll past it to reach the next event.
 - **FR-019**: The system MUST NOT change the run-events database schema; all changes are to the shape of data stored within the existing JSON payload column.
 - **FR-020**: The system MUST NOT change how the system writes to Jira.
 
@@ -140,6 +144,7 @@ An operator viewing older runs (recorded before this feature) or events whose pa
 - **SC-004**: No single timeline entry exceeds a bounded size for machine-generated fields — file contents never appear inline and non-human string fields are capped — so the timeline remains scannable regardless of tool input size.
 - **SC-005**: Legacy runs recorded before this feature remain readable: no broken-JSON reconstruction is attempted, and truncated legacy inputs are clearly annotated as such.
 - **SC-006**: The recording, callback, and presentation changes each ship with passing automated tests in the same iteration, with no pipeline logic left unverified.
+- **SC-007**: A very long human-authored message no longer forces the operator to scroll its full length to reach the next event: it is collapsed to a preview by default and expandable in place per entry, with the complete text always available.
 
 ## Assumptions
 
@@ -147,6 +152,7 @@ An operator viewing older runs (recorded before this feature) or events whose pa
 - The existing Markdown renderer component is suitable for rendering human-authored message bodies (headings, lists, code) and is reused rather than replaced.
 - "Orchestrator callback tools" are exactly the three brigadir callback tools (progress report, human request, completion); no other tool family gets special affordances in this feature.
 - The per-field string cap (~2000 chars) and the raised progress-sampling cap (~100) are tuning values chosen to bound noise while preserving readability; exact constants may be adjusted during implementation without changing behavior.
+- The collapse threshold for "very long" bodies is a tuning value (e.g. a body taller than roughly 8–12 lines or longer than ~800 characters); the exact threshold and preview height may be adjusted during implementation. The expand/collapse control is per timeline entry, defaults to collapsed for over-threshold bodies, and is absent for shorter bodies. Collapse affects display only — the full text remains in the payload and in the page.
 - The file-content placeholder needs only to convey approximate size (e.g. in KB); exact byte-accurate reporting is not required.
 - No database migration is needed because the run-events payload column already stores free-form JSON; only the shape of stored values changes.
-- The existing timeline layout (time · icon · title · body block) and the "everything visible, no expand/collapse" decision (2026-07-15) remain the frame for all new rendering.
+- The existing timeline layout (time · icon · title · body block) remains the frame for all new rendering. The 2026-07-15 "everything visible, no expand/collapse" decision is refined here, not reversed: every event stays a visible entry and no text is truncated, but very long message bodies gain a per-entry expand/collapse so they don't dominate the view.

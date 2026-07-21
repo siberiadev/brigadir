@@ -33,3 +33,4 @@
 
 - Items marked incomplete require spec updates before `/speckit-clarify` or `/speckit-plan`.
 - File and component names from the input (stream-parser, presenter, MarkdownText, lucide icons) were used to derive user-facing behavior but kept out of the requirements themselves; where a term like "megaphone icon" appears it describes the visible affordance, not an implementation mandate.
+- Refinement (2026-07-21): FR-024 adds a per-entry expand/collapse control for very long message bodies. This refines — does not reverse — the 2026-07-15 "everything visible" decision: every event stays visible and no text is truncated; only the display of over-threshold bodies is collapsed to a preview with the full text one click away.
