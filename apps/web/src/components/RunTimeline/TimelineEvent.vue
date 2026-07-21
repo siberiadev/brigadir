@@ -10,7 +10,10 @@ import { computed, ref, type Component } from 'vue';
 import {
   Activity,
   CircleDot,
+  FlagTriangleRight,
   Info,
+  Megaphone,
+  MessageCircleQuestion,
   RotateCcw,
   Ticket,
   TriangleAlert,
@@ -44,10 +47,10 @@ const ICONS: Record<IconKey, Component> = {
   api_retry: RotateCcw,
   error: TriangleAlert,
   unknown: CircleDot,
-  // Orchestrator glyphs are wired in US2; fall back to the wrench until then.
-  report_progress: Wrench,
-  request_human: Wrench,
-  complete_task: Wrench,
+  // Orchestrator calls to Brigadir — distinct static glyphs (FR-013/FR-017).
+  report_progress: Megaphone,
+  request_human: MessageCircleQuestion,
+  complete_task: FlagTriangleRight,
 };
 
 const icon = computed<Component>(() => ICONS[props.item.iconKey] ?? CircleDot);

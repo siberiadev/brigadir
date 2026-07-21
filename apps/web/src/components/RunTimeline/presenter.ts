@@ -101,6 +101,20 @@ export function prettifyToolName(name: string): string {
   return m ? `${m[2]} (${m[1]})` : name;
 }
 
+/** The three brigadir callbacks — the agent's only voice to the orchestrator. */
+type BrigadirKind = 'report_progress' | 'request_human' | 'complete_task';
+const BRIGADIR_RE = /^mcp__brigadir__(report_progress|request_human|complete_task)$/;
+
+function brigadirKind(name: string | null): BrigadirKind | null {
+  const m = name ? BRIGADIR_RE.exec(name) : null;
+  return m ? (m[1] as BrigadirKind) : null;
+}
+
+/** Fallback row title when a brigadir call's structured input is unavailable (legacy rows). */
+function orchestratorFallbackTitle(kind: BrigadirKind): string {
+  return kind === 'complete_task' ? 'Complete' : `${kind} → Brigadir`;
+}
+
 type ParsedInput =
   | { kind: 'fields'; fields: Record<string, unknown> }
   | { kind: 'raw'; raw: string; truncated: boolean }
@@ -140,18 +154,67 @@ interface Presented {
   fieldTruncated?: boolean;
 }
 
+/** Typed cards for the three brigadir callbacks (FR-008/009/013). */
+function presentBrigadirCall(
+  kind: BrigadirKind,
+  fields: Record<string, unknown>,
+  fieldTruncated: boolean,
+): Presented {
+  const base = { percent: null, orchestrator: true, iconKey: kind, fieldTruncated } as const;
+
+  if (kind === 'request_human') {
+    const humanKind = asString(fields.kind);
+    const blocking = fields.blocking !== false; // schema default is true
+    const tags: TimelineTag[] = [];
+    if (humanKind) tags.push({ label: humanKind, tone: 'info' });
+    tags.push(blocking ? { label: 'blocking', tone: 'warning' } : { label: 'non-blocking' });
+    return {
+      ...base,
+      title: asString(fields.title) ?? orchestratorFallbackTitle(kind),
+      tags,
+      body: asString(fields.details),
+      bodyFormat: 'markdown',
+    };
+  }
+
+  if (kind === 'complete_task') {
+    const outcome = asString(fields.outcome) ?? 'done';
+    const checkCount = Array.isArray(fields.checks) ? fields.checks.length : 0;
+    return {
+      ...base,
+      title: `Complete · ${outcome}`,
+      tags: [{ label: `${checkCount} ${checkCount === 1 ? 'check' : 'checks'}`, tone: 'info' }],
+      body: asString(fields.summary),
+      bodyFormat: 'markdown',
+    };
+  }
+
+  // report_progress — usually deduped against its progress event; when it isn't
+  // (message differs), render the arrow-form card.
+  return {
+    ...base,
+    title: `${kind} → Brigadir`,
+    tags: [],
+    body: asString(fields.message),
+    bodyFormat: 'markdown',
+  };
+}
+
 function presentToolCall(payload: unknown, rawType: string): Presented {
   const rec = asRecord(payload);
   const name = asString(rec?.name);
-  const title = name ? prettifyToolName(name) : rawType;
   const fieldTruncated = rec?.truncated === true;
+  const kind = brigadirKind(name);
   const input = parseToolInput(rec?.input);
 
   // Legacy: `input` was a JSON.stringify string, possibly cut at 500 chars.
-  // Render as-is (monospace); never repair broken JSON (FR-016).
+  // Render as-is (monospace); never repair broken JSON (FR-016). Keep the
+  // orchestrator affordance from the name even when the payload is unusable.
   if (input.kind === 'raw') {
     return {
-      title,
+      title: kind ? orchestratorFallbackTitle(kind) : name ? prettifyToolName(name) : rawType,
+      orchestrator: kind != null,
+      iconKey: kind ?? undefined,
       body: input.truncated ? `${input.raw}…` : input.raw,
       percent: null,
       bodyFormat: 'mono',
@@ -161,6 +224,9 @@ function presentToolCall(payload: unknown, rawType: string): Presented {
   }
 
   const fields = input.kind === 'fields' ? input.fields : {};
+  if (kind) return presentBrigadirCall(kind, fields, fieldTruncated);
+
+  const title = name ? prettifyToolName(name) : rawType;
   let body: string | null = null;
   let matchedKey: string | null = null;
   for (const key of BODY_KEYS) {
@@ -175,9 +241,13 @@ function presentToolCall(payload: unknown, rawType: string): Presented {
     const bodyFormat: BodyFormat = matchedKey && MARKDOWN_BODY_KEYS.has(matchedKey) ? 'markdown' : 'mono';
     return { title, body, percent: null, bodyFormat, fieldTruncated };
   }
-  // No primary text field. US4 replaces this JSON dump with a key/value list.
+  // No primary text field → a compact key/value list, never a JSON dump (FR-012).
   if (Object.keys(fields).length > 0) {
-    return { title, body: stringifyPretty(fields), percent: null, bodyFormat: 'mono', fieldTruncated };
+    const kv = Object.entries(fields).map(([key, value]) => ({
+      key,
+      value: typeof value === 'string' ? value : stringifyPretty(value),
+    }));
+    return { title, body: null, percent: null, bodyFormat: 'kv', kv, fieldTruncated };
   }
   return { title, body: null, percent: null, bodyFormat: null, fieldTruncated };
 }

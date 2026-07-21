@@ -190,6 +190,79 @@ describe('presentEvent — body format (feature 026, US1)', () => {
   });
 });
 
+describe('presentEvent — orchestrator affordance & typed cards (feature 026, US2/US3)', () => {
+  it('report_progress: arrow title, megaphone iconKey, orchestrator flag', () => {
+    const item = presentEvent(toolEvent('mcp__brigadir__report_progress', { stage: 's', message: 'working' }));
+    expect(item.orchestrator).toBe(true);
+    expect(item.iconKey).toBe('report_progress');
+    expect(item.title).toBe('report_progress → Brigadir');
+    expect(item.body).toBe('working');
+    expect(item.bodyFormat).toBe('markdown');
+  });
+
+  it('request_human: title from its title, kind + blocking tags, details as Markdown', () => {
+    const item = presentEvent(
+      toolEvent('mcp__brigadir__request_human', {
+        kind: 'question',
+        title: 'Clarify empty-input behavior',
+        details: '## Context\n- detail',
+        blocking: true,
+      }),
+    );
+    expect(item.orchestrator).toBe(true);
+    expect(item.iconKey).toBe('request_human');
+    expect(item.title).toBe('Clarify empty-input behavior');
+    expect(item.tags).toEqual([
+      { label: 'question', tone: 'info' },
+      { label: 'blocking', tone: 'warning' },
+    ]);
+    expect(item.body).toBe('## Context\n- detail');
+    expect(item.bodyFormat).toBe('markdown');
+  });
+
+  it('request_human non-blocking gets a non-blocking tag', () => {
+    const item = presentEvent(
+      toolEvent('mcp__brigadir__request_human', { kind: 'review', title: 'T', details: 'd', blocking: false }),
+    );
+    expect(item.tags).toContainEqual({ label: 'non-blocking' });
+  });
+
+  it('complete_task: "Complete · outcome" title, summary Markdown, checks-count tag, flag icon', () => {
+    const item = presentEvent(
+      toolEvent('mcp__brigadir__complete_task', {
+        outcome: 'success',
+        summary: '- shipped it',
+        checks: [{ name: 'a' }, { name: 'b' }],
+      }),
+    );
+    expect(item.title).toBe('Complete · success');
+    expect(item.iconKey).toBe('complete_task');
+    expect(item.tags).toEqual([{ label: '2 checks', tone: 'info' }]);
+    expect(item.body).toBe('- shipped it');
+    expect(item.bodyFormat).toBe('markdown');
+  });
+
+  it('a non-brigadir MCP tool keeps the "(server)" form and is not an orchestrator call', () => {
+    const item = presentEvent(toolEvent('mcp__jira__get_ticket', { key: 'BRIG-1' }));
+    expect(item.orchestrator).toBe(false);
+    expect(item.title).toBe('get_ticket (jira)');
+    expect(item.iconKey).toBe('tool_call');
+  });
+});
+
+describe('presentEvent — key/value fallback (feature 026, US4)', () => {
+  it('a structured input with no primary text field renders as a kv list, not a JSON dump', () => {
+    const item = presentEvent(toolEvent('SomeTool', { alpha: 'one', beta: 2, gamma: true }));
+    expect(item.bodyFormat).toBe('kv');
+    expect(item.body).toBeNull();
+    expect(item.kv).toEqual([
+      { key: 'alpha', value: 'one' },
+      { key: 'beta', value: '2' },
+      { key: 'gamma', value: 'true' },
+    ]);
+  });
+});
+
 describe('presentEvents — report_progress dedup', () => {
   it('collapses a report_progress tool_call + progress pair with the same message', () => {
     const items = presentEvents([

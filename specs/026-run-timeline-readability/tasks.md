@@ -87,13 +87,13 @@ Monorepo: `libs/executors/`, `packages/contracts/`, `apps/web/`, `test/integrati
 
 ### Tests for User Story 2 ⚠️ (write first)
 
-- [ ] T020 [P] [US2] Presenter tests in `apps/web/test/run-timeline-presenter.spec.ts`: `mcp__brigadir__report_progress|request_human|complete_task` → `orchestrator===true`, correct `iconKey`, titles `report_progress → Brigadir` / `request_human → Brigadir` / `Complete · <outcome>`; a non-brigadir MCP tool keeps the `(server)` form. (impl: T022)
-- [ ] T021 [P] [US2] TimelineEvent tests in `apps/web/test/run-timeline-event.spec.ts`: each `iconKey` maps to its lucide glyph; icons are static (no `.anim-trigger`, no `AnimatedIcon`). (impl: T023)
+- [X] T020 [P] [US2] Presenter tests in `apps/web/test/run-timeline-presenter.spec.ts`: `mcp__brigadir__report_progress|request_human|complete_task` → `orchestrator===true`, correct `iconKey`, titles `report_progress → Brigadir` / `request_human → Brigadir` / `Complete · <outcome>`; a non-brigadir MCP tool keeps the `(server)` form. (impl: T022)
+- [X] T021 [P] [US2] TimelineEvent tests in `apps/web/test/run-timeline-event.spec.ts`: each `iconKey` maps to its lucide glyph; icons are static (no `.anim-trigger`, no `AnimatedIcon`). (impl: T023)
 
 ### Implementation for User Story 2
 
-- [ ] T022 [US2] In `apps/web/src/components/RunTimeline/presenter.ts` add `orchestrator` detection (`^mcp__brigadir__(report_progress|request_human|complete_task)$`), set `iconKey`, and set titles per `contracts/timeline-view-model.md` §3.1; keep `prettifyToolName`'s `(server)` form for other MCP tools. (depends on T007; shares `presenter.ts` with T017 — sequence after US1)
-- [ ] T023 [US2] In `TimelineEvent.vue` (icon map) / `RunTimeline.vue` add `Megaphone` (report_progress), `MessageCircleQuestion` (request_human), `FlagTriangleRight` (complete_task) from `lucide-vue-next`, keyed by `iconKey`, all static per project convention. (depends on T008, T022)
+- [X] T022 [US2] In `apps/web/src/components/RunTimeline/presenter.ts` add `orchestrator` detection (`^mcp__brigadir__(report_progress|request_human|complete_task)$`), set `iconKey`, and set titles per `contracts/timeline-view-model.md` §3.1; keep `prettifyToolName`'s `(server)` form for other MCP tools. (depends on T007; shares `presenter.ts` with T017 — sequence after US1)
+- [X] T023 [US2] In `TimelineEvent.vue` (icon map) / `RunTimeline.vue` add `Megaphone` (report_progress), `MessageCircleQuestion` (request_human), `FlagTriangleRight` (complete_task) from `lucide-vue-next`, keyed by `iconKey`, all static per project convention. (depends on T008, T022)
 
 **Checkpoint**: Orchestrator calls are distinguishable at a glance; ordinary tools unchanged.
 
@@ -107,14 +107,14 @@ Monorepo: `libs/executors/`, `packages/contracts/`, `apps/web/`, `test/integrati
 
 ### Tests for User Story 3 ⚠️ (write first)
 
-- [ ] T024 [P] [US3] Presenter tests in `apps/web/test/run-timeline-presenter.spec.ts`: request_human → title=input.title, tags include `kind` + blocking state, body=details `markdown`; complete_task → title `Complete · success`, body=summary `markdown`, `<n> checks` tag; report_progress dedup preserved for both structured and legacy inputs. (impl: T026, T027)
-- [ ] T025 [P] [US3] TimelineEvent tests in `apps/web/test/run-timeline-event.spec.ts`: `tags[]` render as chips with tone (info/warning). (impl: T028)
+- [X] T024 [P] [US3] Presenter tests in `apps/web/test/run-timeline-presenter.spec.ts`: request_human → title=input.title, tags include `kind` + blocking state, body=details `markdown`; complete_task → title `Complete · success`, body=summary `markdown`, `<n> checks` tag; report_progress dedup preserved for both structured and legacy inputs. (impl: T026, T027)
+- [X] T025 [P] [US3] TimelineEvent tests in `apps/web/test/run-timeline-event.spec.ts`: `tags[]` render as chips with tone (info/warning). (impl: T028)
 
 ### Implementation for User Story 3
 
-- [ ] T026 [US3] In `apps/web/src/components/RunTimeline/presenter.ts` build the typed cards: request_human (title, `tags` = kind + `blocking`/`non-blocking`, `body`=details, `bodyFormat:'markdown'`); complete_task (title `Complete · <outcome>`, `body`=summary `markdown`, `tags`=`<n> checks` from `checks.length`). (depends on T022; shares `presenter.ts` — sequence after US2)
-- [ ] T027 [US3] In `presentEvents` (`presenter.ts`) keep the `report_progress` tool_call/progress dedup reading the structured `input.message` and the legacy string form (FR-015). (depends on T026)
-- [ ] T028 [US3] In `apps/web/src/components/RunTimeline/TimelineEvent.vue` render `tags[]` as chips with tone. (depends on T008, T026)
+- [X] T026 [US3] In `apps/web/src/components/RunTimeline/presenter.ts` build the typed cards: request_human (title, `tags` = kind + `blocking`/`non-blocking`, `body`=details, `bodyFormat:'markdown'`); complete_task (title `Complete · <outcome>`, `body`=summary `markdown`, `tags`=`<n> checks` from `checks.length`). (depends on T022; shares `presenter.ts` — sequence after US2)
+- [X] T027 [US3] In `presentEvents` (`presenter.ts`) keep the `report_progress` tool_call/progress dedup reading the structured `input.message` and the legacy string form (FR-015). (depends on T026)
+- [X] T028 [US3] In `apps/web/src/components/RunTimeline/TimelineEvent.vue` render `tags[]` as chips with tone. (depends on T008, T026)
 
 **Checkpoint**: The three orchestrator callbacks render as purpose-built cards; dedup intact.
 
@@ -128,13 +128,13 @@ Monorepo: `libs/executors/`, `packages/contracts/`, `apps/web/`, `test/integrati
 
 ### Tests for User Story 4 ⚠️ (write first)
 
-- [ ] T029 [P] [US4] Presenter tests in `apps/web/test/run-timeline-presenter.spec.ts`: structured input with no primary text → `bodyFormat:'kv'`, `kv` populated (no `JSON.stringify` dump); legacy string `input` len≥500 → `mono` + `legacyTruncated`; `fieldTruncated` mirrors `payload.truncated`; no JSON.parse-repair. (impl: T031)
-- [ ] T030 [P] [US4] TimelineEvent tests in `apps/web/test/run-timeline-event.spec.ts`: kv list renders (muted key, regular value); truncation note shown when `legacyTruncated`/`fieldTruncated`. (impl: T032)
+- [X] T029 [P] [US4] Presenter tests in `apps/web/test/run-timeline-presenter.spec.ts`: structured input with no primary text → `bodyFormat:'kv'`, `kv` populated (no `JSON.stringify` dump); legacy string `input` len≥500 → `mono` + `legacyTruncated`; `fieldTruncated` mirrors `payload.truncated`; no JSON.parse-repair. (impl: T031)
+- [X] T030 [P] [US4] TimelineEvent tests in `apps/web/test/run-timeline-event.spec.ts`: kv list renders (muted key, regular value); truncation note shown when `legacyTruncated`/`fieldTruncated`. (impl: T032)
 
 ### Implementation for User Story 4
 
-- [ ] T031 [US4] In `apps/web/src/components/RunTimeline/presenter.ts` add the kv fallback (`bodyFormat:'kv'`, `kv[]`) for structured input lacking a primary text field, set `legacyTruncated` (legacy string, len≥500) and `fieldTruncated` (from `payload.truncated`), and never attempt to repair a cut JSON string. (depends on T026; shares `presenter.ts` — sequence after US3)
-- [ ] T032 [US4] In `apps/web/src/components/RunTimeline/TimelineEvent.vue` render the kv list (muted key / regular value) and a small muted "input truncated by the executor" note when `legacyTruncated` or `fieldTruncated`. (depends on T008, T031)
+- [X] T031 [US4] In `apps/web/src/components/RunTimeline/presenter.ts` add the kv fallback (`bodyFormat:'kv'`, `kv[]`) for structured input lacking a primary text field, set `legacyTruncated` (legacy string, len≥500) and `fieldTruncated` (from `payload.truncated`), and never attempt to repair a cut JSON string. (depends on T026; shares `presenter.ts` — sequence after US3)
+- [X] T032 [US4] In `apps/web/src/components/RunTimeline/TimelineEvent.vue` render the kv list (muted key / regular value) and a small muted "input truncated by the executor" note when `legacyTruncated` or `fieldTruncated`. (depends on T008, T031)
 
 **Checkpoint**: All payload shapes degrade gracefully; zero raw JSON dumps.
 
