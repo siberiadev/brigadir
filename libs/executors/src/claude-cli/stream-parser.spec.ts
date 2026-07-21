@@ -122,18 +122,25 @@ describe('ClaudeStreamParser (T079)', () => {
     expect(parser.parseLine(line('c'))).toHaveLength(1); // interval elapsed
   });
 
-  it('truncates an oversized snippet to snippetMaxChars', () => {
-    const parser = new ClaudeStreamParser({ snippetMaxChars: 10 });
+  it('persists assistant text in full — never truncated (feature 026, FR-003)', () => {
+    const parser = new ClaudeStreamParser();
+    const text = 'x'.repeat(5000);
     const parsed = parser.parseLine(
-      JSON.stringify({
-        type: 'assistant',
-        message: { content: [{ type: 'text', text: 'x'.repeat(100) }] },
-      }),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text }] } }),
     );
     expect(parsed[0].kind).toBe('run_event');
     if (parsed[0].kind === 'run_event') {
-      expect((parsed[0].event.payload.message as string).length).toBe(10);
+      expect(parsed[0].event.payload.message).toBe(text);
     }
+  });
+
+  it('samples progress at the raised default cap of ~100 rows (feature 026, FR-007)', () => {
+    const parser = new ClaudeStreamParser();
+    const line = (i: number) =>
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: `t${i}` }] } });
+    let kept = 0;
+    for (let i = 0; i < 150; i++) kept += parser.parseLine(line(i)).length;
+    expect(kept).toBe(100); // 101st..150th dropped
   });
 });
 

@@ -8,9 +8,9 @@ description: "Task list for Readable Run Timeline (026)"
 
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
-**Tests**: MANDATORY here. The stream parser and callback validation are pipeline logic (constitution VI); the spec also explicitly requires stream-parser unit, callback integration, and presenter/RunCard unit tests (FR-021/022/023). Write each test task first; it fails until its paired implementation task lands.
+**Tests**: MANDATORY here. The stream parser and callback validation are pipeline logic (constitution VI); the spec also explicitly requires stream-parser unit, callback integration, and presenter/TimelineEvent unit tests (FR-021/022/023). Write each test task first; it fails until its paired implementation task lands.
 
-**Organization**: By user story (spec.md US1–US4). The backend data-fidelity that faithful rendering depends on is Foundational (Phase 2); each user story is a frontend rendering slice, independently testable via presenter + RunCard unit tests.
+**Organization**: By user story (spec.md US1–US4). The backend data-fidelity that faithful rendering depends on is Foundational (Phase 2); each user story is a frontend rendering slice, independently testable via presenter + TimelineEvent unit tests.
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -20,7 +20,9 @@ description: "Task list for Readable Run Timeline (026)"
 
 ## Path notes
 
-Monorepo: `libs/executors/`, `packages/contracts/`, `apps/web/`, `test/integration/`. `presenter.ts` and `RunCard.vue` are shared by US1–US4 — story phases serialize their edits (not cross-story `[P]`), but each story remains independently testable.
+Monorepo: `libs/executors/`, `packages/contracts/`, `apps/web/`, `test/integration/`. `presenter.ts` and `TimelineEvent.vue` are shared by US1–US4 — story phases serialize their edits (not cross-story `[P]`), but each story remains independently testable.
+
+> **Implementation note (2026-07-21):** the extracted timeline-entry component is `components/RunTimeline/TimelineEvent.vue` (test `run-timeline-event.spec.ts`), **not** `RunCard.vue` — that name is already taken by the unrelated run **detail view** `apps/web/src/views/RunCard.vue`. Tasks below were renamed accordingly. T012's integration assertions are written but require Docker/testcontainers, so they were not executed in the authoring environment; the equivalent contract-level acceptance (4000-char message) is covered by the unit suite.
 
 ---
 
@@ -43,11 +45,11 @@ Monorepo: `libs/executors/`, `packages/contracts/`, `apps/web/`, `test/integrati
 - [X] T004 Wire the sanitizer into `libs/executors/src/claude-cli/stream-parser.ts` `mapAssistant`: emit `{ name, input: sanitized.input, truncated: sanitized.truncated }` instead of `truncate(JSON.stringify(input))`; add an injectable `scrub` to `StreamParserOptions` (default identity). (depends on T002)
 - [X] T005 Inject the real `@brigadir/scrubber` `scrub` into the parser at its construction/parse site in `libs/executors/src/claude-cli/claude-cli.executor.ts` (Constitution V — the newly-persisted structured strings pass the scrubber). (depends on T004)
 - [X] T006 Extend `libs/executors/src/claude-cli/stream-parser.spec.ts` for the structured `tool_call` payload: object `input`, `truncated` flag, file placeholder, human-text fidelity via the sanitizer. (depends on T004)
-- [ ] T007 [P] Extend the presenter view-model in `apps/web/src/components/RunTimeline/presenter.ts`: add the new `TimelineItem` fields (`orchestrator`, `iconKey`, `tags`, `bodyFormat`, `kv`, `legacyTruncated`, `fieldTruncated`) with safe defaults, and make `parseToolInput` accept the new object `input` + `payload.truncated` while keeping the legacy string branch. Existing presenter tests MUST stay green.
-- [ ] T008 Extract `apps/web/src/components/RunTimeline/RunCard.vue` from `RunTimeline.vue` (behavior-preserving: `time · icon · title` row + `<pre>` body), render `<RunCard>` in the list, move the icon map into it. No visual change yet. (depends on T007)
-- [ ] T009 [P] Create `apps/web/test/run-card.spec.ts` — component scaffold (@vue/test-utils) rendering a basic item (row/title/body present), extended per story below. (depends on T008)
+- [X] T007 [P] Extend the presenter view-model in `apps/web/src/components/RunTimeline/presenter.ts`: add the new `TimelineItem` fields (`orchestrator`, `iconKey`, `tags`, `bodyFormat`, `kv`, `legacyTruncated`, `fieldTruncated`) with safe defaults, and make `parseToolInput` accept the new object `input` + `payload.truncated` while keeping the legacy string branch. Existing presenter tests MUST stay green.
+- [X] T008 Extract `apps/web/src/components/RunTimeline/TimelineEvent.vue` from `RunTimeline.vue` (behavior-preserving: `time · icon · title` row + `<pre>` body), render `<TimelineEvent>` in the list, move the icon map into it. No visual change yet. (depends on T007)
+- [X] T009 [P] Create `apps/web/test/run-timeline-event.spec.ts` — component scaffold (@vue/test-utils) rendering a basic item (row/title/body present), extended per story below. (depends on T008)
 
-**Checkpoint**: Backend emits structured, faithful `tool_call` payloads (tested); the frontend renders identically to before through the new `RunCard` seam.
+**Checkpoint**: Backend emits structured, faithful `tool_call` payloads (tested); the frontend renders identically to before through the new `TimelineEvent` seam.
 
 ---
 
@@ -59,19 +61,19 @@ Monorepo: `libs/executors/`, `packages/contracts/`, `apps/web/`, `test/integrati
 
 ### Tests for User Story 1 ⚠️ (write first; fail until paired impl lands)
 
-- [ ] T010 [P] [US1] Extend `libs/executors/src/claude-cli/stream-parser.spec.ts`: assistant text persisted **untruncated** as a `progress` event; sampling cap raised (the ~101st text block dropped, ≤~100 kept). (impl: T015)
-- [ ] T011 [P] [US1] Update `packages/contracts/src/callback-tools.schema.spec.ts`: `ReportProgressSchema` accepts a 4000-char `message`, rejects 4001. (impl: T016)
-- [ ] T012 [P] [US1] Extend `test/integration/callback-progress.spec.ts`: `POST …/progress` with a ~4000-char `message` → 200 and the persisted `progress` run_event holds the message **in full** (scrubbed); and a `POST …/human` with multi-paragraph `details` persists the `human_tasks.details` in full (human-authored fidelity, FR-022). (impl: T016)
-- [ ] T013 [P] [US1] Presenter tests in `apps/web/test/run-timeline-presenter.spec.ts`: message-like bodies → `bodyFormat:'markdown'`; `command`/raw → `'mono'`; a `Write` with `content` placeholder renders as body. (impl: T017)
-- [ ] T014 [P] [US1] RunCard tests in `apps/web/test/run-card.spec.ts`: `markdown` renders via `MarkdownText`, `mono` via `<pre>`; a body over the threshold shows "show more" and toggling reveals full text; a short body shows no control. (impl: T018, T019)
+- [X] T010 [P] [US1] Extend `libs/executors/src/claude-cli/stream-parser.spec.ts`: assistant text persisted **untruncated** as a `progress` event; sampling cap raised (the ~101st text block dropped, ≤~100 kept). (impl: T015)
+- [X] T011 [P] [US1] Update `packages/contracts/src/callback-tools.schema.spec.ts`: `ReportProgressSchema` accepts a 4000-char `message`, rejects 4001. (impl: T016)
+- [X] T012 [P] [US1] Extend `test/integration/callback-progress.spec.ts`: `POST …/progress` with a ~4000-char `message` → 200 and the persisted `progress` run_event holds the message **in full** (scrubbed); and a `POST …/human` with multi-paragraph `details` persists the `human_tasks.details` in full (human-authored fidelity, FR-022). (impl: T016)
+- [X] T013 [P] [US1] Presenter tests in `apps/web/test/run-timeline-presenter.spec.ts`: message-like bodies → `bodyFormat:'markdown'`; `command`/raw → `'mono'`; a `Write` with `content` placeholder renders as body. (impl: T017)
+- [X] T014 [P] [US1] TimelineEvent tests in `apps/web/test/run-timeline-event.spec.ts`: `markdown` renders via `MarkdownText`, `mono` via `<pre>`; a body over the threshold shows "show more" and toggling reveals full text; a short body shows no control. (impl: T018, T019)
 
 ### Implementation for User Story 1
 
-- [ ] T015 [US1] In `libs/executors/src/claude-cli/stream-parser.ts` `sampleProgress`: persist the **full** `text` (remove `truncate`); raise default `maxProgressEvents` 20 → 100; keep the count/interval sampling; drop the now-unused `snippetMaxChars` progress role. (depends on T004)
-- [ ] T016 [P] [US1] In `packages/contracts/src/callback-tools.schema.ts` change `ReportProgressSchema.message` `.max(500)` → `.max(4000)` per `contracts/callback-cap-change.md`.
-- [ ] T017 [US1] In `apps/web/src/components/RunTimeline/presenter.ts` select `bodyFormat`: progress `message` / request `details` / complete `summary` → `'markdown'`; `command` / legacy raw / non-text raw → `'mono'`; nothing → `null`. (depends on T007)
-- [ ] T018 [US1] In `apps/web/src/components/RunTimeline/RunCard.vue` render `bodyFormat:'markdown'` via `MarkdownText.vue` and `'mono'` via the existing `<pre>` block; the file-content placeholder is a plain string and renders inline. (depends on T008, T017)
-- [ ] T019 [US1] In `apps/web/src/components/RunTimeline/RunCard.vue` add per-entry expand/collapse for long bodies (threshold ~8–12 lines / ~800 chars via CSS `max-height` clamp + "show more/less"), one control per entry, full text always in the DOM; static, honor `prefers-reduced-motion`. (depends on T008)
+- [X] T015 [US1] In `libs/executors/src/claude-cli/stream-parser.ts` `sampleProgress`: persist the **full** `text` (remove `truncate`); raise default `maxProgressEvents` 20 → 100; keep the count/interval sampling; drop the now-unused `snippetMaxChars` progress role. (depends on T004)
+- [X] T016 [P] [US1] In `packages/contracts/src/callback-tools.schema.ts` change `ReportProgressSchema.message` `.max(500)` → `.max(4000)` per `contracts/callback-cap-change.md`.
+- [X] T017 [US1] In `apps/web/src/components/RunTimeline/presenter.ts` select `bodyFormat`: progress `message` / request `details` / complete `summary` → `'markdown'`; `command` / legacy raw / non-text raw → `'mono'`; nothing → `null`. (depends on T007)
+- [X] T018 [US1] In `apps/web/src/components/RunTimeline/TimelineEvent.vue` render `bodyFormat:'markdown'` via `MarkdownText.vue` and `'mono'` via the existing `<pre>` block; the file-content placeholder is a plain string and renders inline. (depends on T008, T017)
+- [X] T019 [US1] In `apps/web/src/components/RunTimeline/TimelineEvent.vue` add per-entry expand/collapse for long bodies (threshold ~8–12 lines / ~800 chars via CSS `max-height` clamp + "show more/less"), one control per entry, full text always in the DOM; static, honor `prefers-reduced-motion`. (depends on T008)
 
 **Checkpoint**: MVP — the timeline shows full, formatted narratives, elided file bodies, and collapsible long messages.
 
@@ -86,12 +88,12 @@ Monorepo: `libs/executors/`, `packages/contracts/`, `apps/web/`, `test/integrati
 ### Tests for User Story 2 ⚠️ (write first)
 
 - [ ] T020 [P] [US2] Presenter tests in `apps/web/test/run-timeline-presenter.spec.ts`: `mcp__brigadir__report_progress|request_human|complete_task` → `orchestrator===true`, correct `iconKey`, titles `report_progress → Brigadir` / `request_human → Brigadir` / `Complete · <outcome>`; a non-brigadir MCP tool keeps the `(server)` form. (impl: T022)
-- [ ] T021 [P] [US2] RunCard tests in `apps/web/test/run-card.spec.ts`: each `iconKey` maps to its lucide glyph; icons are static (no `.anim-trigger`, no `AnimatedIcon`). (impl: T023)
+- [ ] T021 [P] [US2] TimelineEvent tests in `apps/web/test/run-timeline-event.spec.ts`: each `iconKey` maps to its lucide glyph; icons are static (no `.anim-trigger`, no `AnimatedIcon`). (impl: T023)
 
 ### Implementation for User Story 2
 
 - [ ] T022 [US2] In `apps/web/src/components/RunTimeline/presenter.ts` add `orchestrator` detection (`^mcp__brigadir__(report_progress|request_human|complete_task)$`), set `iconKey`, and set titles per `contracts/timeline-view-model.md` §3.1; keep `prettifyToolName`'s `(server)` form for other MCP tools. (depends on T007; shares `presenter.ts` with T017 — sequence after US1)
-- [ ] T023 [US2] In `RunCard.vue` (icon map) / `RunTimeline.vue` add `Megaphone` (report_progress), `MessageCircleQuestion` (request_human), `FlagTriangleRight` (complete_task) from `lucide-vue-next`, keyed by `iconKey`, all static per project convention. (depends on T008, T022)
+- [ ] T023 [US2] In `TimelineEvent.vue` (icon map) / `RunTimeline.vue` add `Megaphone` (report_progress), `MessageCircleQuestion` (request_human), `FlagTriangleRight` (complete_task) from `lucide-vue-next`, keyed by `iconKey`, all static per project convention. (depends on T008, T022)
 
 **Checkpoint**: Orchestrator calls are distinguishable at a glance; ordinary tools unchanged.
 
@@ -106,13 +108,13 @@ Monorepo: `libs/executors/`, `packages/contracts/`, `apps/web/`, `test/integrati
 ### Tests for User Story 3 ⚠️ (write first)
 
 - [ ] T024 [P] [US3] Presenter tests in `apps/web/test/run-timeline-presenter.spec.ts`: request_human → title=input.title, tags include `kind` + blocking state, body=details `markdown`; complete_task → title `Complete · success`, body=summary `markdown`, `<n> checks` tag; report_progress dedup preserved for both structured and legacy inputs. (impl: T026, T027)
-- [ ] T025 [P] [US3] RunCard tests in `apps/web/test/run-card.spec.ts`: `tags[]` render as chips with tone (info/warning). (impl: T028)
+- [ ] T025 [P] [US3] TimelineEvent tests in `apps/web/test/run-timeline-event.spec.ts`: `tags[]` render as chips with tone (info/warning). (impl: T028)
 
 ### Implementation for User Story 3
 
 - [ ] T026 [US3] In `apps/web/src/components/RunTimeline/presenter.ts` build the typed cards: request_human (title, `tags` = kind + `blocking`/`non-blocking`, `body`=details, `bodyFormat:'markdown'`); complete_task (title `Complete · <outcome>`, `body`=summary `markdown`, `tags`=`<n> checks` from `checks.length`). (depends on T022; shares `presenter.ts` — sequence after US2)
 - [ ] T027 [US3] In `presentEvents` (`presenter.ts`) keep the `report_progress` tool_call/progress dedup reading the structured `input.message` and the legacy string form (FR-015). (depends on T026)
-- [ ] T028 [US3] In `apps/web/src/components/RunTimeline/RunCard.vue` render `tags[]` as chips with tone. (depends on T008, T026)
+- [ ] T028 [US3] In `apps/web/src/components/RunTimeline/TimelineEvent.vue` render `tags[]` as chips with tone. (depends on T008, T026)
 
 **Checkpoint**: The three orchestrator callbacks render as purpose-built cards; dedup intact.
 
@@ -127,12 +129,12 @@ Monorepo: `libs/executors/`, `packages/contracts/`, `apps/web/`, `test/integrati
 ### Tests for User Story 4 ⚠️ (write first)
 
 - [ ] T029 [P] [US4] Presenter tests in `apps/web/test/run-timeline-presenter.spec.ts`: structured input with no primary text → `bodyFormat:'kv'`, `kv` populated (no `JSON.stringify` dump); legacy string `input` len≥500 → `mono` + `legacyTruncated`; `fieldTruncated` mirrors `payload.truncated`; no JSON.parse-repair. (impl: T031)
-- [ ] T030 [P] [US4] RunCard tests in `apps/web/test/run-card.spec.ts`: kv list renders (muted key, regular value); truncation note shown when `legacyTruncated`/`fieldTruncated`. (impl: T032)
+- [ ] T030 [P] [US4] TimelineEvent tests in `apps/web/test/run-timeline-event.spec.ts`: kv list renders (muted key, regular value); truncation note shown when `legacyTruncated`/`fieldTruncated`. (impl: T032)
 
 ### Implementation for User Story 4
 
 - [ ] T031 [US4] In `apps/web/src/components/RunTimeline/presenter.ts` add the kv fallback (`bodyFormat:'kv'`, `kv[]`) for structured input lacking a primary text field, set `legacyTruncated` (legacy string, len≥500) and `fieldTruncated` (from `payload.truncated`), and never attempt to repair a cut JSON string. (depends on T026; shares `presenter.ts` — sequence after US3)
-- [ ] T032 [US4] In `apps/web/src/components/RunTimeline/RunCard.vue` render the kv list (muted key / regular value) and a small muted "input truncated by the executor" note when `legacyTruncated` or `fieldTruncated`. (depends on T008, T031)
+- [ ] T032 [US4] In `apps/web/src/components/RunTimeline/TimelineEvent.vue` render the kv list (muted key / regular value) and a small muted "input truncated by the executor" note when `legacyTruncated` or `fieldTruncated`. (depends on T008, T031)
 
 **Checkpoint**: All payload shapes degrade gracefully; zero raw JSON dumps.
 
@@ -156,17 +158,17 @@ Monorepo: `libs/executors/`, `packages/contracts/`, `apps/web/`, `test/integrati
 
 ### Story dependencies
 
-- Each of US1–US4 depends only on **Foundational** (the structured payload + the `presenter`/`RunCard` seam), not on each other, and each is independently testable via its own presenter/RunCard tests.
-- **File-sharing constraint**: `presenter.ts` (T007, T017, T022, T026, T031) and `RunCard.vue` (T008, T018/T019, T023, T028, T032) are edited by every story. Those edits serialize (recommended order US1→US2→US3→US4). US2 does not require US1's Markdown work — a second developer could take US2 right after Foundational, coordinating merges on the two shared files.
+- Each of US1–US4 depends only on **Foundational** (the structured payload + the `presenter`/`TimelineEvent` seam), not on each other, and each is independently testable via its own presenter/TimelineEvent tests.
+- **File-sharing constraint**: `presenter.ts` (T007, T017, T022, T026, T031) and `TimelineEvent.vue` (T008, T018/T019, T023, T028, T032) are edited by every story. Those edits serialize (recommended order US1→US2→US3→US4). US2 does not require US1's Markdown work — a second developer could take US2 right after Foundational, coordinating merges on the two shared files.
 
 ### Within a story
 
-- Tests written first (fail), then implementation makes them pass. Backend/contract change before its integration test goes green; presenter change before the RunCard change (RunCard consumes the view-model).
+- Tests written first (fail), then implementation makes them pass. Backend/contract change before its integration test goes green; presenter change before the TimelineEvent change (TimelineEvent consumes the view-model).
 
 ### Parallel opportunities
 
 - **Setup**: T001.
-- **Foundational**: T002+T003 (sanitizer + spec) run parallel to T007 (presenter type) — different packages. T004→T005→T006 serialize on the parser; T008→T009 serialize on RunCard.
+- **Foundational**: T002+T003 (sanitizer + spec) run parallel to T007 (presenter type) — different packages. T004→T005→T006 serialize on the parser; T008→T009 serialize on TimelineEvent.
 - **US1**: test tasks T010–T014 are all `[P]` (distinct files); T016 (contracts) is `[P]` vs the frontend impl; T015/T017/T018/T019 are the impl spine.
 - **US2/US3/US4**: the two test tasks per story are `[P]`; impl tasks serialize on the shared files.
 
@@ -187,7 +189,7 @@ Task: T007 Extend TimelineItem type + parseToolInput in apps/web/.../presenter.t
 Task: T010 stream-parser.spec.ts (untruncated text + sampling cap)
 Task: T012 callback-progress.spec.ts (4000-char message)
 Task: T013 run-timeline-presenter.spec.ts (markdown vs mono, placeholder)
-Task: T014 run-card.spec.ts (MarkdownText vs <pre>, collapse toggle)
+Task: T014 run-timeline-event.spec.ts (MarkdownText vs <pre>, collapse toggle)
 ```
 
 ---

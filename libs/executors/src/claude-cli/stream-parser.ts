@@ -39,8 +39,6 @@ export interface StreamParserOptions {
   maxProgressEvents?: number;
   /** Minimum ms between persisted `progress` events (0 = count-only cap). */
   minProgressIntervalMs?: number;
-  /** Max chars kept from a tool_call input / progress text snippet (FR-011/012). */
-  snippetMaxChars?: number;
   /** Injectable clock for deterministic sampling tests. */
   now?: () => number;
   /**
@@ -54,7 +52,6 @@ export interface StreamParserOptions {
 export class ClaudeStreamParser {
   private readonly maxProgressEvents: number;
   private readonly minProgressIntervalMs: number;
-  private readonly snippetMaxChars: number;
   private readonly now: () => number;
   private readonly scrub: (s: string) => string;
 
@@ -62,9 +59,11 @@ export class ClaudeStreamParser {
   private lastProgressAt: number | undefined;
 
   constructor(options: StreamParserOptions = {}) {
-    this.maxProgressEvents = options.maxProgressEvents ?? 20;
+    // feature 026: raised 20 → 100. Sampling still bounds ROW COUNT (an agent
+    // can emit hundreds of text blocks); it no longer bounds message length —
+    // human/assistant text is persisted in full (FR-003/FR-007).
+    this.maxProgressEvents = options.maxProgressEvents ?? 100;
     this.minProgressIntervalMs = options.minProgressIntervalMs ?? 0;
-    this.snippetMaxChars = options.snippetMaxChars ?? 500;
     this.now = options.now ?? Date.now;
     this.scrub = options.scrub ?? ((s) => s);
   }
@@ -200,10 +199,8 @@ export class ClaudeStreamParser {
 
     this.progressCount += 1;
     this.lastProgressAt = now;
-    return { kind: 'run_event', event: { type: 'progress', payload: { message: this.truncate(text) } } };
-  }
-
-  private truncate(text: string): string {
-    return text.length > this.snippetMaxChars ? text.slice(0, this.snippetMaxChars) : text;
+    // feature 026 (FR-003): assistant text is human-authored — persist it in
+    // full, never truncated. Sampling above is the only bound (row count).
+    return { kind: 'run_event', event: { type: 'progress', payload: { message: text } } };
   }
 }

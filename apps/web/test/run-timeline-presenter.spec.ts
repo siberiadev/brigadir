@@ -6,6 +6,11 @@ import {
   prettifyToolName,
 } from '../src/components/RunTimeline/presenter';
 
+/** feature 026: the parser now persists tool_call `input` as a structured object. */
+function toolEvent(name: string, input: Record<string, unknown>, truncated = false, id = 'e-1') {
+  return { id, type: 'tool_call', payload: { name, input, truncated }, created_at: '2026-07-12T10:00:05.000Z' };
+}
+
 /**
  * Pure presenter units: RunCardEvent → TimelineItem (`time · icon · title` +
  * an always-visible body block). Payload is untyped in the contract, and
@@ -135,6 +140,53 @@ describe('presentEvent — other types', () => {
     expect(presentEvent(event('whatever', 'short note')).body).toBe('short note');
     expect(presentEvent(event('whatever', 42)).body).toBe('42');
     expect(presentEvent(event('tool_call', 'not-an-object')).title).toBe('tool_call');
+  });
+});
+
+describe('presentEvent — body format (feature 026, US1)', () => {
+  it('message-like fields (message/details/summary) render as Markdown', () => {
+    expect(presentEvent(toolEvent('mcp__jira__report_progress', { message: 'stage done' })).bodyFormat).toBe(
+      'markdown',
+    );
+    expect(
+      presentEvent(toolEvent('mcp__brigadir__request_human', { kind: 'question', title: 'T', details: '## Hi' }))
+        .bodyFormat,
+    ).toBe('markdown');
+    const complete = presentEvent(
+      toolEvent('mcp__brigadir__complete_task', { outcome: 'success', summary: '- did it' }),
+    );
+    expect(complete.bodyFormat).toBe('markdown');
+    expect(complete.body).toBe('- did it');
+  });
+
+  it('a command renders as a monospace block', () => {
+    const item = presentEvent(toolEvent('Bash', { command: 'pnpm test' }));
+    expect(item.body).toBe('pnpm test');
+    expect(item.bodyFormat).toBe('mono');
+  });
+
+  it('a Write file-content placeholder renders inline as the body', () => {
+    const item = presentEvent(toolEvent('Write', { content: '<file content, 34 KB>' }));
+    expect(item.body).toBe('<file content, 34 KB>');
+    expect(item.bodyFormat).toBe('mono');
+  });
+
+  it('surfaces the truncated flag from the structured payload', () => {
+    expect(presentEvent(toolEvent('Grep', { pattern: 'x' }, true)).fieldTruncated).toBe(true);
+    expect(presentEvent(toolEvent('Grep', { pattern: 'x' }, false)).fieldTruncated).toBe(false);
+  });
+
+  it('a legacy cut string input renders monospace and flags legacyTruncated', () => {
+    const raw = `{"file_path":"/a/b.ts","content":"${'x'.repeat(500)}`.slice(0, 500);
+    const item = presentEvent({
+      id: 'e-legacy',
+      type: 'tool_call',
+      payload: { name: 'Write', input: raw },
+      created_at: '2026-07-12T10:00:05.000Z',
+    });
+    expect(item.bodyFormat).toBe('mono');
+    expect(item.legacyTruncated).toBe(true);
+    expect(item.body?.endsWith('…')).toBe(true);
   });
 });
 

@@ -21,27 +21,55 @@ export type TimelineTypeKey =
   | 'error'
   | 'unknown';
 
+export type BodyFormat = 'markdown' | 'mono' | 'kv';
+
+export type IconKey = TimelineTypeKey | 'report_progress' | 'request_human' | 'complete_task';
+
+export interface TimelineTag {
+  label: string;
+  tone?: 'info' | 'success' | 'warning';
+}
+
 export interface TimelineItem {
   id: string;
   /** 'HH:MM:SS' local wall-clock label. */
   time: string;
   /** Full local date-time for the title tooltip. */
   timeTitle: string;
-  /** Drives the icon + accent color. */
+  /** Drives the accent color. */
   typeKey: TimelineTypeKey;
   /** Tool name / stage / 'Progress' — for unknown types the raw event type. */
   title: string;
   /** The command or message, shown in full in a grey block; null → no block. */
   body: string | null;
   percent: number | null;
+  /** True for mcp__brigadir__* orchestrator callbacks (feature 026, set from US2). */
+  orchestrator: boolean;
+  /** Icon lookup — includes the orchestrator glyphs; defaults to `typeKey`. */
+  iconKey: IconKey;
+  /** Chips shown next to the title (kind/blocking/checks…); empty when none. */
+  tags: TimelineTag[];
+  /** How the body block should render; null when there is no body. */
+  bodyFormat: BodyFormat | null;
+  /** Key/value rows when `bodyFormat === 'kv'`; otherwise null. */
+  kv: { key: string; value: string }[] | null;
+  /** Legacy executor stored a truncated `input` string → show a note. */
+  legacyTruncated: boolean;
+  /** New-shape `payload.truncated` → a machine field was capped. */
+  fieldTruncated: boolean;
 }
 
 const KNOWN_TYPES = new Set(['log', 'progress', 'tool_call', 'jira_action', 'api_retry', 'error']);
 
-/** The first of these input fields that holds a string becomes the body. */
-const BODY_KEYS = ['command', 'file_path', 'query', 'message', 'summary', 'description', 'content'];
+/**
+ * The first of these input fields that holds a string becomes the body, in this
+ * priority order. `message`/`details`/`summary` render as Markdown (FR-010);
+ * everything else renders monospace (FR-011).
+ */
+const BODY_KEYS = ['command', 'message', 'details', 'summary', 'file_path', 'query', 'description', 'content'];
+const MARKDOWN_BODY_KEYS = new Set(['message', 'details', 'summary']);
 
-/** Server-side snippet cap (stream-parser `snippetMaxChars`) — at this length assume truncation. */
+/** Legacy string inputs were `JSON.stringify`'d then cut at 500 — assume truncation at this length. */
 const SNIPPET_MAX_CHARS = 500;
 
 function asRecord(v: unknown): Record<string, unknown> | null {
@@ -103,26 +131,55 @@ interface Presented {
   title: string;
   body: string | null;
   percent: number | null;
+  bodyFormat?: BodyFormat | null;
+  tags?: TimelineTag[];
+  orchestrator?: boolean;
+  iconKey?: IconKey;
+  kv?: { key: string; value: string }[] | null;
+  legacyTruncated?: boolean;
+  fieldTruncated?: boolean;
 }
 
 function presentToolCall(payload: unknown, rawType: string): Presented {
   const rec = asRecord(payload);
   const name = asString(rec?.name);
   const title = name ? prettifyToolName(name) : rawType;
+  const fieldTruncated = rec?.truncated === true;
   const input = parseToolInput(rec?.input);
 
+  // Legacy: `input` was a JSON.stringify string, possibly cut at 500 chars.
+  // Render as-is (monospace); never repair broken JSON (FR-016).
   if (input.kind === 'raw') {
-    return { title, body: input.truncated ? `${input.raw}…` : input.raw, percent: null };
+    return {
+      title,
+      body: input.truncated ? `${input.raw}…` : input.raw,
+      percent: null,
+      bodyFormat: 'mono',
+      legacyTruncated: input.truncated,
+      fieldTruncated,
+    };
   }
 
   const fields = input.kind === 'fields' ? input.fields : {};
   let body: string | null = null;
+  let matchedKey: string | null = null;
   for (const key of BODY_KEYS) {
-    body = asString(fields[key]);
-    if (body) break;
+    const value = asString(fields[key]);
+    if (value) {
+      body = value;
+      matchedKey = key;
+      break;
+    }
   }
-  if (!body && Object.keys(fields).length > 0) body = stringifyPretty(fields);
-  return { title, body, percent: null };
+  if (body) {
+    const bodyFormat: BodyFormat = matchedKey && MARKDOWN_BODY_KEYS.has(matchedKey) ? 'markdown' : 'mono';
+    return { title, body, percent: null, bodyFormat, fieldTruncated };
+  }
+  // No primary text field. US4 replaces this JSON dump with a key/value list.
+  if (Object.keys(fields).length > 0) {
+    return { title, body: stringifyPretty(fields), percent: null, bodyFormat: 'mono', fieldTruncated };
+  }
+  return { title, body: null, percent: null, bodyFormat: null, fieldTruncated };
 }
 
 function presentProgress(payload: unknown): Presented {
@@ -132,6 +189,7 @@ function presentProgress(payload: unknown): Presented {
     title: stage ? capitalize(stage) : 'Progress',
     body: asString(rec.message),
     percent: typeof rec.percent === 'number' ? rec.percent : null,
+    bodyFormat: 'markdown',
   };
 }
 
@@ -229,12 +287,22 @@ export function presentEvent(e: RunCardEvent): TimelineItem {
     default:
       presented = presentUnknown(e.payload, e.type);
   }
+  const typeKey: TimelineTypeKey = KNOWN_TYPES.has(e.type) ? (e.type as TimelineTypeKey) : 'unknown';
   return {
     id: e.id,
     time: formatClockTime(e.created_at),
     timeTitle: new Date(e.created_at).toLocaleString(),
-    typeKey: KNOWN_TYPES.has(e.type) ? (e.type as TimelineTypeKey) : 'unknown',
-    ...presented,
+    typeKey,
+    title: presented.title,
+    body: presented.body,
+    percent: presented.percent,
+    orchestrator: presented.orchestrator ?? false,
+    iconKey: presented.iconKey ?? typeKey,
+    tags: presented.tags ?? [],
+    bodyFormat: presented.bodyFormat ?? (presented.body ? 'mono' : null),
+    kv: presented.kv ?? null,
+    legacyTruncated: presented.legacyTruncated ?? false,
+    fieldTruncated: presented.fieldTruncated ?? false,
   };
 }
 

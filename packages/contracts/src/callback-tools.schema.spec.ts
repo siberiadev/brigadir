@@ -19,6 +19,15 @@ describe('CallbackTools schemas', () => {
     ).toBe(false);
   });
 
+  it('report_progress accepts a 4000-char message and rejects 4001 (feature 026, FR-004)', () => {
+    expect(
+      ReportProgressSchema.safeParse({ stage: 's', message: 'm'.repeat(4000) }).success,
+    ).toBe(true);
+    expect(
+      ReportProgressSchema.safeParse({ stage: 's', message: 'm'.repeat(4001) }).success,
+    ).toBe(false);
+  });
+
   it('request_human accepts a valid payload and defaults blocking=true', () => {
     const res = RequestHumanSchema.safeParse({
       kind: 'blocker',
