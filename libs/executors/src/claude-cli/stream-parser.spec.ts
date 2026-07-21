@@ -136,3 +136,50 @@ describe('ClaudeStreamParser (T079)', () => {
     }
   });
 });
+
+describe('ClaudeStreamParser — structured tool_call payload (feature 026)', () => {
+  const toolLine = (name: string, input: unknown) =>
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name, input }] } });
+
+  function toolPayload(parser: ClaudeStreamParser, name: string, input: unknown) {
+    const parsed = parser.parseLine(toolLine(name, input));
+    expect(parsed[0].kind).toBe('run_event');
+    if (parsed[0].kind !== 'run_event') throw new Error('expected run_event');
+    return parsed[0].event.payload as { name: string; input: Record<string, unknown>; truncated: boolean };
+  }
+
+  it('persists input as a structured object with a truncated flag, not a JSON string', () => {
+    const p = toolPayload(new ClaudeStreamParser(), 'Bash', { command: 'pnpm test', description: 'run' });
+    expect(typeof p.input).toBe('object');
+    expect(p.input).toMatchObject({ command: 'pnpm test', description: 'run' });
+    expect(p.truncated).toBe(false);
+  });
+
+  it('elides a Write file body to a size placeholder', () => {
+    const p = toolPayload(new ClaudeStreamParser(), 'Write', {
+      file_path: '/a/b.ts',
+      content: 'x'.repeat(34 * 1024),
+    });
+    expect(p.input.content).toBe('<file content, 34 KB>');
+    expect(p.input.file_path).toBe('/a/b.ts');
+  });
+
+  it('keeps a human-authored details field in full and scrubs every retained string', () => {
+    const scrub = (s: string) => s.replace(/SECRET/g, '[redacted]');
+    const details = `SECRET ${'d'.repeat(6000)}`;
+    const p = toolPayload(new ClaudeStreamParser({ scrub }), 'mcp__brigadir__request_human', {
+      kind: 'question',
+      title: 'T',
+      details,
+      blocking: true,
+    });
+    expect(p.input.details).toBe(`[redacted] ${'d'.repeat(6000)}`); // full, scrubbed, not cut
+    expect(p.truncated).toBe(false);
+  });
+
+  it('caps a long generic field and flags truncation', () => {
+    const p = toolPayload(new ClaudeStreamParser(), 'Grep', { pattern: 'p'.repeat(5000) });
+    expect((p.input.pattern as string).length).toBe(2000);
+    expect(p.truncated).toBe(true);
+  });
+});

@@ -12,6 +12,8 @@
  * directly. Only that field is ever read.
  */
 
+import { sanitizeToolInput } from './tool-input-sanitizer';
+
 export type RunEventType = 'log' | 'tool_call' | 'progress' | 'api_retry';
 
 export interface RunEventOut {
@@ -41,6 +43,12 @@ export interface StreamParserOptions {
   snippetMaxChars?: number;
   /** Injectable clock for deterministic sampling tests. */
   now?: () => number;
+  /**
+   * Secret scrubber applied to every retained tool_call string field before it
+   * is persisted (feature 026, Constitution V). Defaults to identity so unit
+   * tests stay deterministic; the executor injects `@brigadir/scrubber.scrub`.
+   */
+  scrub?: (s: string) => string;
 }
 
 export class ClaudeStreamParser {
@@ -48,6 +56,7 @@ export class ClaudeStreamParser {
   private readonly minProgressIntervalMs: number;
   private readonly snippetMaxChars: number;
   private readonly now: () => number;
+  private readonly scrub: (s: string) => string;
 
   private progressCount = 0;
   private lastProgressAt: number | undefined;
@@ -57,6 +66,7 @@ export class ClaudeStreamParser {
     this.minProgressIntervalMs = options.minProgressIntervalMs ?? 0;
     this.snippetMaxChars = options.snippetMaxChars ?? 500;
     this.now = options.now ?? Date.now;
+    this.scrub = options.scrub ?? ((s) => s);
   }
 
   /** Parse one NDJSON line. Malformed/partial JSON yields `[]`, never throws. */
@@ -144,11 +154,15 @@ export class ClaudeStreamParser {
       const b = block as Record<string, unknown>;
 
       if (b.type === 'tool_use') {
+        // feature 026: persist a STRUCTURED, per-field-sanitized input object
+        // (never a stringified blob) so the UI can always decompose it. Every
+        // retained string — including nested ones — passes the scrubber.
+        const sanitized = sanitizeToolInput(String(b.name ?? ''), b.input ?? {}, this.scrub);
         out.push({
           kind: 'run_event',
           event: {
             type: 'tool_call',
-            payload: { name: b.name, input: this.truncate(JSON.stringify(b.input ?? {})) },
+            payload: { name: b.name, input: sanitized.input, truncated: sanitized.truncated },
           },
         });
       } else if (b.type === 'text' && typeof b.text === 'string') {
