@@ -30,7 +30,7 @@ Monorepo: `libs/executors/`, `packages/contracts/`, `apps/web/`, `test/integrati
 
 **Purpose**: Confirm prerequisites; no new dependencies expected.
 
-- [ ] T001 [P] Confirm `lucide-vue-next` (installed version) exports `Megaphone`, `MessageCircleQuestion`, `FlagTriangleRight` (grep `node_modules/lucide-vue-next` or a scratch import); if any name moved, record the substitute glyph in `specs/026-run-timeline-readability/research.md` R8. No new dependency is added by this feature.
+- [X] T001 [P] Confirm `lucide-vue-next` (installed version) exports `Megaphone`, `MessageCircleQuestion`, `FlagTriangleRight` (grep `node_modules/lucide-vue-next` or a scratch import); if any name moved, record the substitute glyph in `specs/026-run-timeline-readability/research.md` R8. No new dependency is added by this feature.
 
 ---
 
@@ -142,10 +142,10 @@ Monorepo: `libs/executors/`, `packages/contracts/`, `apps/web/`, `test/integrati
 
 ## Phase 7: Polish & Cross-Cutting
 
-- [ ] T033 [P] Add the iteration entry to `docs/progress.md` (payload-shape change, no DB migration, Constitution V scrub note, tunable constants).
-- [ ] T034 [P] Grep `packages/mcp-server` for a hard-coded 500 `message` bound in tool definitions/tests; update to 4000 if present.
-- [ ] T035 Run `pnpm typecheck && pnpm lint && pnpm test`, then `pnpm test:integration -- callback-progress`; fix any fallout. Confirm the negative constraints hold: no new `drizzle/` migration (FR-019), no change under the Jira write path (FR-020), and `presentEvents` still emits one item per non-deduped event (FR-018 — no event type filtered out). (depends on all prior)
-- [ ] T036 Execute `specs/026-run-timeline-readability/quickstart.md` (unit/integration + optional visual smoke); confirm SC-001…SC-007 observable. (depends on T035)
+- [X] T033 [P] Add the iteration entry to `docs/progress.md` (payload-shape change, no DB migration, Constitution V scrub note, tunable constants).
+- [X] T034 [P] Grep `packages/mcp-server` for a hard-coded 500 `message` bound in tool definitions/tests; update to 4000 if present.
+- [X] T035 Run `pnpm typecheck && pnpm lint && pnpm test`, then `pnpm test:integration -- callback-progress`; fix any fallout. Confirm the negative constraints hold: no new `drizzle/` migration (FR-019), no change under the Jira write path (FR-020), and `presentEvents` still emits one item per non-deduped event (FR-018 — no event type filtered out). (depends on all prior)
+- [X] T036 Execute `specs/026-run-timeline-readability/quickstart.md` (unit/integration + optional visual smoke); confirm SC-001…SC-007 observable. (depends on T035)
 
 ---
 
