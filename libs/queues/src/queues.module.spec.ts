@@ -8,12 +8,13 @@ import { runQueueName, RECONCILE_QUEUE, OUTBOX_RECONCILE_QUEUE } from './queue.c
  * static structure QueuesModule.register() reads at composition time.
  */
 describe('run-queue registry (T129)', () => {
-  it('provisions run.mock + run.claude_cli + run.kimi + reconcile + outbox-reconcile, independent of any config', () => {
+  it('provisions run.mock + run.claude_cli + run.kimi + run.deepseek_api + reconcile + outbox-reconcile, independent of any config', () => {
     // feature 026 (US3): the outbox-reconcile scheduler queue is another fixed
-    // composition-time constant.
+    // composition-time constant. feature 028 (T012): run.deepseek_api
+    // materializes from RUN_QUEUE_EXECUTOR_TYPES with zero queue-module edits.
     const queues = [...RUN_QUEUE_EXECUTOR_TYPES.map(runQueueName), RECONCILE_QUEUE, OUTBOX_RECONCILE_QUEUE];
     expect(new Set(queues)).toEqual(
-      new Set(['run.mock', 'run.claude_cli', 'run.kimi', 'reconcile', 'outbox-reconcile']),
+      new Set(['run.mock', 'run.claude_cli', 'run.kimi', 'run.deepseek_api', 'reconcile', 'outbox-reconcile']),
     );
   });
 });

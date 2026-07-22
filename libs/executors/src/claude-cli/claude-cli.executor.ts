@@ -14,7 +14,7 @@ import {
 } from '@brigadir/database';
 import { AGENTS_CONFIG } from '@brigadir/app-config';
 import { JIRA_CLIENT, type JiraClient } from '@brigadir/jira';
-import { ReportSchema, type AgentsConfig } from '@brigadir/contracts';
+import { ReportSchema, isApiKeyOnlyExecutorType, type AgentsConfig } from '@brigadir/contracts';
 import type {
   AgentExecutor,
   ExecutorResult,
@@ -27,6 +27,7 @@ import {
   resolveEffectiveAuth,
   applyAuthEnv,
   applyProviderEnv,
+  API_KEY_ONLY_PROVIDER_LABELS,
   DEFAULT_REPO_RUN_ALLOWED_TOOLS,
   type ClaudeCliExecutorConfigInput,
   type EffectiveAuth,
@@ -768,15 +769,16 @@ export class ClaudeCliExecutor implements AgentExecutor {
     // Feature 018: effective auth mode — stored `auth` wins, else the legacy
     // defaulting (stored key → api_key, none → host_subscription). Legacy
     // rows land exactly where pre-018 behavior did.
-    // Feature 025: the kimi preset is implicitly api_key-only — there is no
-    // subscription or cloud-credential fallback against Moonshot, so a
-    // keyless profile fails fast here (normal failed-run path) instead of
+    // Features 025/028: the api_key-only presets (kimi, deepseek_api —
+    // membership is the shared API_KEY_ONLY_EXECUTOR_TYPES set, FR-016) have
+    // no subscription or cloud-credential fallback against their provider, so
+    // a keyless profile fails fast here (normal failed-run path) instead of
     // sliding into host_subscription via the defaulting chain.
     let auth: EffectiveAuth;
-    if (this.preset.type === 'kimi') {
+    if (isApiKeyOnlyExecutorType(this.preset.type)) {
       if (executorSecrets == null) {
         throw new Error(
-          `kimi executor profile "${executorName}" has no stored API key — re-enter the Moonshot key in the profile`,
+          `${this.preset.type} executor profile "${executorName}" has no stored API key — re-enter the ${API_KEY_ONLY_PROVIDER_LABELS[this.preset.type] ?? this.preset.type} key in the profile`,
         );
       }
       auth = { mode: 'api_key' };

@@ -493,6 +493,123 @@ describe('ExecutorForm — kimi type (feature 025)', () => {
   });
 });
 
+/**
+ * Feature 028 (T030) — deepseek_api mirrors the kimi form contract: harness
+ * field set, unconditional key block, no auth/AWS/URL fields, key required on
+ * create, Replace-but-never-Clear; plus the deepseek-specific model hint
+ * (native ids + silent-substitution warning + indicative cost).
+ */
+describe('ExecutorForm — deepseek_api type (feature 028)', () => {
+  const selectType = async (wrapper: ReturnType<typeof mountForm>, type: string) => {
+    await wrapper
+      .findAllComponents({ name: 'ElSelect' })
+      .find((s) => s.attributes('data-test') === 'executor-type')!
+      .setValue(type);
+    await flush();
+  };
+
+  it('shows model/CLI/key/knobs + deepseek hint; hides auth selector, AWS fields, and any URL field', async () => {
+    const wrapper = mountForm();
+    await flush();
+    await selectType(wrapper, 'deepseek_api');
+
+    expect(wrapper.find('[data-test="executor-model"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="executor-cli-path"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="executor-max-turns"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="executor-max-parallel"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="executor-callback"]').exists()).toBe(true);
+    // deepseek_api is implicitly api_key-only → the key block shows unconditionally…
+    expect(wrapper.find('[data-test="executor-api-key"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="executor-api-key"]').attributes('placeholder')).toBe('sk-...');
+    // …and the deepseek model hint carries the native ids, the indicative-cost
+    // caveat, and the silent-substitution warning.
+    const hint = wrapper.find('[data-test="deepseek-model-hint"]');
+    expect(hint.exists()).toBe(true);
+    expect(hint.text()).toContain('deepseek-v4-pro');
+    expect(hint.text()).toContain('deepseek-v4-flash');
+    expect(hint.text()).toContain('indicative');
+    expect(hint.text()).toContain('silently routed');
+    // No auth selector, no AWS fields, no base-URL field anywhere.
+    expect(wrapper.find('[data-test="executor-auth"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="executor-aws-region"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="executor-base-url"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="bedrock-model-hint"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="kimi-model-hint"]').exists()).toBe(false);
+  });
+
+  it('blocks a keyless create client-side with a field error (never POSTs)', async () => {
+    let posted = false;
+    server.use(
+      http.post('/api/executors', () => {
+        posted = true;
+        return HttpResponse.json(sampleExecutors[0], { status: 201 });
+      }),
+    );
+
+    const wrapper = mountForm();
+    await flush();
+    await selectType(wrapper, 'deepseek_api');
+    await wrapper.find('[data-test="executor-name"]').setValue('deepseek');
+    await (wrapper.vm as unknown as { submit: () => Promise<void> }).submit();
+    await flush();
+
+    expect(posted).toBe(false);
+    const keyItem = wrapper
+      .findAllComponents({ name: 'ElFormItem' })
+      .find((i) => i.find('[data-test="executor-api-key"]').exists());
+    expect(keyItem!.props('error')).toContain('required');
+    expect(keyItem!.props('error')).toContain('DeepSeek');
+  });
+
+  it('creates a deepseek_api profile with the harness body + key; no auth/aws/url fields ride along', async () => {
+    let posted: Record<string, unknown> | undefined;
+    server.use(
+      http.post('/api/executors', async ({ request }) => {
+        posted = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(
+          { ...sampleExecutors[0], type: 'deepseek_api', has_api_key: true },
+          { status: 201 },
+        );
+      }),
+    );
+
+    const wrapper = mountForm();
+    await flush();
+    await selectType(wrapper, 'deepseek_api');
+    await wrapper.find('[data-test="executor-name"]').setValue('deepseek');
+    await wrapper.find('[data-test="executor-model"]').setValue('deepseek-v4-flash');
+    await wrapper.find('[data-test="executor-api-key"]').setValue('sk-deepseek-1');
+    await (wrapper.vm as unknown as { submit: () => Promise<void> }).submit();
+    await flush();
+
+    expect(posted).toMatchObject({
+      type: 'deepseek_api',
+      name: 'deepseek',
+      model: 'deepseek-v4-flash',
+      cli_path: 'claude',
+      api_key: 'sk-deepseek-1',
+    });
+    expect(posted).not.toHaveProperty('auth');
+    expect(posted).not.toHaveProperty('aws_region');
+    expect(posted).not.toHaveProperty('base_url');
+    expect(posted).not.toHaveProperty('repository');
+  });
+
+  it('a configured deepseek key shows Replace but NOT Clear (keyless deepseek_api cannot exist)', async () => {
+    const deepseekWithKey = {
+      ...sampleExecutorWithKey,
+      type: 'deepseek_api' as const,
+      config: { model: 'deepseek-v4-flash', cli_path: 'claude', use_callback_channel: true, keep_failed_worktrees: false, max_turns: 30 },
+    };
+    const wrapper = mountForm(deepseekWithKey);
+    await flush();
+
+    expect(wrapper.find('[data-test="api-key-configured"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="api-key-replace"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="api-key-clear"]').exists()).toBe(false);
+  });
+});
+
 describe('SettingsExecutors — delete-in-use', () => {
   it('surfaces the 409 executor_in_use message', async () => {
     const errorSpy = vi.spyOn(ElMessage, 'error').mockImplementation(() => ({}) as never);

@@ -5,7 +5,10 @@ import { JIRA_CLIENT, type JiraClient } from '@brigadir/jira';
 import type { AgentsConfig } from '@brigadir/contracts';
 import { MockExecutor } from './mock.executor';
 import { ClaudeCliExecutor } from './claude-cli/claude-cli.executor';
-import { MOONSHOT_ANTHROPIC_BASE_URL } from './claude-cli/claude-cli.config';
+import {
+  MOONSHOT_ANTHROPIC_BASE_URL,
+  DEEPSEEK_ANTHROPIC_BASE_URL,
+} from './claude-cli/claude-cli.config';
 import { ExecutorRegistry } from './executor.registry';
 import { AGENT_EXECUTORS } from './agent-executor.interface';
 
@@ -17,6 +20,14 @@ import { AGENT_EXECUTORS } from './agent-executor.interface';
  * stays the claude_cli instance); only the registry sees it, by `type`.
  */
 const KIMI_EXECUTOR = Symbol('KIMI_EXECUTOR');
+
+/**
+ * Module-private token for the third ClaudeCliExecutor instance (feature
+ * 028): the same class with the `deepseek_api` provider preset — DeepSeek's
+ * Anthropic-compatible endpoint + implicit api_key-only auth. Same rules as
+ * KIMI_EXECUTOR: not a subclass, not class-token-resolvable, registry-only.
+ */
+const DEEPSEEK_EXECUTOR = Symbol('DEEPSEEK_EXECUTOR');
 
 /**
  * ExecutorsModule — registers every AgentExecutor implementation and the
@@ -45,13 +56,23 @@ const KIMI_EXECUTOR = Symbol('KIMI_EXECUTOR');
       inject: [DRIZZLE, AGENTS_CONFIG, JIRA_CLIENT],
     },
     {
+      provide: DEEPSEEK_EXECUTOR,
+      useFactory: (db: BrigadirDb, agentsConfig: AgentsConfig | null, jira: JiraClient) =>
+        new ClaudeCliExecutor(db, agentsConfig, jira, {
+          type: 'deepseek_api',
+          anthropicBaseUrl: DEEPSEEK_ANTHROPIC_BASE_URL,
+        }),
+      inject: [DRIZZLE, AGENTS_CONFIG, JIRA_CLIENT],
+    },
+    {
       provide: AGENT_EXECUTORS,
-      useFactory: (mock: MockExecutor, claudeCli: ClaudeCliExecutor, kimi: ClaudeCliExecutor) => [
-        mock,
-        claudeCli,
-        kimi,
-      ],
-      inject: [MockExecutor, ClaudeCliExecutor, KIMI_EXECUTOR],
+      useFactory: (
+        mock: MockExecutor,
+        claudeCli: ClaudeCliExecutor,
+        kimi: ClaudeCliExecutor,
+        deepseek: ClaudeCliExecutor,
+      ) => [mock, claudeCli, kimi, deepseek],
+      inject: [MockExecutor, ClaudeCliExecutor, KIMI_EXECUTOR, DEEPSEEK_EXECUTOR],
     },
     ExecutorRegistry,
   ],

@@ -50,6 +50,32 @@ describe('Runs — table + filters + cost', () => {
     expect(markers.length).toBe(1);
   });
 
+  // Feature 028: deepseek_api joins the indicative-marker convention.
+  it('marks a deepseek_api run cost as indicative in the table (feature 028)', async () => {
+    server.use(
+      http.get('/api/workspaces/:id/runs', () =>
+        HttpResponse.json({
+          ...sampleRunList,
+          items: [
+            {
+              ...sampleRunListItem,
+              run_id: 'run-deepseek',
+              executor_type: 'deepseek_api',
+              cost_usd: '0.0500',
+            },
+            { ...sampleRunListItem, run_id: 'run-claude', executor_type: 'claude_cli' },
+          ],
+          total: 2,
+        }),
+      ),
+    );
+    const wrapper = mountRuns();
+    await flush();
+
+    const markers = wrapper.findAll('[data-test="cost-indicative"]');
+    expect(markers.length).toBe(1);
+  });
+
   it('shows the agent role per run, em dash when the agent has none (feature 016)', async () => {
     server.use(
       http.get('/api/workspaces/:id/runs', () =>

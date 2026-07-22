@@ -13,6 +13,7 @@ import { ReconcileScheduler } from './reconcile.scheduler';
 import { RunProcessor } from './run.processor';
 import { ClaudeCliRunProcessor } from './claude-cli-run.processor';
 import { KimiRunProcessor } from './kimi-run.processor';
+import { DeepseekRunProcessor } from './deepseek-run.processor';
 import { ArtifactGuardBootstrap } from './artifact-guard.bootstrap';
 import { OutboxReconcileService } from './outbox-reconcile.service';
 import { OutboxReconcileProcessor } from './outbox-reconcile.processor';
@@ -54,6 +55,8 @@ import { WorkerLockBootstrap } from './worker-lock.bootstrap';
     // Feature 025: `run.kimi` — the same processor logic bound to the kimi
     // queue/profile budget (see kimi-run.processor.ts).
     KimiRunProcessor,
+    // Feature 028: `run.deepseek_api` — third provider preset, same shape.
+    DeepseekRunProcessor,
     ReconcileProcessor,
     ReconcileScheduler,
     HumanTaskService,

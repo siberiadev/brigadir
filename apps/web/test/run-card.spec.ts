@@ -148,6 +148,34 @@ describe('RunCard — report + diagnostics', () => {
     expect(withoutUsage.find('[data-test="meta-tokens"]').exists()).toBe(false);
   });
 
+  // Feature 028: same indicative convention for deepseek_api runs.
+  it('marks the cost as indicative for a deepseek_api run (feature 028)', async () => {
+    server.use(
+      http.get('/api/runs/:id', () =>
+        HttpResponse.json({
+          ...sampleRunCard,
+          run: { ...sampleRunCard.run, executor_type: 'deepseek_api' },
+        }),
+      ),
+    );
+    const deepseek = mountCard();
+    await flush();
+    expect(deepseek.find('[data-test="cost-indicative"]').exists()).toBe(true);
+
+    // No cost yet → bare "—", no caveat marker.
+    server.use(
+      http.get('/api/runs/:id', () =>
+        HttpResponse.json({
+          ...sampleRunCard,
+          run: { ...sampleRunCard.run, executor_type: 'deepseek_api', cost_usd: null },
+        }),
+      ),
+    );
+    const noCost = mountCard();
+    await flush();
+    expect(noCost.find('[data-test="cost-indicative"]').exists()).toBe(false);
+  });
+
   it('hides the report section entirely while there are no checks; the timeline still shows', async () => {
     server.use(
       http.get('/api/runs/:id', () => HttpResponse.json({ ...sampleRunCard, checks: [] })),

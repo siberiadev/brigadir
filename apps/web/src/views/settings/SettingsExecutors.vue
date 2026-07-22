@@ -63,9 +63,9 @@ async function onDeleteExecutor(ex: ExecutorResponse) {
       :data="executorsQuery.data.value?.items ?? []"
       data-test="executors-table"
     >
-      <el-table-column label="Type" width="110">
+      <el-table-column label="Type" width="130">
         <template #default="{ row }">
-          <!-- Real backends (claude_cli, kimi) read as first-class; mock stays muted. -->
+          <!-- Real backends (claude_cli, kimi, deepseek_api) read as first-class; mock stays muted. -->
           <el-tag size="small" :type="row.type === 'mock' ? 'info' : 'primary'">
             {{ row.type }}
           </el-tag>
