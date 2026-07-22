@@ -2161,3 +2161,46 @@ SPA-fallback бэкенда; схема БД, контракты, пайплай
 channel-breadcrumbs, channel-health; веб: индикатор, маркер, presenter).
 Phase-0 прогоны не затронуты; callback-эндпоинты и Jira-путь не тронуты;
 схема БД без изменений.
+
+## Iteration 42 — Третий provider-пресет: executor type `deepseek_api` (feature 028, 2026-07-22)
+
+Точный аналог фичи 025 (kimi/Moonshot): `deepseek_api` — НЕ direct-API
+исполнитель, а третий provider-пресет над общим Claude CLI harness'ом против
+официального Anthropic-совместимого endpoint'а DeepSeek
+(`https://api.deepseek.com/anthropic`). Спека `specs/028-deepseek-executor/`.
+
+- **Контракты**: `DeepseekExecutorApiConfigSchema` (strict, write-only
+  `api_key`, key-required-on-create) во всех трёх union'ах;
+  `DeepseekExecutorConfigSchema` заменил passthrough-заглушку;
+  `'deepseek_api'` в `RUN_QUEUE_EXECUTOR_TYPES` (одна строка = provisioning
+  очереди `run.deepseek_api`). **FR-016-консолидация**: наборы
+  `CLI_HARNESS_EXECUTOR_TYPES` / `CLI_HARNESS_API_EXECUTOR_TYPES` /
+  `API_KEY_ONLY_EXECUTOR_TYPES` (+ гарды, включая object-level
+  `isApiKeyOnlyExecutorRequest` — предикат по discriminant-свойству nest'овский
+  webpack-TS не сужает) — четвёртый провайдер расширяет константу, а не
+  параллельные if'ы в схемах/контроллере/форме/executor'е.
+- **Runtime**: константа `DEEPSEEK_ANTHROPIC_BASE_URL` рядом с MOONSHOT;
+  keyless-guard обобщён на api_key-only набор (пер-провайдерное сообщение,
+  kimi-текст байт-в-байт прежний); `DEEPSEEK_EXECUTOR = Symbol` + useFactory
+  (registry-only, без сабкласса); `DeepseekRunProcessor extends
+  ClaudeCliRunProcessor` (`maxStalledCount: 0`, `autorun: false`) + регистрация
+  в `WorkerLockBootstrap.workers()` — БЕЗ неё очередь провижнится, но никогда
+  не потребляется (грабля feature 027, в бриф не входила).
+- **UI**: тип в селекторе; key-блок безусловно (Replace без Clear); хинт модели
+  с НАТИВНЫМИ id (`deepseek-v4-pro`/`deepseek-v4-flash`) + предупреждение:
+  нераспознанное имя DeepSeek МОЛЧА роутит в `deepseek-v4-flash`; индикативный
+  маркер стоимости распространён на deepseek-прогоны (provider-aware tooltip).
+- **Live-smoke против реального API (FR-017, определение done)**: прогон
+  `deepseek-v4-flash` реальным `claude` 2.1.207 через герметичный
+  integration-harness — `succeeded` штатным путём; **главная гипотеза
+  ПОДТВЕРЖДЕНА: client-side stdio MCP работает против DeepSeek** (report только
+  через `complete_task` + 3× `report_progress` на таймлайне; «MCP unsupported»
+  в доках DeepSeek — про серверный API-коннектор); tool use — SMOKE.md
+  закоммичен и запушен; ключ нигде не всплыл. **Известное ограничение**:
+  endpoint не возвращает usage → `cost_usd`/`usage` = NULL на deepseek-прогонах
+  (зафиксировано в architecture §4 и contracts/deepseek-provider-env.md).
+- **Тесты** (все зелёные): юнит-матрицы обеих схем, `applyProviderEnv` на три
+  пресета, реестр/модуль, `run.deepseek_api` в наборе очередей, веб-форма и
+  маркеры (+6 web); интеграция — 4 сьюта-зеркала kimi (run/gate/security/crud,
+  438 total). Регрессионный пол: сьюты ≤027 без модификаций, снапшоты нетронуты,
+  kimi/claude_cli env байт-в-байт. Zero DDL.

@@ -69,6 +69,19 @@ function openRun(row: RunListItem) {
   router.push(`/runs/${row.run_id}`);
 }
 
+// Features 025/028: provider-preset runs (kimi/Moonshot, deepseek_api/DeepSeek)
+// report cost priced against Anthropic's list — mark the value indicative.
+const INDICATIVE_COST_PROVIDERS: Record<string, string> = {
+  kimi: 'Moonshot',
+  deepseek_api: 'DeepSeek',
+};
+function costIsIndicative(row: RunListItem): boolean {
+  return row.executor_type in INDICATIVE_COST_PROVIDERS && row.cost_usd != null;
+}
+function indicativeCostTip(row: RunListItem): string {
+  return `Indicative only — ${row.executor_type} runs are priced against Anthropic’s list, not ${INDICATIVE_COST_PROVIDERS[row.executor_type] ?? 'the provider'}’s.`;
+}
+
 // Jira sync (reconcile cycle): countdown to the next scheduled tick + manual
 // trigger. Runs start only from this cycle, so "when is the next sync" is the
 // operator's answer to "when will my ticket get picked up". A manual trigger
@@ -245,10 +258,10 @@ async function stopAllRuns() {
       <el-table-column label="Cost">
         <template #default="{ row }">
           {{ formatCostUsd(row.cost_usd) ?? '—' }}
-          <!-- feature 025: kimi cost is priced against Anthropic's list, indicative only -->
+          <!-- features 025/028: provider-preset cost is priced against Anthropic's list, indicative only -->
           <el-tooltip
-            v-if="row.executor_type === 'kimi' && row.cost_usd != null"
-            content="Indicative only — kimi runs are priced against Anthropic’s list, not Moonshot’s."
+            v-if="costIsIndicative(row)"
+            :content="indicativeCostTip(row)"
             placement="top"
           >
             <sup class="indicative-mark" data-test="cost-indicative">~</sup>

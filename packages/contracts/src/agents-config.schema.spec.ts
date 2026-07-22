@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AgentsConfigSchema } from './agents-config.schema';
+import { AgentsConfigSchema, CLI_HARNESS_EXECUTOR_TYPES } from './agents-config.schema';
 
 const valid = {
   workspace: {
@@ -270,6 +270,79 @@ describe('AgentsConfigSchema', () => {
 
   it('rejects a kimi agent with allowedTools omitted and empty behavior.allowed_tools (shared harness rule)', () => {
     const config = withKimi();
+    config.agents[0].behavior = {};
+    const res = AgentsConfigSchema.safeParse(config);
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(
+        res.error.issues.some((i) => i.path.join('.') === 'agents.0.behavior.allowed_tools'),
+      ).toBe(true);
+    }
+  });
+
+  // --- feature 028: deepseek_api executor branch (T005) ---
+
+  const withDeepseek = () => {
+    const config = withClaudeCli();
+    config.executors['coder'] = {
+      type: 'deepseek_api',
+      model: 'deepseek-v4-flash',
+      repository: 'product',
+      concurrency: 1,
+    };
+    return config;
+  };
+
+  it('feature 028: CLI_HARNESS_EXECUTOR_TYPES carries exactly the documented membership (FR-016)', () => {
+    expect([...CLI_HARNESS_EXECUTOR_TYPES]).toEqual(['claude_cli', 'kimi', 'deepseek_api']);
+  });
+
+  it('accepts a valid deepseek_api executor with the claude_cli harness defaults applied', () => {
+    const res = AgentsConfigSchema.safeParse(withDeepseek());
+    expect(res.success).toBe(true);
+    if (res.success) {
+      const coder = res.data.executors['coder'];
+      expect(coder.type).toBe('deepseek_api');
+      if (coder.type === 'deepseek_api') {
+        expect(coder.cliPath).toBe('claude');
+        expect(coder.keepFailedWorktrees).toBe(false);
+        expect(coder.killGraceMs).toBe(10_000);
+        expect(coder.cancelPollMs).toBe(3000);
+        expect(coder.useCallbackChannel).toBe(false);
+      }
+    }
+  });
+
+  it('rejects auth/AWS fields on deepseek_api — no longer a passthrough stub, strict branch', () => {
+    for (const extra of [
+      { auth: 'api_key' },
+      { auth: 'bedrock' },
+      { awsRegion: 'eu-west-1' },
+      { awsProfile: 'corp-dev' },
+      { caBundlePath: '/etc/ssl/ca.pem' },
+      { anthropicBaseUrl: 'https://x' },
+      { totally_unknown: true },
+    ]) {
+      const config = withDeepseek();
+      Object.assign(config.executors['coder'] as Record<string, unknown>, extra);
+      expect(AgentsConfigSchema.safeParse(config).success, JSON.stringify(extra)).toBe(false);
+    }
+  });
+
+  it('rejects a deepseek_api `repository` not in workspace.repositories[].name (shared harness rule)', () => {
+    const config = withDeepseek();
+    (config.executors['coder'] as { repository: string }).repository = 'does-not-exist';
+    const res = AgentsConfigSchema.safeParse(config);
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      const issue = res.error.issues.find((i) => i.path.join('.') === 'executors.coder.repository');
+      expect(issue).toBeDefined();
+      expect(issue?.message).toContain('does-not-exist');
+    }
+  });
+
+  it('rejects a deepseek_api agent with allowedTools omitted and empty behavior.allowed_tools (shared harness rule)', () => {
+    const config = withDeepseek();
     config.agents[0].behavior = {};
     const res = AgentsConfigSchema.safeParse(config);
     expect(res.success).toBe(false);

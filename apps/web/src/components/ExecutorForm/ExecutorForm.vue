@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue';
 import { Info } from 'lucide-vue-next';
-import type { ExecutorCreateRequest, ExecutorResponse, ExecutorType } from '@brigadir/contracts';
+import {
+  isApiKeyOnlyExecutorType,
+  isCliHarnessApiExecutorType,
+  type ExecutorCreateRequest,
+  type ExecutorResponse,
+  type ExecutorType,
+} from '@brigadir/contracts';
 import { useCreateExecutor, useUpdateExecutor } from '../../composables/useExecutors';
 import { ApiError } from '../../api/client';
 
@@ -56,12 +62,15 @@ const form = reactive({
 const NAME_TIP =
   'An alias for quick recognition of this runner — e.g. the team it belongs to or the user who created it.';
 
-// Feature 025: the two types sharing the Claude CLI harness field set.
-const isCliHarness = computed(() => form.type === 'claude_cli' || form.type === 'kimi');
-// kimi shows the key block unconditionally (api_key-only); claude_cli gates
-// it behind the auth selector.
+// Features 025/028: the types sharing the Claude CLI harness field set —
+// membership comes from the shared contracts constants (FR-016), so a fourth
+// provider preset extends the constant, not this file.
+const isCliHarness = computed(() => isCliHarnessApiExecutorType(form.type));
+// The api_key-only preset types (kimi, deepseek_api) show the key block
+// unconditionally; claude_cli gates it behind the auth selector.
+const isApiKeyOnly = computed(() => isApiKeyOnlyExecutorType(form.type));
 const showApiKey = computed(
-  () => form.type === 'kimi' || (form.type === 'claude_cli' && form.auth === 'api_key'),
+  () => isApiKeyOnly.value || (form.type === 'claude_cli' && form.auth === 'api_key'),
 );
 
 const BEDROCK_MODEL_HINT =
@@ -69,6 +78,15 @@ const BEDROCK_MODEL_HINT =
 
 const KIMI_MODEL_HINT =
   'A Moonshot model id, e.g. "kimi-k3" or a "kimi-k2.7" variant. Runs execute against Moonshot’s Anthropic-compatible endpoint; cost figures are priced against Anthropic’s list and are indicative only.';
+
+const DEEPSEEK_MODEL_HINT =
+  'A NATIVE DeepSeek model id: "deepseek-v4-pro" or "deepseek-v4-flash". Caution: unrecognized names are silently routed by DeepSeek to its cheapest model — no error is raised. Runs execute against DeepSeek’s Anthropic-compatible endpoint; cost figures are priced against Anthropic’s list and are indicative only.';
+
+/** Operator-facing provider name for the api_key-only types' key-required message. */
+const API_KEY_PROVIDER_LABELS: Record<'kimi' | 'deepseek_api', string> = {
+  kimi: 'Moonshot',
+  deepseek_api: 'DeepSeek',
+};
 
 // --- api_key states (write-only round-trip) ---
 const hasStoredKey = computed(() => props.executor?.has_api_key === true);
@@ -99,13 +117,13 @@ function buildRequest(): ExecutorCreateRequest {
   if (form.type === 'mock') {
     return { type: 'mock', name: form.name, max_parallel_runs: form.max_parallel_runs };
   }
-  if (form.type === 'kimi') {
-    // Feature 025: no auth selector, no AWS fields, no URL — harness knobs +
-    // the write-only key only. An entered key rides along; untouched → omit
-    // (keep stored). There is no Clear path: a keyless kimi profile cannot
-    // exist, so `api_key: null` is never sent.
-    return {
-      type: 'kimi',
+  if (form.type === 'kimi' || form.type === 'deepseek_api') {
+    // Features 025/028 (api_key-only presets): no auth selector, no AWS
+    // fields, no URL — harness knobs + the write-only key only. An entered
+    // key rides along; untouched → omit (keep stored). There is no Clear
+    // path: a keyless profile of these types cannot exist, so
+    // `api_key: null` is never sent.
+    const harness = {
       name: form.name,
       model: form.model,
       cli_path: form.cli_path,
@@ -115,6 +133,9 @@ function buildRequest(): ExecutorCreateRequest {
       max_parallel_runs: form.max_parallel_runs,
       ...(form.api_key ? { api_key: form.api_key } : {}),
     };
+    return form.type === 'kimi'
+      ? { type: 'kimi', ...harness }
+      : { type: 'deepseek_api', ...harness };
   }
   // api_key tri-state applies only in api_key mode: entered value → replace;
   // Clear → null; untouched → omitted (keep). Other modes send NO api_key —
@@ -155,10 +176,11 @@ function buildRequest(): ExecutorCreateRequest {
 async function submit() {
   for (const k of Object.keys(fieldErrors)) delete fieldErrors[k];
   generalError.value = '';
-  // Feature 025: a new kimi profile must arrive with a key (schema rule
-  // 'kimi requires an api_key on create') — surface it before the round-trip.
-  if (form.type === 'kimi' && !props.executor && !form.api_key) {
-    fieldErrors.api_key = 'A Moonshot API key is required to create a kimi profile.';
+  // Features 025/028: a new api_key-only profile must arrive with a key
+  // (schema rule '<type> requires an api_key on create') — surface it before
+  // the round-trip.
+  if ((form.type === 'kimi' || form.type === 'deepseek_api') && !props.executor && !form.api_key) {
+    fieldErrors.api_key = `A ${API_KEY_PROVIDER_LABELS[form.type]} API key is required to create a ${form.type} profile.`;
     return;
   }
   const body = buildRequest();
@@ -191,6 +213,7 @@ defineExpose({ submit, saving });
         <el-select v-model="form.type" data-test="executor-type">
           <el-option label="claude_cli" value="claude_cli" />
           <el-option label="kimi" value="kimi" />
+          <el-option label="deepseek_api" value="deepseek_api" />
           <el-option label="mock" value="mock" />
         </el-select>
       </el-form-item>
@@ -205,6 +228,13 @@ defineExpose({ submit, saving });
         </div>
         <div v-else-if="form.type === 'kimi'" class="field-hint" data-test="kimi-model-hint">
           {{ KIMI_MODEL_HINT }}
+        </div>
+        <div
+          v-else-if="form.type === 'deepseek_api'"
+          class="field-hint"
+          data-test="deepseek-model-hint"
+        >
+          {{ DEEPSEEK_MODEL_HINT }}
         </div>
       </el-form-item>
     </div>
@@ -221,13 +251,13 @@ defineExpose({ submit, saving });
       <el-input v-model="form.name" data-test="executor-name" />
     </el-form-item>
 
-    <!-- claude_cli + kimi share the Claude CLI harness field set (feature 025) -->
+    <!-- claude_cli + kimi + deepseek_api share the Claude CLI harness field set (features 025/028) -->
     <template v-if="isCliHarness">
       <el-form-item label="CLI path" :error="fieldErrors.cli_path">
         <el-input v-model="form.cli_path" data-test="executor-cli-path" />
       </el-form-item>
 
-      <!-- Auth mode selector is claude_cli-only: kimi is implicitly api_key-only -->
+      <!-- Auth mode selector is claude_cli-only: kimi/deepseek_api are implicitly api_key-only -->
       <el-form-item v-if="form.type === 'claude_cli'" label="Authentication" :error="fieldErrors.auth">
         <el-select v-model="form.auth" data-test="executor-auth">
           <el-option label="Host subscription (~/.claude)" value="host_subscription" />
@@ -244,9 +274,9 @@ defineExpose({ submit, saving });
           <el-button link type="primary" data-test="api-key-replace" @click="startReplaceKey">
             Replace
           </el-button>
-          <!-- kimi cannot be cleared: a keyless kimi profile can never run -->
+          <!-- api_key-only types (kimi, deepseek_api) cannot be cleared: a keyless profile can never run -->
           <el-button
-            v-if="form.type !== 'kimi'"
+            v-if="!isApiKeyOnly"
             link
             type="danger"
             data-test="api-key-clear"
@@ -261,7 +291,7 @@ defineExpose({ submit, saving });
           type="password"
           show-password
           autocomplete="new-password"
-          :placeholder="form.type === 'kimi' ? 'sk-...' : 'sk-ant-...'"
+          :placeholder="isApiKeyOnly ? 'sk-...' : 'sk-ant-...'"
           data-test="executor-api-key"
         />
         <div v-if="clearedKey" class="api-key-note" data-test="api-key-cleared-note">

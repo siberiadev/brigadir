@@ -30,7 +30,7 @@ export const EXECUTOR_TYPES = [
  * set no longer depends on `agents.yaml`. This is the "static structure" the
  * QueuesModule reads at composition time (Constitution lazy-resolution carve-out).
  */
-export const RUN_QUEUE_EXECUTOR_TYPES = ['mock', 'claude_cli', 'kimi'] as const;
+export const RUN_QUEUE_EXECUTOR_TYPES = ['mock', 'claude_cli', 'kimi', 'deepseek_api'] as const;
 
 /** A git repository the workspace can operate on (validated now, consumed in iteration 3). */
 export const RepositoryConfigSchema = z
@@ -146,6 +146,35 @@ export const KimiExecutorConfigSchema = z
   })
   .strict();
 
+/**
+ * `deepseek_api` executor branch (feature 028) — the Claude CLI harness
+ * pointed at DeepSeek's Anthropic-compatible endpoint. Same shape as the kimi
+ * branch: implicitly api_key-only (the key lives in sealed
+ * `executors.secrets`, never here), the endpoint is a hardcoded constant
+ * mapped from the type (no base-URL field anywhere), and the AWS/bedrock
+ * fields are foreign — `.strict()` rejects them all. `model` is a NATIVE
+ * DeepSeek id. Cross-field checks are shared via CLI_HARNESS_EXECUTOR_TYPES
+ * in `AgentsConfigSchema.superRefine` below. This branch REPLACES the former
+ * passthrough stub — the type graduated to typed+strict like claude_cli/kimi.
+ */
+export const DeepseekExecutorConfigSchema = z
+  .object({
+    type: z.literal('deepseek_api'),
+    concurrency: z.number().int().min(1).default(2),
+    model: z.string().min(1),
+    cliPath: z.string().min(1).default('claude'),
+    repository: z.string().min(1).optional(),
+    allowedTools: z.array(z.string()).optional(),
+    keepFailedWorktrees: z.boolean().default(false),
+    worktreeRoot: z.string().min(1).optional(),
+    repoCacheRoot: z.string().min(1).optional(),
+    maxTurns: z.number().int().min(1).optional(),
+    killGraceMs: z.number().int().min(0).default(10_000),
+    cancelPollMs: z.number().int().min(1).default(3000),
+    useCallbackChannel: z.boolean().default(false),
+  })
+  .strict();
+
 /** Shape shared by the executor types that have no typed extension yet. */
 function passthroughExecutorConfig<T extends string>(type: T) {
   return z
@@ -163,11 +192,29 @@ function passthroughExecutorConfig<T extends string>(type: T) {
 export const ExecutorConfigSchema = z.discriminatedUnion('type', [
   ClaudeCliExecutorConfigSchema,
   KimiExecutorConfigSchema,
+  DeepseekExecutorConfigSchema,
   passthroughExecutorConfig('mock'),
   passthroughExecutorConfig('claude_routines'),
   passthroughExecutorConfig('anthropic_api'),
-  passthroughExecutorConfig('deepseek_api'),
 ]);
+
+/**
+ * Feature 028 (FR-016): the executor types sharing the CLI-harness semantics
+ * in THIS (camelCase config) layer — the single source for the cross-field
+ * `superRefine` rules below. A fourth provider preset extends this constant,
+ * not the conditionals. Distinct from the API-layer set in executor.schema.ts
+ * (the two layers deliberately keep separate type vocabularies).
+ */
+export const CLI_HARNESS_EXECUTOR_TYPES = ['claude_cli', 'kimi', 'deepseek_api'] as const;
+type CliHarnessExecutorConfig = Extract<
+  z.infer<typeof ExecutorConfigSchema>,
+  { type: (typeof CLI_HARNESS_EXECUTOR_TYPES)[number] }
+>;
+function isCliHarnessExecutor(
+  executor: z.infer<typeof ExecutorConfigSchema>,
+): executor is CliHarnessExecutorConfig {
+  return (CLI_HARNESS_EXECUTOR_TYPES as readonly string[]).includes(executor.type);
+}
 
 export const AgentBehaviorSchema = z
   .object({
@@ -239,13 +286,14 @@ export const AgentsConfigSchema = z
       seenAgentKeys.add(key);
     });
 
-    // claude_cli/kimi cross-field checks (contracts/executor-config.md, D9;
-    // kimi shares the harness and therefore the same rules, feature 025):
+    // CLI-harness cross-field checks (contracts/executor-config.md, D9; the
+    // provider presets — kimi feature 025, deepseek_api feature 028 — share
+    // the harness and therefore the same rules via CLI_HARNESS_EXECUTOR_TYPES):
     // a deprecated executor-level `repository`, when present, must reference
     // a declared workspace repository.
     const repoNames = new Set((config.workspace.repositories ?? []).map((r) => r.name));
     for (const [name, executor] of Object.entries(config.executors)) {
-      if (executor.type !== 'claude_cli' && executor.type !== 'kimi') continue;
+      if (!isCliHarnessExecutor(executor)) continue;
       if (executor.repository !== undefined && !repoNames.has(executor.repository)) {
         ctx.addIssue({
           code: 'custom',
@@ -283,12 +331,12 @@ export const AgentsConfigSchema = z
       });
     }
 
-    // claude_cli/kimi `allowedTools`: if the executor doesn't declare its own,
+    // CLI-harness `allowedTools`: if the executor doesn't declare its own,
     // every agent using it must declare a non-empty behavior.allowed_tools —
     // no silent "all tools" default (Constitution V posture).
     config.agents.forEach((agent, index) => {
       const executor = config.executors[agent.executor];
-      if (!executor || (executor.type !== 'claude_cli' && executor.type !== 'kimi')) return;
+      if (!executor || !isCliHarnessExecutor(executor)) return;
       if (executor.allowedTools && executor.allowedTools.length > 0) return;
       const behaviorTools = agent.behavior?.allowed_tools;
       if (!behaviorTools || behaviorTools.length === 0) {

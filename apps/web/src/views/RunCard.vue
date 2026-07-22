@@ -110,14 +110,22 @@ const executorLabel = computed(() => {
   return executorModel.value ? `${type} · ${executorModel.value}` : type;
 });
 
-// Feature 025: kimi runs report cost priced against Anthropic's list, not
-// Moonshot's — the figure is indicative only, so flag it wherever a real
-// value shows (a bare "—" needs no caveat).
+// Features 025/028: the provider-preset runs (kimi/Moonshot, deepseek_api/
+// DeepSeek) report cost priced against Anthropic's list, not the provider's —
+// the figure is indicative only, so flag it wherever a real value shows (a
+// bare "—" needs no caveat).
+const INDICATIVE_COST_PROVIDERS: Record<string, string> = {
+  kimi: 'Moonshot',
+  deepseek_api: 'DeepSeek',
+};
 const costIsIndicative = computed(
-  () => run.value?.executor_type === 'kimi' && run.value?.cost_usd != null,
+  () =>
+    (run.value?.executor_type ?? '') in INDICATIVE_COST_PROVIDERS && run.value?.cost_usd != null,
 );
-const INDICATIVE_COST_TIP =
-  'Indicative only — kimi runs are priced against Anthropic’s list, not Moonshot’s.';
+const INDICATIVE_COST_TIP = computed(
+  () =>
+    `Indicative only — ${run.value?.executor_type} runs are priced against Anthropic’s list, not ${INDICATIVE_COST_PROVIDERS[run.value?.executor_type ?? ''] ?? 'the provider'}’s.`,
+);
 
 // Token counts from the persisted CLI `result.usage`. The meta item is hidden
 // entirely when the run carries none (mock runs, pre-usage legacy runs) — no
@@ -234,7 +242,7 @@ const liveDuration = computed(() => {
       <span class="meta-item" title="Cost" data-test="meta-cost">
         <CircleDollarSign :size="13" />
         {{ formatCost(run.cost_usd) ?? '—' }}
-        <!-- kimi cost is priced against Anthropic's list — mark it indicative -->
+        <!-- provider-preset cost is priced against Anthropic's list — mark it indicative -->
         <el-tooltip v-if="costIsIndicative" :content="INDICATIVE_COST_TIP" placement="top">
           <sup class="indicative-mark" data-test="cost-indicative">~</sup>
         </el-tooltip>

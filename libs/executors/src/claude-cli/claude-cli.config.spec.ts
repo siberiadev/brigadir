@@ -8,8 +8,11 @@ import {
   applyAuthEnv,
   applyProviderEnv,
   MOONSHOT_ANTHROPIC_BASE_URL,
+  DEEPSEEK_ANTHROPIC_BASE_URL,
+  API_KEY_ONLY_PROVIDER_LABELS,
   type ClaudeCliExecutorConfig,
 } from './claude-cli.config';
+import { API_KEY_ONLY_EXECUTOR_TYPES } from '@brigadir/contracts';
 
 const base: ClaudeCliExecutorConfig = {
   type: 'claude_cli',
@@ -252,5 +255,74 @@ describe('applyProviderEnv (feature 025)', () => {
       ANTHROPIC_API_KEY: 'sk-moonshot-profile',
       ANTHROPIC_BASE_URL: MOONSHOT_ANTHROPIC_BASE_URL,
     });
+  });
+});
+
+/**
+ * Feature 028 — the deepseek_api preset row of the provider-endpoint
+ * injection matrix (contracts/deepseek-provider-env.md invariants 2–3, 6).
+ * `applyProviderEnv` itself is unchanged; these pin the new preset's behavior
+ * and that the kimi/claude_cli rows stay exactly as they were.
+ */
+describe('applyProviderEnv — deepseek_api preset (feature 028)', () => {
+  const floor = () => ({ HOME: '/home/op', PATH: '/usr/bin', USER: 'op' });
+
+  it('deepseek preset injects exactly the DeepSeek ANTHROPIC_BASE_URL constant', () => {
+    const env = floor();
+    applyProviderEnv(env, { type: 'deepseek_api', anthropicBaseUrl: DEEPSEEK_ANTHROPIC_BASE_URL });
+    expect(env).toEqual({ ...floor(), ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic' });
+  });
+
+  it('the three presets stay distinct: claude_cli absent, kimi = Moonshot, deepseek = DeepSeek', () => {
+    const claude = floor();
+    applyProviderEnv(claude, { type: 'claude_cli' });
+    expect('ANTHROPIC_BASE_URL' in claude).toBe(false);
+
+    const kimi = floor();
+    applyProviderEnv(kimi, { type: 'kimi', anthropicBaseUrl: MOONSHOT_ANTHROPIC_BASE_URL });
+    expect(kimi.ANTHROPIC_BASE_URL).toBe(MOONSHOT_ANTHROPIC_BASE_URL);
+
+    const deepseek = floor();
+    applyProviderEnv(deepseek, {
+      type: 'deepseek_api',
+      anthropicBaseUrl: DEEPSEEK_ANTHROPIC_BASE_URL,
+    });
+    expect(deepseek.ANTHROPIC_BASE_URL).toBe(DEEPSEEK_ANTHROPIC_BASE_URL);
+    expect(deepseek.ANTHROPIC_BASE_URL).not.toBe(kimi.ANTHROPIC_BASE_URL);
+  });
+
+  it('is pure for the deepseek preset — host process.env never contributes the value', () => {
+    const original = process.env.ANTHROPIC_BASE_URL;
+    process.env.ANTHROPIC_BASE_URL = 'https://evil.example.com';
+    try {
+      const env = floor();
+      applyProviderEnv(env, {
+        type: 'deepseek_api',
+        anthropicBaseUrl: DEEPSEEK_ANTHROPIC_BASE_URL,
+      });
+      expect(env.ANTHROPIC_BASE_URL).toBe(DEEPSEEK_ANTHROPIC_BASE_URL);
+    } finally {
+      if (original === undefined) delete process.env.ANTHROPIC_BASE_URL;
+      else process.env.ANTHROPIC_BASE_URL = original;
+    }
+  });
+
+  it('stacks on top of api_key auth injection without touching it (deepseek run order)', () => {
+    const env = floor();
+    applyAuthEnv(env, { mode: 'api_key' }, 'sk-deepseek-profile');
+    applyProviderEnv(env, { type: 'deepseek_api', anthropicBaseUrl: DEEPSEEK_ANTHROPIC_BASE_URL });
+    expect(env).toEqual({
+      ...floor(),
+      ANTHROPIC_API_KEY: 'sk-deepseek-profile',
+      ANTHROPIC_BASE_URL: DEEPSEEK_ANTHROPIC_BASE_URL,
+    });
+  });
+
+  it('FR-016: every api_key-only type has a provider label for the keyless fail-loud guard', () => {
+    for (const type of API_KEY_ONLY_EXECUTOR_TYPES) {
+      expect(API_KEY_ONLY_PROVIDER_LABELS[type]).toBeTruthy();
+    }
+    expect(API_KEY_ONLY_PROVIDER_LABELS.kimi).toBe('Moonshot');
+    expect(API_KEY_ONLY_PROVIDER_LABELS.deepseek_api).toBe('DeepSeek');
   });
 });

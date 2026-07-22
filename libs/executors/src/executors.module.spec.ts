@@ -4,6 +4,7 @@ import {
   applyAuthEnv,
   applyProviderEnv,
   MOONSHOT_ANTHROPIC_BASE_URL,
+  DEEPSEEK_ANTHROPIC_BASE_URL,
   type EffectiveAuth,
 } from './claude-cli/claude-cli.config';
 import { buildChildEnv } from './claude-cli/env-allowlist';
@@ -28,7 +29,14 @@ function kimiInstance(): ClaudeCliExecutor {
   });
 }
 
-describe('ClaudeCliExecutor provider preset (feature 025)', () => {
+function deepseekInstance(): ClaudeCliExecutor {
+  return new ClaudeCliExecutor(null as never, null, null as never, {
+    type: 'deepseek_api',
+    anthropicBaseUrl: DEEPSEEK_ANTHROPIC_BASE_URL,
+  });
+}
+
+describe('ClaudeCliExecutor provider preset (features 025/028)', () => {
   it('defaults to the claude_cli type with no preset — pre-025 class-provider behavior', () => {
     expect(bareInstance().type).toBe('claude_cli');
   });
@@ -36,16 +44,22 @@ describe('ClaudeCliExecutor provider preset (feature 025)', () => {
   it('takes its type from the kimi preset', () => {
     expect(kimiInstance().type).toBe('kimi');
   });
+
+  it('takes its type from the deepseek_api preset (feature 028, T011)', () => {
+    expect(deepseekInstance().type).toBe('deepseek_api');
+  });
 });
 
-describe('ExecutorRegistry with both harness instances (feature 025)', () => {
-  it('resolves claude_cli and kimi to their own instances', () => {
+describe('ExecutorRegistry with all harness instances (features 025/028)', () => {
+  it('resolves claude_cli, kimi, and deepseek_api to their own instances', () => {
     const claudeCli = bareInstance();
     const kimi = kimiInstance();
-    const registry = new ExecutorRegistry([claudeCli, kimi]);
+    const deepseek = deepseekInstance();
+    const registry = new ExecutorRegistry([claudeCli, kimi, deepseek]);
     expect(registry.resolve('claude_cli')).toBe(claudeCli);
     expect(registry.resolve('kimi')).toBe(kimi);
-    expect(registry.has('kimi')).toBe(true);
+    expect(registry.resolve('deepseek_api')).toBe(deepseek);
+    expect(registry.has('deepseek_api')).toBe(true);
   });
 });
 

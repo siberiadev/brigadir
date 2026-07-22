@@ -3,6 +3,10 @@ import {
   ExecutorApiConfigSchema as ExecutorConfigSchema,
   ExecutorCreateRequestSchema,
   ExecutorUpdateRequestSchema,
+  CLI_HARNESS_API_EXECUTOR_TYPES,
+  API_KEY_ONLY_EXECUTOR_TYPES,
+  isCliHarnessApiExecutorType,
+  isApiKeyOnlyExecutorType,
 } from './executor.schema';
 
 /**
@@ -255,5 +259,89 @@ describe('kimi executor branch (feature 025)', () => {
     const body = { ...kimiConfig(), name: 'kimi-1' };
     expect(ExecutorUpdateRequestSchema.safeParse(body).success).toBe(true);
     expect(ExecutorUpdateRequestSchema.safeParse({ ...body, api_key: null }).success).toBe(true);
+  });
+});
+
+/**
+ * Feature 028 (T004) — the deepseek_api accept/reject matrix from
+ * specs/028-deepseek-executor/contracts/deepseek-executor-api.md. Same shape
+ * as the kimi branch: implicitly api_key-only, no auth selector, no AWS
+ * fields, no base-URL field — all foreign by `.strict()`; key required on
+ * create. Plus the FR-016 shared type-set constants.
+ */
+describe('deepseek_api executor branch (feature 028)', () => {
+  const deepseekConfig = (overrides: Record<string, unknown> = {}) => ({
+    type: 'deepseek_api',
+    model: 'deepseek-v4-flash',
+    cli_path: 'claude',
+    use_callback_channel: true,
+    keep_failed_worktrees: false,
+    max_turns: 40,
+    max_parallel_runs: 2,
+    ...overrides,
+  });
+  const issuePaths = (parsed: { error?: { issues: { path: PropertyKey[] }[] } }) =>
+    (parsed.error?.issues ?? []).map((i) => i.path.join('.'));
+
+  it('accepts a valid deepseek_api config (harness knobs + optional write-only api_key)', () => {
+    expect(ExecutorConfigSchema.safeParse(deepseekConfig()).success).toBe(true);
+    expect(ExecutorConfigSchema.safeParse(deepseekConfig({ api_key: 'sk-deepseek' })).success).toBe(
+      true,
+    );
+    expect(ExecutorConfigSchema.safeParse(deepseekConfig({ api_key: null })).success).toBe(true);
+  });
+
+  it('rejects an auth selector — deepseek_api has no auth modes', () => {
+    for (const auth of ['api_key', 'host_subscription', 'bedrock']) {
+      expect(ExecutorConfigSchema.safeParse(deepseekConfig({ auth })).success).toBe(false);
+    }
+  });
+
+  it('rejects the AWS/bedrock fields as foreign to deepseek_api', () => {
+    for (const field of ['aws_region', 'aws_profile', 'ca_bundle_path']) {
+      expect(ExecutorConfigSchema.safeParse(deepseekConfig({ [field]: 'x' })).success).toBe(false);
+    }
+  });
+
+  it('rejects any base-URL-shaped field — the endpoint is a code constant, never config', () => {
+    for (const field of ['base_url', 'anthropic_base_url', 'endpoint', 'url']) {
+      expect(
+        ExecutorConfigSchema.safeParse(deepseekConfig({ [field]: 'https://x' })).success,
+      ).toBe(false);
+    }
+  });
+
+  it('rejects repository on deepseek_api — same platform-scoped rule as claude_cli', () => {
+    expect(ExecutorConfigSchema.safeParse(deepseekConfig({ repository: 'api' })).success).toBe(
+      false,
+    );
+  });
+
+  it('CREATE requires an api_key string (omitted and null both rejected at api_key)', () => {
+    const body = { ...deepseekConfig(), name: 'deepseek-1' };
+    const omitted = ExecutorCreateRequestSchema.safeParse(body);
+    expect(omitted.success).toBe(false);
+    expect(issuePaths(omitted)).toContain('api_key');
+    const cleared = ExecutorCreateRequestSchema.safeParse({ ...body, api_key: null });
+    expect(cleared.success).toBe(false);
+    expect(issuePaths(cleared)).toContain('api_key');
+    expect(
+      ExecutorCreateRequestSchema.safeParse({ ...body, api_key: 'sk-deepseek' }).success,
+    ).toBe(true);
+  });
+
+  it('UPDATE accepts an omitted key (stored key retained; clear-to-keyless is the controller 422)', () => {
+    const body = { ...deepseekConfig(), name: 'deepseek-1' };
+    expect(ExecutorUpdateRequestSchema.safeParse(body).success).toBe(true);
+    expect(ExecutorUpdateRequestSchema.safeParse({ ...body, api_key: null }).success).toBe(true);
+  });
+
+  it('FR-016: the shared type-set constants carry exactly the documented membership', () => {
+    expect([...CLI_HARNESS_API_EXECUTOR_TYPES]).toEqual(['claude_cli', 'kimi', 'deepseek_api']);
+    expect([...API_KEY_ONLY_EXECUTOR_TYPES]).toEqual(['kimi', 'deepseek_api']);
+    expect(isCliHarnessApiExecutorType('deepseek_api')).toBe(true);
+    expect(isCliHarnessApiExecutorType('mock')).toBe(false);
+    expect(isApiKeyOnlyExecutorType('deepseek_api')).toBe(true);
+    expect(isApiKeyOnlyExecutorType('claude_cli')).toBe(false);
   });
 });

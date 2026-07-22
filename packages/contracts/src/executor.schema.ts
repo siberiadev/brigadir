@@ -21,6 +21,9 @@ import { makePaginatedResponseSchema } from './pagination.schema';
  *                   api_key-only (feature 025): no auth selector, no AWS
  *                   fields, no base-URL field — the Moonshot endpoint is a
  *                   code constant mapped from the type.
+ *  - `deepseek_api` → third provider preset over the same harness (feature
+ *                   028): identical field set and key semantics as kimi; the
+ *                   DeepSeek endpoint is a code constant mapped from the type.
  *
  * Auth defaulting (feature 018, additive — stored rows are never rewritten):
  * a row without `auth` behaves as `api_key` when it has a sealed api_key blob,
@@ -45,8 +48,41 @@ import { makePaginatedResponseSchema } from './pagination.schema';
  * response carries `has_api_key: boolean` instead; `api_key: null` clears.
  */
 
-export const ExecutorTypeSchema = z.enum(['mock', 'claude_cli', 'kimi']);
+export const ExecutorTypeSchema = z.enum(['mock', 'claude_cli', 'kimi', 'deepseek_api']);
 export type ExecutorType = z.infer<typeof ExecutorTypeSchema>;
+
+/**
+ * Feature 028 (FR-016): the shared executor-type sets. Every rule that applies
+ * uniformly to "provider presets over the shared CLI harness" or to
+ * "implicitly api_key-only preset types" keys off ONE of these constants —
+ * never off per-type literal chains — so a fourth provider preset extends a
+ * single definition. Consumed by the schemas below, the dashboard controller,
+ * the executor runtime's keyless guard, and the Vue executor form.
+ */
+export const CLI_HARNESS_API_EXECUTOR_TYPES = ['claude_cli', 'kimi', 'deepseek_api'] as const;
+export type CliHarnessApiExecutorType = (typeof CLI_HARNESS_API_EXECUTOR_TYPES)[number];
+export function isCliHarnessApiExecutorType(type: string): type is CliHarnessApiExecutorType {
+  return (CLI_HARNESS_API_EXECUTOR_TYPES as readonly string[]).includes(type);
+}
+
+export const API_KEY_ONLY_EXECUTOR_TYPES = ['kimi', 'deepseek_api'] as const;
+export type ApiKeyOnlyExecutorType = (typeof API_KEY_ONLY_EXECUTOR_TYPES)[number];
+export function isApiKeyOnlyExecutorType(type: string): type is ApiKeyOnlyExecutorType {
+  return (API_KEY_ONLY_EXECUTOR_TYPES as readonly string[]).includes(type);
+}
+
+/**
+ * Object-level variant of the guard above: narrows a request/config UNION to
+ * its api_key-only branches. Needed because narrowing a union through a type
+ * predicate on its discriminant PROPERTY is not supported by every TS
+ * pipeline in the repo (the nest webpack build rejects it) — narrowing the
+ * whole object is.
+ */
+export function isApiKeyOnlyExecutorRequest<T extends { type: string }>(
+  req: T,
+): req is Extract<T, { type: ApiKeyOnlyExecutorType }> {
+  return isApiKeyOnlyExecutorType(req.type);
+}
 
 export const MockExecutorConfigSchema = z
   .object({
@@ -161,6 +197,31 @@ export const KimiExecutorApiConfigSchema = z
   .strict();
 
 /**
+ * `deepseek_api` branch (feature 028) — the Claude CLI harness against
+ * DeepSeek's Anthropic-compatible endpoint. Same shape and semantics as the
+ * kimi branch: implicitly api_key-only (no `auth` selector, no AWS fields, no
+ * base-URL field anywhere — the endpoint is a hardcoded constant mapped from
+ * the type, contracts/deepseek-provider-env.md); `.strict()` rejects all of
+ * those as foreign; `api_key` keeps the write-only semantics. `model` carries
+ * a NATIVE DeepSeek id (`deepseek-v4-pro` / `deepseek-v4-flash`) — the
+ * provider silently substitutes its cheapest model for unrecognized names, so
+ * the form hint warns rather than the schema validating against a catalog.
+ */
+export const DeepseekExecutorApiConfigSchema = z
+  .object({
+    type: z.literal('deepseek_api'),
+    model: z.string().min(1),
+    cli_path: z.string().min(1),
+    use_callback_channel: z.boolean(),
+    keep_failed_worktrees: z.boolean(),
+    max_turns: z.number().int().min(1),
+    max_parallel_runs: z.number().int().min(1),
+    // WRITE-ONLY: same tri-state as kimi; clear-to-keyless is the controller 422.
+    api_key: z.string().min(1).nullable().optional(),
+  })
+  .strict();
+
+/**
  * The typed-config authority (discriminated union). Consumed by the backend
  * validation path AND the Vue form to drive the per-type field set.
  */
@@ -168,6 +229,7 @@ export const ExecutorApiConfigSchema = z.discriminatedUnion('type', [
   MockExecutorConfigSchema,
   ClaudeCliExecutorApiConfigSchema,
   KimiExecutorApiConfigSchema,
+  DeepseekExecutorApiConfigSchema,
 ]);
 export type ExecutorApiConfig = z.infer<typeof ExecutorApiConfigSchema>;
 
@@ -180,6 +242,7 @@ export type ExecutorApiConfig = z.infer<typeof ExecutorApiConfigSchema>;
 const MockCreateBranch = MockExecutorConfigSchema.extend({ name: z.string().min(1) });
 const ClaudeCliCreateBranch = ClaudeCliExecutorApiConfigSchema.extend({ name: z.string().min(1) });
 const KimiCreateBranch = KimiExecutorApiConfigSchema.extend({ name: z.string().min(1) });
+const DeepseekCreateBranch = DeepseekExecutorApiConfigSchema.extend({ name: z.string().min(1) });
 
 export const ExecutorCreateRequestSchema = z.discriminatedUnion('type', [
   MockCreateBranch,
@@ -206,6 +269,16 @@ export const ExecutorCreateRequestSchema = z.discriminatedUnion('type', [
       });
     }
   }),
+  // Create-only (feature 028): same rule for deepseek_api.
+  DeepseekCreateBranch.superRefine((value, ctx) => {
+    if (typeof value.api_key !== 'string') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['api_key'],
+        message: 'deepseek_api requires an api_key on create.',
+      });
+    }
+  }),
 ]);
 export type ExecutorCreateRequest = z.infer<typeof ExecutorCreateRequestSchema>;
 
@@ -217,6 +290,7 @@ export const ExecutorUpdateRequestSchema = z.discriminatedUnion('type', [
   MockCreateBranch,
   ClaudeCliCreateBranch,
   KimiCreateBranch,
+  DeepseekCreateBranch,
 ]);
 export type ExecutorUpdateRequest = z.infer<typeof ExecutorUpdateRequestSchema>;
 

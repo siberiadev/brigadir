@@ -17,6 +17,27 @@ export type ClaudeCliExecutorConfig = Extract<ExecutorConfig, { type: 'claude_cl
 export const MOONSHOT_ANTHROPIC_BASE_URL = 'https://api.moonshot.ai/anthropic';
 
 /**
+ * DeepSeek's Anthropic-compatible endpoint (feature 028,
+ * specs/028-deepseek-executor/contracts/deepseek-provider-env.md). A
+ * module-scope constant read at composition time is permitted static structure
+ * (Constitution lazy-resolution carve-out): it is the identity of the
+ * `deepseek_api` executor type, not a credential or connection — deliberately
+ * NOT operator-configurable, never persisted, never exposed via API/UI.
+ */
+export const DEEPSEEK_ANTHROPIC_BASE_URL = 'https://api.deepseek.com/anthropic';
+
+/**
+ * Operator-facing provider names for the implicitly api_key-only preset types
+ * (feature 028, FR-016) — used by the keyless fail-loud guard's error message.
+ * Membership itself is the shared API_KEY_ONLY_EXECUTOR_TYPES constant in
+ * @brigadir/contracts; this map only labels it.
+ */
+export const API_KEY_ONLY_PROVIDER_LABELS: Record<string, string> = {
+  kimi: 'Moonshot',
+  deepseek_api: 'DeepSeek',
+};
+
+/**
  * Provider preset (feature 025): fixed per DI-registered executor instance,
  * outside any profile config — which is exactly why editing a profile can
  * never re-point it at another provider. `claude_cli` gets no base URL

@@ -17,6 +17,8 @@ import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import {
   ExecutorCreateRequestSchema,
   ExecutorUpdateRequestSchema,
+  isApiKeyOnlyExecutorType,
+  isApiKeyOnlyExecutorRequest,
   type ExecutorCreateRequest,
   type ExecutorListResponse,
   type ExecutorResponse,
@@ -97,29 +99,31 @@ export class ExecutorsController {
     // Feature 018 (FR-007): explicit api_key mode must end the save WITH a
     // key — either provided now or already stored. The schema owns the
     // create-time variant; this one needs row state, so it lives here.
-    // Feature 025: same rule for kimi, unconditionally — kimi is implicitly
-    // api_key-only and a keyless profile can never run.
-    const requiresEndKey =
-      (req.type === 'claude_cli' && req.auth === 'api_key') || req.type === 'kimi';
-    if (requiresEndKey && typeof req.api_key !== 'string') {
-      const [existing] = await this.db
-        .select({ secrets: schema.executors.secrets })
-        .from(schema.executors)
-        .where(eq(schema.executors.id, executorId))
-        .limit(1);
-      if (!existing) throw notFoundError('executor_not_found', 'Executor not found.');
-      if (req.api_key === null || existing.secrets == null) {
-        throw validationError('Executor could not be saved.', [
-          {
-            path: ['api_key'],
-            code: 'custom',
-            message:
-              req.type === 'kimi'
-                ? 'kimi requires a stored or provided api_key.'
+    // Features 025/028: same rule for every api_key-only preset type
+    // (kimi, deepseek_api — the shared API_KEY_ONLY_EXECUTOR_TYPES set,
+    // FR-016), unconditionally — a keyless profile of those can never run.
+    if (req.type !== 'mock') {
+      const requiresEndKey =
+        (req.type === 'claude_cli' && req.auth === 'api_key') || isApiKeyOnlyExecutorType(req.type);
+      if (requiresEndKey && typeof req.api_key !== 'string') {
+        const [existing] = await this.db
+          .select({ secrets: schema.executors.secrets })
+          .from(schema.executors)
+          .where(eq(schema.executors.id, executorId))
+          .limit(1);
+        if (!existing) throw notFoundError('executor_not_found', 'Executor not found.');
+        if (req.api_key === null || existing.secrets == null) {
+          throw validationError('Executor could not be saved.', [
+            {
+              path: ['api_key'],
+              code: 'custom',
+              message: isApiKeyOnlyExecutorType(req.type)
+                ? `${req.type} requires a stored or provided api_key.`
                 : 'auth "api_key" requires a stored or provided key.',
-            level: 'error' as const,
-          },
-        ]);
+              level: 'error' as const,
+            },
+          ]);
+        }
       }
     }
 
@@ -127,8 +131,8 @@ export class ExecutorsController {
     // api_key tri-state (write-only): omitted → keep the stored blob;
     // string → replace; explicit null → clear. Switching auth mode away from
     // "api_key" deliberately does NOT clear — the blob stays inert (FR-009).
-    // (kimi `null` never reaches here keyless — the guard above 422s it.)
-    const apiKey = req.type === 'claude_cli' || req.type === 'kimi' ? req.api_key : undefined;
+    // (api_key-only `null` never reaches here keyless — the guard above 422s it.)
+    const apiKey = req.type !== 'mock' ? req.api_key : undefined;
     const secretsPatch =
       apiKey === undefined ? {} : { secrets: apiKey === null ? null : sealExecutorSecrets({ api_key: apiKey }) };
     let rows: ExecutorRow[];
@@ -212,11 +216,12 @@ function toInsertValues(req: ExecutorCreateRequest) {
           ...(req.aws_profile !== undefined ? { awsProfile: req.aws_profile } : {}),
           ...(req.ca_bundle_path !== undefined ? { caBundlePath: req.ca_bundle_path } : {}),
         }
-      : req.type === 'kimi'
+      : isApiKeyOnlyExecutorRequest(req)
         ? {
-            // Feature 025: the harness knobs only — no auth block (implicitly
-            // api_key-only), no AWS fields, and no endpoint anywhere: the
-            // Moonshot base URL is a code constant mapped from the type.
+            // Features 025/028 (kimi, deepseek_api): the harness knobs only —
+            // no auth block (implicitly api_key-only), no AWS fields, and no
+            // endpoint anywhere: the provider base URL is a code constant
+            // mapped from the type.
             model: req.model,
             cliPath: req.cli_path,
             useCallbackChannel: req.use_callback_channel,
@@ -234,7 +239,7 @@ function toInsertValues(req: ExecutorCreateRequest) {
 
 /** create-time api_key seal: string → sealed blob; absent/null → undefined (no key). */
 function sealApiKey(req: ExecutorCreateRequest): Buffer | undefined {
-  if ((req.type !== 'claude_cli' && req.type !== 'kimi') || req.api_key == null) return undefined;
+  if (req.type === 'mock' || req.api_key == null) return undefined;
   return sealExecutorSecrets({ api_key: req.api_key });
 }
 
@@ -265,10 +270,10 @@ function toExecutorResponse(row: ExecutorRow): ExecutorResponse {
           ...(stored.awsProfile !== undefined ? { aws_profile: stored.awsProfile } : {}),
           ...(stored.caBundlePath !== undefined ? { ca_bundle_path: stored.caBundlePath } : {}),
         }
-      : row.type === 'kimi'
+      : isApiKeyOnlyExecutorType(row.type)
         ? {
-            // Feature 025: no `auth` computed for kimi (implicitly
-            // api_key-only) and never any endpoint field.
+            // Features 025/028: no `auth` computed for the api_key-only
+            // preset types and never any endpoint field.
             model: stored.model,
             cli_path: stored.cliPath,
             use_callback_channel: stored.useCallbackChannel,

@@ -9,6 +9,7 @@ import { WorkerLockService } from './worker-lock.service';
 import { RunProcessor } from './run.processor';
 import { ClaudeCliRunProcessor } from './claude-cli-run.processor';
 import { KimiRunProcessor } from './kimi-run.processor';
+import { DeepseekRunProcessor } from './deepseek-run.processor';
 import { ReconcileProcessor } from './reconcile.processor';
 import { OutboxReconcileProcessor } from './outbox-reconcile.processor';
 
@@ -33,6 +34,7 @@ export class WorkerLockBootstrap implements OnApplicationBootstrap, OnApplicatio
     private readonly runProcessor: RunProcessor,
     private readonly claudeCliProcessor: ClaudeCliRunProcessor,
     private readonly kimiProcessor: KimiRunProcessor,
+    private readonly deepseekProcessor: DeepseekRunProcessor,
     private readonly reconcileProcessor: ReconcileProcessor,
     private readonly outboxReconcileProcessor: OutboxReconcileProcessor,
   ) {}
@@ -42,6 +44,7 @@ export class WorkerLockBootstrap implements OnApplicationBootstrap, OnApplicatio
       this.runProcessor.worker,
       this.claudeCliProcessor.worker,
       this.kimiProcessor.worker,
+      this.deepseekProcessor.worker,
       this.reconcileProcessor.worker,
       this.outboxReconcileProcessor.worker,
     ].filter((w): w is Worker => Boolean(w));
