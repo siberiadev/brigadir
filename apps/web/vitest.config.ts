@@ -18,6 +18,9 @@ export default defineConfig({
       '@brigadir/contracts/orchestrator-defaults': fileURLToPath(
         new URL('../../packages/contracts/src/orchestrator-defaults.ts', import.meta.url),
       ),
+      '@brigadir/contracts/executor-type-sets': fileURLToPath(
+        new URL('../../packages/contracts/src/executor-type-sets.ts', import.meta.url),
+      ),
     },
   },
   test: {

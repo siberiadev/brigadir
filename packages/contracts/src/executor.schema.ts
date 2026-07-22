@@ -52,37 +52,15 @@ export const ExecutorTypeSchema = z.enum(['mock', 'claude_cli', 'kimi', 'deepsee
 export type ExecutorType = z.infer<typeof ExecutorTypeSchema>;
 
 /**
- * Feature 028 (FR-016): the shared executor-type sets. Every rule that applies
- * uniformly to "provider presets over the shared CLI harness" or to
- * "implicitly api_key-only preset types" keys off ONE of these constants —
- * never off per-type literal chains — so a fourth provider preset extends a
- * single definition. Consumed by the schemas below, the dashboard controller,
- * the executor runtime's keyless guard, and the Vue executor form.
+ * Feature 028 (FR-016): the shared executor-type sets (CLI-harness /
+ * api_key-only membership + guards) live in the DEP-FREE
+ * `executor-type-sets.ts` module so the web app can consume the runtime
+ * values from TS source via its vite alias (`@brigadir/contracts/
+ * executor-type-sets` — same pattern as `pagination.constants.ts`; rollup
+ * cannot trace names through the CJS barrel's `__exportStar`). Re-exported
+ * here so server code keeps importing them from the barrel unchanged.
  */
-export const CLI_HARNESS_API_EXECUTOR_TYPES = ['claude_cli', 'kimi', 'deepseek_api'] as const;
-export type CliHarnessApiExecutorType = (typeof CLI_HARNESS_API_EXECUTOR_TYPES)[number];
-export function isCliHarnessApiExecutorType(type: string): type is CliHarnessApiExecutorType {
-  return (CLI_HARNESS_API_EXECUTOR_TYPES as readonly string[]).includes(type);
-}
-
-export const API_KEY_ONLY_EXECUTOR_TYPES = ['kimi', 'deepseek_api'] as const;
-export type ApiKeyOnlyExecutorType = (typeof API_KEY_ONLY_EXECUTOR_TYPES)[number];
-export function isApiKeyOnlyExecutorType(type: string): type is ApiKeyOnlyExecutorType {
-  return (API_KEY_ONLY_EXECUTOR_TYPES as readonly string[]).includes(type);
-}
-
-/**
- * Object-level variant of the guard above: narrows a request/config UNION to
- * its api_key-only branches. Needed because narrowing a union through a type
- * predicate on its discriminant PROPERTY is not supported by every TS
- * pipeline in the repo (the nest webpack build rejects it) — narrowing the
- * whole object is.
- */
-export function isApiKeyOnlyExecutorRequest<T extends { type: string }>(
-  req: T,
-): req is Extract<T, { type: ApiKeyOnlyExecutorType }> {
-  return isApiKeyOnlyExecutorType(req.type);
-}
+export * from './executor-type-sets';
 
 export const MockExecutorConfigSchema = z
   .object({
