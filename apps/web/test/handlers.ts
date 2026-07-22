@@ -15,6 +15,8 @@ import type {
   RunCardResponse,
   RunCostResponse,
   RunListResponse,
+  ReconcileStatusResponse,
+  ReconcileTriggerResponse,
 } from '@brigadir/contracts';
 
 /** Обернуть элементы в единый пагинированный конверт (реш. 2026-07-15). */
@@ -640,6 +642,21 @@ export const defaultHandlers = [
       status.includes('running') ? sampleGlobalRunsLive : sampleGlobalRunsAttention,
     );
   }),
+
+  // Расписание реконсайла + «Sync now» на странице Runs. next_run_at считается
+  // на момент запроса — отсчёт в компоненте детерминированно положителен.
+  http.get('/api/reconcile/status', () =>
+    HttpResponse.json<ReconcileStatusResponse>({
+      scheduled: true,
+      every_ms: 30_000,
+      next_run_at: new Date(Date.now() + 25_000).toISOString(),
+      last_run_at: new Date(Date.now() - 5_000).toISOString(),
+      generated_at: new Date().toISOString(),
+    }),
+  ),
+  http.post('/api/reconcile/trigger', () =>
+    HttpResponse.json<ReconcileTriggerResponse>({ ok: true, deduplicated: false }),
+  ),
 
   // runs table + cost + card + cancel/retry (US2/US3)
   http.get('/api/workspaces/:id/runs', () => HttpResponse.json(sampleRunList)),
