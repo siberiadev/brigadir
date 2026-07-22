@@ -2,10 +2,11 @@
 import { computed, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { MailWarning } from 'lucide-vue-next';
+import { MailWarning, RefreshCw } from 'lucide-vue-next';
 import type { RunCostPeriod, RunListItem, RunStatus } from '@brigadir/contracts';
 import { MAX_PAGE_SIZE } from '@brigadir/contracts/pagination';
 import { useRuns, useRunsCost, useCancelAllRuns } from '../composables/useRuns';
+import { useReconcileStatus, useTriggerReconcile } from '../composables/useReconcile';
 import { useAgents } from '../composables/useAgents';
 import { usePagination } from '../composables/usePagination';
 import { useNow } from '../composables/useNow';
@@ -68,6 +69,31 @@ function openRun(row: RunListItem) {
   router.push(`/runs/${row.run_id}`);
 }
 
+// Jira sync (reconcile cycle): countdown to the next scheduled tick + manual
+// trigger. Runs start only from this cycle, so "when is the next sync" is the
+// operator's answer to "when will my ticket get picked up". A manual trigger
+// does NOT shift the schedule — the countdown keeps aiming at the next
+// scheduled tick.
+const syncStatus = useReconcileStatus();
+const triggerSync = useTriggerReconcile();
+const syncLabel = computed<string | null>(() => {
+  const s = syncStatus.data.value;
+  if (!s) return null; // first load — render nothing rather than a wrong state
+  if (!s.scheduled || !s.next_run_at) return 'Sync schedule off';
+  const remaining = Date.parse(s.next_run_at) - now.value.getTime();
+  // ≤0: the tick is due; the 5 s status poll will bring the next target.
+  return remaining <= 0 ? 'Sync due…' : `Next sync in ${formatDuration(remaining)}`;
+});
+async function syncNow() {
+  try {
+    const res = await triggerSync.mutateAsync();
+    if (res.deduplicated) ElMessage.info('Sync already queued.');
+    else ElMessage.success('Sync started.');
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : 'Failed to start sync.');
+  }
+}
+
 // Bulk stop: queued + running → cancelled after an explicit confirmation.
 // `awaiting_human` runs are untouched server-side (rule #7), which the
 // dialog spells out so "stop all" never reads as "clears the human queue".
@@ -96,6 +122,20 @@ async function stopAllRuns() {
     <div class="header-row">
       <h2>Runs</h2>
       <div class="cost" data-test="cost-header">
+        <span v-if="syncLabel" class="sync-countdown" data-test="sync-countdown">
+          {{ syncLabel }}
+        </span>
+        <el-button
+          plain
+          size="small"
+          data-test="trigger-sync"
+          :loading="triggerSync.isPending.value"
+          @click="syncNow"
+        >
+          <!-- Статичная иконка: hover-анимация — только в сайдбаре (реш. 2026-07-15). -->
+          <RefreshCw :size="14" />
+          <span class="btn-label">Sync now</span>
+        </el-button>
         <el-button
           type="danger"
           plain
@@ -240,6 +280,15 @@ async function stopAllRuns() {
 }
 .cost-total {
   font-weight: $font-weight-medium;
+}
+.sync-countdown {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  // Стабильная ширина: тикающий отсчёт не должен дёргать соседние кнопки.
+  font-variant-numeric: tabular-nums;
+}
+.btn-label {
+  margin-left: $space-xs;
 }
 .indicative-mark {
   color: var(--el-color-warning);

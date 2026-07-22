@@ -216,6 +216,70 @@ describe('Runs — table + filters + cost', () => {
     expect(router.currentRoute.value.fullPath).toBe(`/runs/${sampleRunListItem.run_id}`);
   });
 
+  // Отсчёт до следующего тика реконсайла + «Sync now» в шапке.
+  it('shows the sync countdown and ticks it down with the 1 s clock', async () => {
+    const wrapper = mountRuns();
+    await flush();
+
+    // Default handler serves next_run_at = now + 25 s.
+    const before = wrapper.find('[data-test="sync-countdown"]').text();
+    expect(before).toMatch(/Next sync in \d+s/);
+
+    await flush(1100);
+    expect(wrapper.find('[data-test="sync-countdown"]').text()).not.toBe(before);
+  });
+
+  it('shows "Sync schedule off" when the worker has not registered the scheduler', async () => {
+    server.use(
+      http.get('/api/reconcile/status', () =>
+        HttpResponse.json({
+          scheduled: false,
+          every_ms: null,
+          next_run_at: null,
+          last_run_at: null,
+          generated_at: new Date().toISOString(),
+        }),
+      ),
+    );
+    const wrapper = mountRuns();
+    await flush();
+
+    expect(wrapper.find('[data-test="sync-countdown"]').text()).toBe('Sync schedule off');
+  });
+
+  it('Sync now posts a manual trigger and toasts success', async () => {
+    let triggerCalls = 0;
+    server.use(
+      http.post('/api/reconcile/trigger', () => {
+        triggerCalls += 1;
+        return HttpResponse.json({ ok: true, deduplicated: false });
+      }),
+    );
+    const wrapper = mountRuns();
+    await flush();
+
+    await wrapper.find('[data-test="trigger-sync"]').trigger('click');
+    await flush(10);
+
+    expect(triggerCalls).toBe(1);
+    expect(document.body.textContent).toContain('Sync started.');
+  });
+
+  it('a deduplicated trigger toasts "already queued" instead of success', async () => {
+    server.use(
+      http.post('/api/reconcile/trigger', () =>
+        HttpResponse.json({ ok: true, deduplicated: true }),
+      ),
+    );
+    const wrapper = mountRuns();
+    await flush();
+
+    await wrapper.find('[data-test="trigger-sync"]').trigger('click');
+    await flush(10);
+
+    expect(document.body.textContent).toContain('Sync already queued.');
+  });
+
   // Feature 027 (FR-015): маркер недоставленных callbacks в ячейке статуса.
   it('shows the callback_alert marker only on flagged runs', async () => {
     server.use(
