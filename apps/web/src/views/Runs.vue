@@ -120,8 +120,14 @@ async function stopAllRuns() {
 <template>
   <section class="runs">
     <div class="header-row">
-      <h2>Runs</h2>
-      <div class="cost" data-test="cost-header">
+      <div class="title-group">
+        <h2>Runs</h2>
+        <span class="cost-total" data-test="cost-total">
+          {{ formatCostUsd(costQuery.data.value?.total_cost_usd) ?? '$0.00' }}
+          <span class="muted">· {{ costQuery.data.value?.run_count ?? 0 }} runs</span>
+        </span>
+      </div>
+      <div class="header-actions" data-test="cost-header">
         <span v-if="syncLabel" class="sync-countdown" data-test="sync-countdown">
           {{ syncLabel }}
         </span>
@@ -146,15 +152,6 @@ async function stopAllRuns() {
         >
           Stop all runs
         </el-button>
-        <el-radio-group v-model="period" size="small" data-test="cost-period">
-          <el-radio-button label="24h" value="24h">24h</el-radio-button>
-          <el-radio-button label="7d" value="7d">7d</el-radio-button>
-          <el-radio-button label="30d" value="30d">30d</el-radio-button>
-        </el-radio-group>
-        <span class="cost-total" data-test="cost-total">
-          {{ formatCostUsd(costQuery.data.value?.total_cost_usd) ?? '$0.00' }}
-          <span class="muted">· {{ costQuery.data.value?.run_count ?? 0 }} runs</span>
-        </span>
       </div>
     </div>
 
@@ -189,6 +186,12 @@ async function stopAllRuns() {
         data-test="filter-ticket"
         class="filter-control"
       />
+      <!-- Пресет периода для бюджета в заголовке — прижат вправо в строке фильтров. -->
+      <el-radio-group v-model="period" size="small" data-test="cost-period" class="period-switch">
+        <el-radio-button label="24h" value="24h">24h</el-radio-button>
+        <el-radio-button label="7d" value="7d">7d</el-radio-button>
+        <el-radio-button label="30d" value="30d">30d</el-radio-button>
+      </el-radio-group>
     </div>
 
     <el-empty
@@ -273,7 +276,13 @@ async function stopAllRuns() {
   justify-content: space-between;
   align-items: center;
 }
-.cost {
+// Заголовок + общий бюджет/кол-во прогонов — слева, на одной базовой линии.
+.title-group {
+  display: flex;
+  align-items: baseline;
+  gap: $space-md;
+}
+.header-actions {
   display: flex;
   align-items: center;
   gap: $space-md;
@@ -302,11 +311,16 @@ async function stopAllRuns() {
 }
 .filters {
   display: flex;
+  align-items: center;
   gap: $space-md;
   margin: $space-lg 0;
 }
 .filter-control {
   width: 220px;
+}
+// Пресет периода прижат к правому краю строки фильтров.
+.period-switch {
+  margin-left: auto;
 }
 .el-table {
   cursor: pointer;
