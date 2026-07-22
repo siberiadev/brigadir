@@ -115,6 +115,39 @@ describe('RunCard — report + diagnostics', () => {
     expect(kimiNoCost.find('[data-test="cost-indicative"]').exists()).toBe(false);
   });
 
+  it('shows input/output tokens from the run usage; hidden entirely when a run has none', async () => {
+    // Default fixture: usage { input_tokens: 100, output_tokens: 50 }.
+    const withUsage = mountCard();
+    await flush();
+    expect(withUsage.find('[data-test="meta-tokens"]').text()).toBe('100 in / 50 out');
+
+    // Large counts compact to k/M.
+    server.use(
+      http.get('/api/runs/:id', () =>
+        HttpResponse.json({
+          ...sampleRunCard,
+          run: { ...sampleRunCard.run, usage: { input_tokens: 12345, output_tokens: 1234567 } },
+        }),
+      ),
+    );
+    const large = mountCard();
+    await flush();
+    expect(large.find('[data-test="meta-tokens"]').text()).toBe('12.3k in / 1.2M out');
+
+    // No usage (mock runs, legacy runs) → the meta item is absent, no bare "—".
+    server.use(
+      http.get('/api/runs/:id', () =>
+        HttpResponse.json({
+          ...sampleRunCard,
+          run: { ...sampleRunCard.run, usage: undefined },
+        }),
+      ),
+    );
+    const withoutUsage = mountCard();
+    await flush();
+    expect(withoutUsage.find('[data-test="meta-tokens"]').exists()).toBe(false);
+  });
+
   it('hides the report section entirely while there are no checks; the timeline still shows', async () => {
     server.use(
       http.get('/api/runs/:id', () => HttpResponse.json({ ...sampleRunCard, checks: [] })),

@@ -125,6 +125,22 @@ export const RunCardHistoryItemSchema = z
   .strict();
 export type RunCardHistoryItem = z.infer<typeof RunCardHistoryItemSchema>;
 
+/**
+ * Raw `result.usage` object of the Claude CLI terminal event, persisted as-is
+ * into `runs.usage` (jsonb). Deliberately NOT `.strict()`: the CLI adds fields
+ * between versions (`service_tier`, `server_tool_use`, …) and legacy jsonb
+ * values must never fail response validation — unknown keys pass through.
+ */
+export const RunUsageSchema = z
+  .object({
+    input_tokens: z.number().int().nonnegative().optional(),
+    output_tokens: z.number().int().nonnegative().optional(),
+    cache_read_input_tokens: z.number().int().nonnegative().optional(),
+    cache_creation_input_tokens: z.number().int().nonnegative().optional(),
+  })
+  .passthrough();
+export type RunUsage = z.infer<typeof RunUsageSchema>;
+
 export const RunCardRunSchema = z
   .object({
     run_id: z.string(),
@@ -137,7 +153,7 @@ export const RunCardRunSchema = z
     agent: RunAgentRefSchema,
     duration_ms: z.number().int().nullable(),
     cost_usd: z.string().nullable(),
-    usage: z.unknown().optional(),
+    usage: RunUsageSchema.optional(),
     outcome: z.string().nullable(),
     external_ref: z.string().nullable(),
     error: z.string().nullable(),
