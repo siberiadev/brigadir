@@ -30,6 +30,11 @@ export default defineConfig({
       '@brigadir/contracts/orchestrator-defaults': fileURLToPath(
         new URL('../../packages/contracts/src/orchestrator-defaults.ts', import.meta.url),
       ),
+      // Same pattern for the executor type-set constants/guards (feature 028,
+      // dep-free TS source module) — the ExecutorForm needs them at runtime.
+      '@brigadir/contracts/executor-type-sets': fileURLToPath(
+        new URL('../../packages/contracts/src/executor-type-sets.ts', import.meta.url),
+      ),
     },
   },
   server: {

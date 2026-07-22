@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue';
 import { Info } from 'lucide-vue-next';
+import type { ExecutorCreateRequest, ExecutorResponse, ExecutorType } from '@brigadir/contracts';
+// RUNTIME values from contracts ride the dep-free source alias, never the CJS
+// barrel (rollup can't trace `export *` there) — same rule as pagination.
 import {
   isApiKeyOnlyExecutorType,
   isCliHarnessApiExecutorType,
-  type ExecutorCreateRequest,
-  type ExecutorResponse,
-  type ExecutorType,
-} from '@brigadir/contracts';
+} from '@brigadir/contracts/executor-type-sets';
 import { useCreateExecutor, useUpdateExecutor } from '../../composables/useExecutors';
 import { ApiError } from '../../api/client';
 

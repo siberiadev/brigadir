@@ -23,6 +23,9 @@
       "@brigadir/contracts/pagination": ["../../packages/contracts/src/pagination.constants.ts"],
       "@brigadir/contracts/orchestrator-defaults": [
         "../../packages/contracts/src/orchestrator-defaults.ts"
+      ],
+      "@brigadir/contracts/executor-type-sets": [
+        "../../packages/contracts/src/executor-type-sets.ts"
       ]
     }
   },
