@@ -69,11 +69,12 @@ function openRun(row: RunListItem) {
   router.push(`/runs/${row.run_id}`);
 }
 
-// Features 025/028: provider-preset runs (kimi/Moonshot, deepseek_api/DeepSeek)
-// report cost priced against Anthropic's list — mark the value indicative.
+// Feature 025: kimi/Moonshot runs report cost priced against Anthropic's
+// list — mark the value indicative. deepseek_api left this map once the
+// worker started repricing its runs from token usage at DeepSeek rates
+// (libs/executors provider-pricing.ts; historical rows backfilled).
 const INDICATIVE_COST_PROVIDERS: Record<string, string> = {
   kimi: 'Moonshot',
-  deepseek_api: 'DeepSeek',
 };
 function costIsIndicative(row: RunListItem): boolean {
   return row.executor_type in INDICATIVE_COST_PROVIDERS && row.cost_usd != null;

@@ -34,6 +34,7 @@ import {
   type ProviderPreset,
 } from './claude-cli.config';
 import { buildArgs } from './args';
+import { resolveCostUsd } from './provider-pricing';
 import { buildChildEnv } from './env-allowlist';
 import { scrub } from '@brigadir/scrubber';
 import { ClaudeStreamParser, type TerminalResult } from './stream-parser';
@@ -503,6 +504,12 @@ export class ClaudeCliExecutor implements AgentExecutor {
       const handleClose = async (code: number | null): Promise<void> => {
         signal.removeEventListener('abort', onAbort);
 
+        // The CLI prices total_cost_usd at ANTHROPIC rates regardless of the
+        // provider endpoint; for presets with their own price table (deepseek)
+        // the run's cost is recomputed from token usage. Everywhere below uses
+        // THIS number — including the budget ceiling — never the raw CLI one.
+        const costUsd = resolveCostUsd(this.preset.type, runtimeConfig.model, terminal);
+
         // Outcome precedence: cancelled > rate_limited > timeout (incident
         // 2026-07-19). A user cancel is authoritative over everything. But a
         // rate_limit we already parsed must outrank a LATE watchdog `timeout`:
@@ -519,7 +526,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
           settle({
             exitStatus: 'cancelled',
             externalRef,
-            costUsd: terminal?.totalCostUsd,
+            costUsd,
             usage: terminal?.usage,
             diagnostics: 'run cancelled',
           });
@@ -533,7 +540,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
           settle({
             exitStatus: 'rate_limited',
             externalRef,
-            costUsd: terminal?.totalCostUsd,
+            costUsd,
             usage: terminal?.usage,
             diagnostics: 'subscription rate limit hit — retry later, attempt not spent',
           });
@@ -556,7 +563,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
           settle({
             exitStatus: 'timeout',
             externalRef,
-            costUsd: terminal?.totalCostUsd,
+            costUsd,
             usage: terminal?.usage,
             diagnostics: 'run timeout',
           });
@@ -564,20 +571,24 @@ export class ClaudeCliExecutor implements AgentExecutor {
         }
 
         if (terminal) {
-          // D11 (REVISED): only the terminal event ever carries total_cost_usd;
+          // D11 (REVISED ×2): only the terminal event ever carries cost data;
           // enforce the ceiling here as a post-hoc verification of the CLI's
-          // own --max-budget-usd self-stop. No token→USD estimation.
+          // own --max-budget-usd self-stop. The ceiling compares the PROVIDER
+          // cost (provider-pricing.ts) — for the deepseek preset the CLI's
+          // Anthropic-priced self-stop still fires ~30× early, which is
+          // conservative, but this check must not crash a run whose real
+          // spend is under the budget.
           if (
             ctx.limits.maxBudgetUsd !== undefined &&
-            terminal.totalCostUsd !== undefined &&
-            terminal.totalCostUsd > ctx.limits.maxBudgetUsd
+            costUsd !== undefined &&
+            costUsd > ctx.limits.maxBudgetUsd
           ) {
             settle({
               exitStatus: 'crashed',
               externalRef,
-              costUsd: terminal.totalCostUsd,
+              costUsd,
               usage: terminal.usage,
-              diagnostics: `budget exceeded: cost_usd=${terminal.totalCostUsd} > max_budget_usd=${ctx.limits.maxBudgetUsd}`,
+              diagnostics: `budget exceeded: cost_usd=${costUsd} > max_budget_usd=${ctx.limits.maxBudgetUsd}`,
             });
             return;
           }
@@ -587,7 +598,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
             settle({
               exitStatus: 'completed',
               externalRef,
-              costUsd: terminal.totalCostUsd,
+              costUsd,
               usage: terminal.usage,
               report: parsedReport.data,
             });
@@ -595,7 +606,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
             settle({
               exitStatus: 'completed',
               externalRef,
-              costUsd: terminal.totalCostUsd,
+              costUsd,
               usage: terminal.usage,
               diagnostics: `no schema-valid structured_output: ${parsedReport.error.message}`,
             });

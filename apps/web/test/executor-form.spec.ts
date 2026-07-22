@@ -521,13 +521,14 @@ describe('ExecutorForm — deepseek_api type (feature 028)', () => {
     // deepseek_api is implicitly api_key-only → the key block shows unconditionally…
     expect(wrapper.find('[data-test="executor-api-key"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="executor-api-key"]').attributes('placeholder')).toBe('sk-...');
-    // …and the deepseek model hint carries the native ids, the indicative-cost
-    // caveat, and the silent-substitution warning.
+    // …and the deepseek model hint carries the native ids, the DeepSeek-rate
+    // pricing note (costs are repriced by the worker — no longer indicative),
+    // and the silent-substitution warning.
     const hint = wrapper.find('[data-test="deepseek-model-hint"]');
     expect(hint.exists()).toBe(true);
     expect(hint.text()).toContain('deepseek-v4-pro');
     expect(hint.text()).toContain('deepseek-v4-flash');
-    expect(hint.text()).toContain('indicative');
+    expect(hint.text()).toContain('DeepSeek rates');
     expect(hint.text()).toContain('silently routed');
     // No auth selector, no AWS fields, no base-URL field anywhere.
     expect(wrapper.find('[data-test="executor-auth"]').exists()).toBe(false);

@@ -110,13 +110,14 @@ const executorLabel = computed(() => {
   return executorModel.value ? `${type} · ${executorModel.value}` : type;
 });
 
-// Features 025/028: the provider-preset runs (kimi/Moonshot, deepseek_api/
-// DeepSeek) report cost priced against Anthropic's list, not the provider's —
-// the figure is indicative only, so flag it wherever a real value shows (a
-// bare "—" needs no caveat).
+// Feature 025: kimi/Moonshot runs report cost priced against Anthropic's
+// list, not the provider's — the figure is indicative only, so flag it
+// wherever a real value shows (a bare "—" needs no caveat). deepseek_api left
+// this map once the worker started repricing its runs from token usage at
+// DeepSeek rates (libs/executors provider-pricing.ts; historical rows
+// backfilled).
 const INDICATIVE_COST_PROVIDERS: Record<string, string> = {
   kimi: 'Moonshot',
-  deepseek_api: 'DeepSeek',
 };
 const costIsIndicative = computed(
   () =>
