@@ -332,7 +332,9 @@ export class RunsController {
         agent: { id: run.agentId, name: run.agentName, key: run.agentKey, role: run.agentRole ?? null },
         duration_ms: durationMs(run.startedAt, run.finishedAt),
         cost_usd: run.costUsd ?? null,
-        usage: run.usage ?? undefined,
+        // jsonb is untyped on the Drizzle side; the only writer is
+        // recordCostUsage persisting the CLI terminal `result.usage` object.
+        usage: (run.usage ?? undefined) as RunCardResponse['run']['usage'],
         outcome: run.outcome ?? null,
         external_ref: run.externalRef ?? null,
         error: run.error ?? null,

@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { RunCardArtifact, RunCheckStatus, RunStatus } from '@brigadir/contracts';
-import { CircleDollarSign, Copy, GitBranch, Hash, RotateCcw, Timer, X } from 'lucide-vue-next';
+import { ArrowDownUp, CircleDollarSign, Copy, GitBranch, Hash, RotateCcw, Timer, X } from 'lucide-vue-next';
 import { useRunCard, useCancelRun, useRetryRun } from '../composables/useRunCard';
 import { useNow } from '../composables/useNow';
 import BackLink from '../components/BackLink.vue';
@@ -12,6 +12,7 @@ import { presentEvents } from '../components/RunTimeline/presenter';
 import { ApiError } from '../api/client';
 import { formatDuration } from '../utils/date';
 import { formatCost, formatCostUsd } from '../utils/currency';
+import { formatTokens } from '../utils/number';
 import { pluralize } from '../utils/pluralize';
 
 const props = defineProps<{ id: string }>();
@@ -118,6 +119,35 @@ const costIsIndicative = computed(
 const INDICATIVE_COST_TIP =
   'Indicative only — kimi runs are priced against Anthropic’s list, not Moonshot’s.';
 
+// Token counts from the persisted CLI `result.usage`. The meta item is hidden
+// entirely when the run carries none (mock runs, pre-usage legacy runs) — no
+// bare icon with a "—".
+const usageTokens = computed(() => {
+  const u = run.value?.usage;
+  const input = typeof u?.input_tokens === 'number' ? u.input_tokens : null;
+  const output = typeof u?.output_tokens === 'number' ? u.output_tokens : null;
+  return input === null && output === null ? null : { input, output };
+});
+const tokensLabel = computed(() => {
+  if (!usageTokens.value) return null;
+  const { input, output } = usageTokens.value;
+  return `${formatTokens(input) ?? '—'} in / ${formatTokens(output) ?? '—'} out`;
+});
+// Exact-number breakdown for the tooltip; absent fields are simply omitted.
+const tokensTip = computed(() => {
+  const u = run.value?.usage;
+  if (!u) return '';
+  const parts: string[] = [];
+  const push = (label: string, value: unknown) => {
+    if (typeof value === 'number') parts.push(`${label} ${value.toLocaleString('en-US')}`);
+  };
+  push('Input', u.input_tokens);
+  push('Output', u.output_tokens);
+  push('Cache read', u.cache_read_input_tokens);
+  push('Cache creation', u.cache_creation_input_tokens);
+  return parts.join(' · ');
+});
+
 // Live Duration while running: tick from `started_at` every second; otherwise
 // the server-computed `duration_ms` (same rule as the Runs table).
 const now = useNow();
@@ -209,6 +239,13 @@ const liveDuration = computed(() => {
           <sup class="indicative-mark" data-test="cost-indicative">~</sup>
         </el-tooltip>
       </span>
+      <el-tooltip v-if="tokensLabel" :content="tokensTip" placement="top">
+        <!-- aria-label, not `title`: the wrapping el-tooltip already owns hover -->
+        <span class="meta-item" aria-label="Tokens (input / output)" data-test="meta-tokens">
+          <ArrowDownUp :size="13" />
+          {{ tokensLabel }}
+        </span>
+      </el-tooltip>
     </div>
 
     <!-- Content tabs: the live view (report once ready + timeline) | history -->
