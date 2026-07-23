@@ -33,8 +33,17 @@ const apiUrl = requireEnv('BRIGADIR_API_URL');
 const dashboardToken = requireEnv('BRIGADIR_DASHBOARD_TOKEN');
 const jiraEmail = requireEnv('BRIGADIR_JIRA_EMAIL');
 const jiraApiToken = requireEnv('BRIGADIR_JIRA_API_TOKEN');
+// Feature 030: optional — only needed to attach a PRIVATE role-template repo.
+// Read from the server's OWN env (Principle V), never a tool argument.
+const agentInstructionsToken = process.env.BRIGADIR_AGENT_INSTRUCTIONS_TOKEN || undefined;
 
-const handlers = createToolHandlers({ apiUrl, dashboardToken, jiraEmail, jiraApiToken });
+const handlers = createToolHandlers({
+  apiUrl,
+  dashboardToken,
+  jiraEmail,
+  jiraApiToken,
+  agentInstructionsToken,
+});
 
 const TOOL_NAMES = Object.keys(AdminTools) as AdminToolName[];
 

@@ -21,3 +21,5 @@ export * from './orchestrator-defaults';
 export * from './orchestrator-template.schema';
 export * from './channel.schema';
 export * from './reconcile.schema';
+export * from './role-template.schema';
+export * from './default-role-templates';

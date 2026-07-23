@@ -11,6 +11,9 @@ import {
   getScopeJql,
   patchWorkspaceSettings,
   seedOrchestratorAgent,
+  setWorkspaceInstructionSource,
+  setWorkspaceInstructionToken,
+  getGlobalInstructionSource,
 } from '@brigadir/database';
 import {
   JiraClientFactory,
@@ -18,6 +21,7 @@ import {
   StatusesUnavailable,
   encodeJiraCredentials,
   decodeJiraCredentials,
+  sealSecret,
   jqlEscape,
   buildScopeJql,
 } from '@brigadir/jira';
@@ -184,9 +188,19 @@ export class WorkspacesController {
         // feature 011 (FR-001/D14): a NEW workspace comes into existence PAUSED —
         // the single gate in front of a (possibly generated) team. The existing
         // Start switch (PUT :id/settings {enabled:true}) opens it.
-        settings: { repositories: req.repositories, enabled: false },
+        // feature 030: optional role-template source override (non-secret).
+        settings: {
+          repositories: req.repositories,
+          enabled: false,
+          ...(req.agent_instructions ? { agent_instructions: req.agent_instructions } : {}),
+        },
       })
       .returning({ id: schema.workspaces.id });
+
+    // feature 030: seal the optional private-repo token into its column.
+    if (req.agent_instructions_token) {
+      await setWorkspaceInstructionToken(this.db, row.id, sealSecret(req.agent_instructions_token));
+    }
 
     // Executors are PLATFORM-scoped (2026-07-13): workspace creation seeds
     // nothing — the global type-scoped backfill at bootstrap keeps the
@@ -423,7 +437,22 @@ export class WorkspacesController {
   async updateSettings(@Param('id') id: string, @Body() body: unknown): Promise<WorkspaceResponse> {
     const parsed = WorkspaceSettingsRequestSchema.safeParse(body);
     if (!parsed.success) throw zodToValidationError(parsed.error);
-    await patchWorkspaceSettings(this.db, id, parsed.data);
+    // feature 030: the template-source override lives in settings and its token
+    // in a sealed column — strip both from the plain settings patch (a token
+    // must NEVER land in the jsonb blob).
+    const { agent_instructions, agent_instructions_token, ...settingsPatch } = parsed.data;
+    await patchWorkspaceSettings(this.db, id, settingsPatch);
+    if (agent_instructions !== undefined) {
+      await setWorkspaceInstructionSource(this.db, id, agent_instructions); // null clears
+    }
+    if (agent_instructions_token !== undefined) {
+      // null or "" clears; a value seals & replaces.
+      await setWorkspaceInstructionToken(
+        this.db,
+        id,
+        agent_instructions_token ? sealSecret(agent_instructions_token) : null,
+      );
+    }
     return this.toResponse(id);
   }
 
@@ -540,6 +569,15 @@ export class WorkspacesController {
       enabled: settings.enabled !== false,
       // Feature 020 (D2b): absent ⇒ OFF — scoping is strictly opt-in.
       ticket_scoping: settings.ticket_scoping === true,
+      // Feature 030: the workspace override (non-secret), whether a sealed token
+      // is stored (never the token), and which level is effective by config.
+      agent_instructions: settings.agent_instructions ?? null,
+      has_agent_instructions_token: row.agentInstructionsToken != null,
+      effective_instructions_level: settings.agent_instructions
+        ? 'workspace'
+        : (await getGlobalInstructionSource(this.db)).source
+          ? 'global'
+          : 'builtin',
       created_at: row.createdAt.toISOString(),
       updated_at: row.updatedAt.toISOString(),
     };

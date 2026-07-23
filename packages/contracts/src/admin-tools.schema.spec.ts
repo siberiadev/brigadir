@@ -13,7 +13,7 @@ import { TeamAgentSchema } from './report.schema';
 describe('AdminTools schemas (feature 012)', () => {
   const names = Object.keys(AdminTools) as (keyof typeof AdminTools)[];
 
-  it('exposes the nine v1 tools', () => {
+  it('exposes the admin tools (v1 nine + feature 030 source setter)', () => {
     expect(names.sort()).toEqual(
       [
         'create_agent',
@@ -26,6 +26,7 @@ describe('AdminTools schemas (feature 012)', () => {
         'list_executors',
         'list_workspaces',
         'update_agent',
+        'set_agent_instructions_source',
       ].sort(),
     );
   });

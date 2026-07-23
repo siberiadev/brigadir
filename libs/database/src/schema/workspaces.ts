@@ -17,6 +17,12 @@ export const workspaces = pgTable('workspaces', {
   jiraAuthType: text('jira_auth_type').notNull().default('api_token'),
   jiraCredentials: bytea('jira_credentials').notNull(),
   jiraCredentialExpiresAt: timestamp('jira_credential_expires_at', { withTimezone: true }),
+  // Feature 030 (migration 0009): sealed access token for a PRIVATE agent
+  // role-template repo (AES-256-GCM secret-box, same key/codec as
+  // jira_credentials). NULL = no token. Write-only over the API (responses
+  // expose only has_agent_instructions_token). The non-secret url/ref/subdir
+  // live in `settings.agent_instructions`.
+  agentInstructionsToken: bytea('agent_instructions_token'),
   settings: jsonb('settings').notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

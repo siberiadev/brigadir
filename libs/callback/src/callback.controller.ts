@@ -13,6 +13,7 @@ import {
 import { GetTicketSchema, SearchTicketsSchema } from '@brigadir/contracts';
 import { CallbackService } from './callback.service';
 import { JiraReadService } from './jira-read.service';
+import { TemplateReadService } from './template-read.service';
 import { RunTokenGuard } from './run-token.guard';
 
 /**
@@ -28,6 +29,9 @@ export class CallbackController {
     // feature 011 (FR-008..011): read-only Jira reads for EVERY run — same
     // guard, workspace-scoped, credential-free for the agent.
     private readonly jiraRead: JiraReadService,
+    // feature 030: read-only role-template catalog for EVERY run — same guard,
+    // workspace-scoped, carries template TEXT only (never source creds).
+    private readonly templateRead: TemplateReadService,
   ) {}
 
   @Post('progress')
@@ -93,5 +97,19 @@ export class CallbackController {
       throw new UnprocessableEntityException({ ok: false, errors: parsed.error.issues });
     }
     return this.jiraRead.getTicket(runId, parsed.data);
+  }
+
+  // --- feature 030: read-only role-template tools (contracts/role-templates.md §2).
+  // Never 5xx on a bad template source — resolution falls back to built-ins with
+  // a diagnostic in the `source` block. A 404 (unknown slug) carries `available`.
+
+  @Get('templates')
+  async listTemplates(@Param('runId') runId: string): Promise<unknown> {
+    return this.templateRead.list(runId);
+  }
+
+  @Get('templates/:slug')
+  async getTemplate(@Param('runId') runId: string, @Param('slug') slug: string): Promise<unknown> {
+    return this.templateRead.get(runId, slug);
   }
 }

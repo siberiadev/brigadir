@@ -282,6 +282,8 @@ export function createToolHandlers(config: ToolHandlersConfig): {
   get_project_overview: (args: unknown) => Promise<ToolCallResult>;
   search_tickets: (args: unknown) => Promise<ToolCallResult>;
   get_ticket: (args: unknown) => Promise<ToolCallResult>;
+  list_role_templates: (args: unknown) => Promise<ToolCallResult>;
+  get_role_template: (args: unknown) => Promise<ToolCallResult>;
 } {
   const cfg: RetryConfig = {
     fetchImpl: config.fetchImpl ?? fetch,
@@ -403,6 +405,35 @@ export function createToolHandlers(config: ToolHandlersConfig): {
         `${base}/runs/${config.runId}/jira/tickets/${encodeURIComponent(key)}`,
         config.runToken,
         cfgFor('get_ticket'),
+      );
+      return toResult(response);
+    },
+
+    // --- feature 030: read-only role-template tools. Same posture as the Jira
+    // read tools — never touch the completion marker; a 404 (unknown slug)
+    // surfaces verbatim (its body carries `available`) as a repairable error.
+
+    async list_role_templates(_args: unknown): Promise<ToolCallResult> {
+      const response = await getWithRetry(
+        `${base}/runs/${config.runId}/templates`,
+        config.runToken,
+        cfgFor('list_role_templates'),
+      );
+      return toResult(response);
+    },
+
+    async get_role_template(args: unknown): Promise<ToolCallResult> {
+      const slug = (args as { slug?: unknown } | null)?.slug;
+      if (typeof slug !== 'string' || slug.length === 0) {
+        return {
+          content: [{ type: 'text', text: '{"ok":false,"error":"slug is required"}' }],
+          isError: true,
+        };
+      }
+      const response = await getWithRetry(
+        `${base}/runs/${config.runId}/templates/${encodeURIComponent(slug)}`,
+        config.runToken,
+        cfgFor('get_role_template'),
       );
       return toResult(response);
     },

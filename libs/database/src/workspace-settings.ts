@@ -3,6 +3,7 @@ import {
   WorkspaceSettingsSchema,
   type WorkspaceSettings,
   type WorkspaceRepository,
+  type AgentInstructionsSource,
 } from '@brigadir/contracts';
 import type { BrigadirDb } from './drizzle.constants';
 import * as schema from './schema';
@@ -45,6 +46,71 @@ export async function patchWorkspaceSettings(
 
 export async function getScopeJql(db: Db, workspaceId: string): Promise<string | undefined> {
   return (await getWorkspaceSettings(db, workspaceId)).scope_jql;
+}
+
+// --- feature 030: agent role-template source (workspace level) ---
+
+/** A workspace's non-secret template-source config + its sealed token blob (if any). */
+export interface StoredInstructionSource {
+  source: AgentInstructionsSource | null;
+  /** Sealed envelope bytes (opened by the resolver, never here); null = no token. */
+  tokenBlob: Buffer | null;
+}
+
+type DbRead = Pick<BrigadirDb, 'select'>;
+type DbWrite = Pick<BrigadirDb, 'select' | 'update'>;
+
+/**
+ * Read a workspace's template-source OVERRIDE: `settings.agent_instructions`
+ * plus the sealed `agent_instructions_token` bytea. Both absent ⇒ this
+ * workspace has no override (the resolver falls back to the global source).
+ */
+export async function getWorkspaceInstructionSource(
+  db: DbRead,
+  workspaceId: string,
+): Promise<StoredInstructionSource> {
+  const [row] = await db
+    .select({
+      settings: schema.workspaces.settings,
+      token: schema.workspaces.agentInstructionsToken,
+    })
+    .from(schema.workspaces)
+    .where(eq(schema.workspaces.id, workspaceId))
+    .limit(1);
+  if (!row) return { source: null, tokenBlob: null };
+  const settings = WorkspaceSettingsSchema.parse(row.settings ?? {});
+  return {
+    source: settings.agent_instructions ?? null,
+    tokenBlob: row.token ? Buffer.from(row.token) : null,
+  };
+}
+
+/** Set or clear (`null`) the workspace's template-source config in the settings blob. */
+export async function setWorkspaceInstructionSource(
+  db: DbWrite,
+  workspaceId: string,
+  source: AgentInstructionsSource | null,
+): Promise<void> {
+  const current = await getWorkspaceSettings(db, workspaceId);
+  const next = { ...current };
+  if (source === null) delete next.agent_instructions;
+  else next.agent_instructions = source;
+  await db
+    .update(schema.workspaces)
+    .set({ settings: WorkspaceSettingsSchema.parse(next), updatedAt: sql`now()` })
+    .where(eq(schema.workspaces.id, workspaceId));
+}
+
+/** Set or clear (`null`) the workspace's sealed template-repo token column. */
+export async function setWorkspaceInstructionToken(
+  db: Pick<BrigadirDb, 'update'>,
+  workspaceId: string,
+  tokenBlob: Buffer | null,
+): Promise<void> {
+  await db
+    .update(schema.workspaces)
+    .set({ agentInstructionsToken: tokenBlob, updatedAt: sql`now()` })
+    .where(eq(schema.workspaces.id, workspaceId));
 }
 
 /** Default rework-cycle budget when `workspaces.settings.rework_max` is unset (feature 010, FR-006). */

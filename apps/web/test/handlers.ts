@@ -48,6 +48,10 @@ export const sampleWorkspace: WorkspaceResponse = {
   enabled: true,
   // Feature 020 (D2b): ticket repository scoping — OFF by default.
   ticket_scoping: false,
+  // Feature 030: no template-source override → built-in defaults are effective.
+  agent_instructions: null,
+  has_agent_instructions_token: false,
+  effective_instructions_level: 'builtin',
   created_at: '2026-07-12T00:00:00.000Z',
   updated_at: '2026-07-12T00:00:00.000Z',
 };

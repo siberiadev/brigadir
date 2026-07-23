@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AgentInstructionsSourceSchema } from './role-template.schema';
 
 /**
  * Jira Cloud value types (REST v3 + Agile 1.0) and the workspace settings blob.
@@ -139,6 +140,11 @@ export const WorkspaceSettingsSchema = z
     // Jira Components (narrowing + the fail-closed gate). ABSENT ⇒ OFF —
     // byte-identical legacy behavior. No DDL — jsonb value only.
     ticket_scoping: z.boolean().optional(),
+    // Feature 030: per-workspace override of the agent role-template source.
+    // Non-secret (url/ref/subdir only); the optional token is sealed in the
+    // workspaces.agent_instructions_token bytea column, NEVER in this blob.
+    // ABSENT ⇒ fall back to the global setting, then built-in defaults.
+    agent_instructions: AgentInstructionsSourceSchema.optional(),
     // iteration-1 seed leftovers (deprecated single-repo fields) tolerated:
     repo: z.string().optional(),
     default_branch: z.string().optional(),

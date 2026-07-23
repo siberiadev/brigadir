@@ -25,6 +25,13 @@ export interface AdminToolConfig {
   dashboardToken: string;
   jiraEmail: string;
   jiraApiToken: string;
+  /**
+   * Feature 030: optional token for a PRIVATE role-template repo. Sourced from
+   * the server's OWN env (BRIGADIR_AGENT_INSTRUCTIONS_TOKEN), injected into
+   * create_workspace / set_agent_instructions_source — NEVER a tool argument
+   * (Principle V, same posture as the Jira credentials).
+   */
+  agentInstructionsToken?: string;
   fetchImpl?: typeof fetch;
   maxRetries?: number;
   retryDelayMs?: (attempt: number) => number;
@@ -165,6 +172,7 @@ export interface AdminToolHandlers {
   create_team(args: unknown): Promise<ToolCallResult>;
   create_agent(args: unknown): Promise<ToolCallResult>;
   update_agent(args: unknown): Promise<ToolCallResult>;
+  set_agent_instructions_source(args: unknown): Promise<ToolCallResult>;
 }
 
 export function createToolHandlers(config: AdminToolConfig): AdminToolHandlers {
@@ -249,6 +257,17 @@ export function createToolHandlers(config: AdminToolConfig): AdminToolHandlers {
             default_branch: typeof r.default_branch === 'string' && r.default_branch.length > 0 ? r.default_branch : 'main',
           }))
         : [];
+      // Feature 030: pass the (non-secret) template-source override through; the
+      // private-repo token comes from the server's OWN env, never from args.
+      const ai = asRecord(a.agent_instructions);
+      const agentInstructions =
+        typeof ai.git_url === 'string' && ai.git_url.length > 0
+          ? {
+              git_url: ai.git_url,
+              ...(typeof ai.git_ref === 'string' && ai.git_ref ? { git_ref: ai.git_ref } : {}),
+              ...(typeof ai.subdir === 'string' && ai.subdir ? { subdir: ai.subdir } : {}),
+            }
+          : undefined;
       const body = {
         name: a.name,
         jira_site_url: a.jira_site_url,
@@ -257,6 +276,10 @@ export function createToolHandlers(config: AdminToolConfig): AdminToolHandlers {
         expires_at: a.expires_at,
         board: a.board,
         repositories,
+        ...(agentInstructions ? { agent_instructions: agentInstructions } : {}),
+        ...(agentInstructions && config.agentInstructionsToken
+          ? { agent_instructions_token: config.agentInstructionsToken }
+          : {}),
       };
       const res = await call('POST', '/api/workspaces', body);
       if (res.status < 200 || res.status >= 300) return toolError(res.body);
@@ -306,6 +329,47 @@ export function createToolHandlers(config: AdminToolConfig): AdminToolHandlers {
       if (res.status < 200 || res.status >= 300) return toolError(res.body);
       const b = asRecord(res.body);
       return ok({ agent_id: b.id, name: b.name, key: b.key, is_orchestrator: b.is_orchestrator });
+    },
+
+    async set_agent_instructions_source(args: unknown): Promise<ToolCallResult> {
+      const a = asRecord(args);
+      const wsId =
+        typeof a.workspace_id === 'string' && a.workspace_id.length > 0 ? a.workspace_id : null;
+
+      // source: an object to set, or null to clear. Build from named fields only.
+      let source: Record<string, unknown> | null = null;
+      if (a.source !== null && a.source !== undefined) {
+        const s = asRecord(a.source);
+        if (typeof s.git_url !== 'string' || s.git_url.length === 0) {
+          return localError('source.git_url is required (or pass source: null to clear)');
+        }
+        source = {
+          git_url: s.git_url,
+          ...(typeof s.git_ref === 'string' && s.git_ref ? { git_ref: s.git_ref } : {}),
+          ...(typeof s.subdir === 'string' && s.subdir ? { subdir: s.subdir } : {}),
+        };
+      }
+      // The private-repo token comes from config env ONLY, and only when setting
+      // a source (never on clear); a smuggled token arg is ignored.
+      const withToken = source !== null && config.agentInstructionsToken !== undefined;
+
+      if (wsId) {
+        const res = await call('PUT', `/api/workspaces/${encodeURIComponent(wsId)}/settings`, {
+          agent_instructions: source,
+          ...(withToken ? { agent_instructions_token: config.agentInstructionsToken } : {}),
+        });
+        if (res.status < 200 || res.status >= 300) return toolError(res.body);
+        const w = asRecord(res.body);
+        return ok({ level: 'workspace', source: w.agent_instructions ?? null });
+      }
+
+      const res = await call('PUT', '/api/agent-instructions-settings', {
+        source,
+        ...(withToken ? { token: config.agentInstructionsToken } : {}),
+      });
+      if (res.status < 200 || res.status >= 300) return toolError(res.body);
+      const b = asRecord(res.body);
+      return ok({ level: 'global', source: b.source ?? null });
     },
   };
 }

@@ -419,5 +419,17 @@ describe('buildHandoffSection', () => {
       const out = await buildHandoffSection(trigger, makeDb({ workspace }), {});
       expect(out).toBe('');
     });
+
+    it('renders the built-in role-template catalog block (feature 030)', async () => {
+      const db = makeDb({ workspace, executors: [] });
+      const out = await buildHandoffSection(trigger, db, { workspaceId: 'ws-1' });
+      expect(out).toContain('Role templates available (source: built-in defaults):');
+      expect(out).toContain('- developer');
+      expect(out).toContain('(hint: opus)');
+      expect(out).toContain('get_role_template(slug)');
+      // And the setup instruction learns to use them + map executors by hint.
+      expect(out).toContain('How to use role templates:');
+      expect(out).toContain("How to choose each agent's executor:");
+    });
   });
 });
