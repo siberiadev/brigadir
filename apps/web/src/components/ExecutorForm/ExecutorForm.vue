@@ -80,7 +80,7 @@ const KIMI_MODEL_HINT =
   'A Moonshot model id, e.g. "kimi-k3" or a "kimi-k2.7" variant. Runs execute against Moonshot’s Anthropic-compatible endpoint; cost figures are priced against Anthropic’s list and are indicative only.';
 
 const DEEPSEEK_MODEL_HINT =
-  'A NATIVE DeepSeek model id: "deepseek-v4-pro" or "deepseek-v4-flash". Caution: unrecognized names are silently routed by DeepSeek to its cheapest model — no error is raised. Runs execute against DeepSeek’s Anthropic-compatible endpoint; cost figures are priced against Anthropic’s list and are indicative only.';
+  'A NATIVE DeepSeek model id: "deepseek-v4-pro" or "deepseek-v4-flash". Caution: unrecognized names are silently routed by DeepSeek to its cheapest model — no error is raised (and cost falls back to Anthropic-list pricing for unknown ids). Runs execute against DeepSeek’s Anthropic-compatible endpoint; cost figures are priced at DeepSeek rates.';
 
 /** Operator-facing provider name for the api_key-only types' key-required message. */
 const API_KEY_PROVIDER_LABELS: Record<'kimi' | 'deepseek_api', string> = {

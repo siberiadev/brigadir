@@ -70,9 +70,11 @@ function openRun(row: RunListItem) {
   router.push(`/runs/${row.run_id}`);
 }
 
-// Features 025/028: provider-preset runs (kimi/Moonshot, deepseek_api/DeepSeek)
-// report cost priced against Anthropic's list — mark the value indicative.
-// Shared helper (utils/executorCost) — was an inline copy here (M6).
+// Feature 025: kimi/Moonshot runs report cost priced against Anthropic's list —
+// mark the value indicative. Shared helper (utils/executorCost) — was an inline
+// copy here (M6). deepseek_api left the indicative set once the worker started
+// repricing its runs from token usage at DeepSeek rates (libs/executors
+// provider-pricing.ts; historical rows backfilled).
 
 // Jira sync (reconcile cycle): countdown to the next scheduled tick + manual
 // trigger. Runs start only from this cycle, so "when is the next sync" is the

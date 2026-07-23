@@ -50,8 +50,10 @@ describe('Runs — table + filters + cost', () => {
     expect(markers.length).toBe(1);
   });
 
-  // Feature 028: deepseek_api joins the indicative-marker convention.
-  it('marks a deepseek_api run cost as indicative in the table (feature 028)', async () => {
+  // Feature 028 flipped: deepseek_api runs carry a real DeepSeek-rate cost
+  // (worker reprices from token usage, provider-pricing.ts) — only kimi keeps
+  // the indicative marker.
+  it('marks only the kimi run cost as indicative — deepseek_api and claude_cli are real', async () => {
     server.use(
       http.get('/api/workspaces/:id/runs', () =>
         HttpResponse.json({
@@ -63,9 +65,10 @@ describe('Runs — table + filters + cost', () => {
               executor_type: 'deepseek_api',
               cost_usd: '0.0500',
             },
+            { ...sampleRunListItem, run_id: 'run-kimi', executor_type: 'kimi', cost_usd: '0.0500' },
             { ...sampleRunListItem, run_id: 'run-claude', executor_type: 'claude_cli' },
           ],
-          total: 2,
+          total: 3,
         }),
       ),
     );
