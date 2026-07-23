@@ -30,7 +30,7 @@ const guardLabel = computed(() => {
   const guard = props.health?.deployment_guard;
   if (!guard) return '—';
   if (guard.ok) return 'ok';
-  return guard.reason === 'missing' ? 'артефакт отсутствует' : 'артефакт устарел';
+  return guard.reason === 'missing' ? 'artifact missing' : 'artifact stale';
 });
 
 /** Cap — часть контракта: при заполненном списке подписываем «top 20». */
@@ -45,7 +45,7 @@ const atCap = computed(() => (props.health?.affected_runs.length ?? 0) >= 20);
         class="indicator nav-item"
         :class="{ 'is-degraded': degraded }"
         data-test="channel-health-indicator"
-        :title="degraded ? 'Callback-канал: degraded' : 'Callback-канал: healthy'"
+        :title="degraded ? 'Callback channel: degraded' : 'Callback channel: healthy'"
       >
         <Activity class="nav-icon" />
         <span v-if="degraded" class="dot" data-test="channel-health-dot" />
@@ -54,26 +54,26 @@ const atCap = computed(() => (props.health?.affected_runs.length ?? 0) >= 20);
 
     <div class="popover" data-test="channel-health-popover">
       <p class="status-line">
-        Callback-канал:
+        Callback channel:
         <strong :class="degraded ? 'text-degraded' : 'text-healthy'" data-test="channel-health-status">
           {{ degraded ? 'degraded' : 'healthy' }}
         </strong>
-        <span v-if="windowMinutes" class="muted">(окно {{ windowMinutes }} мин)</span>
+        <span v-if="windowMinutes" class="muted">(window {{ windowMinutes }} min)</span>
       </p>
       <template v-if="health">
         <dl class="facts">
-          <dt>последний успешный callback</dt>
+          <dt>last successful callback</dt>
           <dd data-test="channel-health-last-success">{{ lastSuccess }}</dd>
-          <dt>сбоев доставки в окне</dt>
+          <dt>delivery failures in window</dt>
           <dd data-test="channel-health-failures">{{ health.channel_failures_in_window }}</dd>
-          <dt>отказов pre-flight probe</dt>
+          <dt>pre-flight probe failures</dt>
           <dd data-test="channel-health-probes">{{ health.probe_failures_in_window }}</dd>
           <dt>deployment guard</dt>
           <dd data-test="channel-health-guard">{{ guardLabel }}</dd>
         </dl>
         <template v-if="health.affected_runs.length > 0">
           <p class="affected-title">
-            Затронутые прогоны<span v-if="atCap" class="muted"> (top 20)</span>:
+            Affected runs<span v-if="atCap" class="muted"> (top 20)</span>:
           </p>
           <ul class="affected">
             <li v-for="run in health.affected_runs" :key="run.run_id">
@@ -85,7 +85,7 @@ const atCap = computed(() => (props.health?.affected_runs.length ?? 0) >= 20);
           </ul>
         </template>
       </template>
-      <p v-else class="muted">Нет данных (агрегат ещё не загружен).</p>
+      <p v-else class="muted">No data (aggregate not loaded yet).</p>
     </div>
   </el-popover>
 </template>

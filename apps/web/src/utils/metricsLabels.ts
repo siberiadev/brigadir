@@ -9,7 +9,7 @@
 /** The backend's placeholder category for a NULL dimension (FR-014). */
 export const UNKNOWN_KEY = '__unknown__';
 /** Its human label — the single agreed wording (FR-017). */
-export const UNKNOWN_LABEL = 'не определено';
+export const UNKNOWN_LABEL = 'unknown';
 
 /** Token-type series → readable legend names (Cost & Usage tab). */
 export const TOKEN_TYPE_LABELS: Record<string, string> = {
@@ -21,9 +21,9 @@ export const TOKEN_TYPE_LABELS: Record<string, string> = {
 
 /** Human-task kind → readable legend names (Human-in-the-loop tab). */
 export const HUMAN_TASK_KIND_LABELS: Record<string, string> = {
-  question: 'Вопрос',
-  blocker: 'Блокер',
-  review: 'Ревью',
+  question: 'Question',
+  blocker: 'Blocker',
+  review: 'Review',
 };
 
 /**

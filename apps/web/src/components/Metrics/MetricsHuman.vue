@@ -35,7 +35,7 @@ const latencyTb = computed(() =>
 const latencyOption = computed(() =>
   latencyTb.value
     ? timeSeriesOption(theme.value, latencyTb.value, 'line', {
-        labelFn: (k) => (k === 'median' ? 'Медиана' : 'p95'),
+        labelFn: (k) => (k === 'median' ? 'Median' : 'p95'),
       })
     : null,
 );
@@ -60,7 +60,7 @@ const shareOption = computed(() =>
   data.value
     ? timeSeriesOption(theme.value, data.value.awaiting_human_share, 'line', {
         percent: true,
-        labelFn: () => 'Сейчас в ожидании',
+        labelFn: () => 'Awaiting now',
       })
     : null,
 );
@@ -69,35 +69,35 @@ const shareOption = computed(() =>
 <template>
   <div class="metrics-human" data-test="metrics-human">
     <ChartCard
-      title="Латентность резолюции (сек)"
+      title="Resolution latency (s)"
       :option="latencyOption"
       :loading="loading"
       :empty="isSeriesEmpty(latencyTb ?? undefined)"
     />
     <ChartCard
-      title="Открыто задач по типу"
+      title="Opened tasks by kind"
       :option="openedOption"
       :loading="loading"
       :empty="isSeriesEmpty(data?.opened_by_kind)"
     />
     <ChartCard
-      title="Закрыто задач по типу"
+      title="Closed tasks by kind"
       :option="closedOption"
       :loading="loading"
       :empty="isSeriesEmpty(data?.closed_by_kind)"
     />
     <ChartCard
-      title="Доля прогонов в ожидании человека"
+      title="Share of runs awaiting human"
       :option="shareOption"
       :loading="loading"
       :empty="isSeriesEmpty(data?.awaiting_human_share)"
     >
       <template #header-extra>
         <el-tooltip
-          content="v1: берётся текущий статус awaiting_human (лога переходов пока нет)"
+          content="v1: uses the current awaiting_human status (no transition log yet)"
           placement="top"
         >
-          <span class="muted" data-test="share-note">сейчас в ожидании</span>
+          <span class="muted" data-test="share-note">awaiting now</span>
         </el-tooltip>
       </template>
     </ChartCard>
@@ -109,8 +109,12 @@ const shareOption = computed(() =>
 
 .metrics-human {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: $space-md;
+
+  @media (max-width: 900px) {
+    grid-template-columns: 1fr;
+  }
 }
 .muted {
   color: var(--el-text-color-secondary);

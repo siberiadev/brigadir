@@ -238,7 +238,7 @@ async function stopAllRuns() {
                callbacks — статичная danger-иконка, детали в таймлайне прогона. -->
           <el-tooltip
             v-if="row.callback_alert"
-            content="Были недоставленные callbacks — детали в таймлайне прогона"
+            content="There were undelivered callbacks — details in the run timeline"
             placement="top"
           >
             <MailWarning class="callback-alert" :size="14" :data-test="`callback-alert-${row.run_id}`" />

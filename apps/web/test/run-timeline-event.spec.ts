@@ -134,12 +134,12 @@ describe('TimelineEvent — channel_failure (feature 027)', () => {
         item: item({
           typeKey: 'channel_failure',
           iconKey: 'channel_failure',
-          title: 'Сбой callback-канала',
+          title: 'Callback channel failure',
           body: null,
           bodyFormat: 'kv',
           kv: [
-            { key: 'тулза', value: 'complete_task' },
-            { key: 'попыток', value: '11' },
+            { key: 'tool', value: 'complete_task' },
+            { key: 'attempts', value: '11' },
           ],
           tags: [{ label: 'network', tone: 'warning' }],
         }),

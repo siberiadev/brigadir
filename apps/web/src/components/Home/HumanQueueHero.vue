@@ -28,7 +28,7 @@ function openTask(item: HumanQueueItem) {
 </script>
 
 <template>
-  <el-card class="hero" data-test="home-hero" :body-style="{ padding: '0' }">
+  <el-card class="hero" shadow="never" data-test="home-hero" :body-style="{ padding: '0' }">
     <template #header>
       <div class="hero-head">
         <h3>Needs your decision</h3>
@@ -88,7 +88,8 @@ function openTask(item: HumanQueueItem) {
 
   h3 {
     margin: 0;
-    font-size: 15px;
+    font-size: 14px;
+    font-weight: $font-weight-medium;
   }
 }
 .count-chip {

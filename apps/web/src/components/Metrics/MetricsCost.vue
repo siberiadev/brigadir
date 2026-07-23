@@ -8,7 +8,7 @@ import {
   timeSeriesOption,
   useChartTheme,
 } from '../../charts/echarts';
-import { tokenTypeLabel } from '../../utils/metricsLabels';
+import { metricSeriesLabel, tokenTypeLabel } from '../../utils/metricsLabels';
 import { isIndicativeExecutor } from '../../utils/executorCost';
 import { formatCostUsd } from '../../utils/currency';
 import ChartCard from './ChartCard.vue';
@@ -28,6 +28,19 @@ const loading = computed(() => query.isLoading.value);
 
 const costOption = computed(() =>
   data.value ? timeSeriesOption(theme.value, data.value.cost_by_executor, 'bar', { stack: true }) : null,
+);
+const tokensByExecutorOption = computed(() =>
+  data.value
+    ? timeSeriesOption(theme.value, data.value.tokens_by_executor, 'bar', { stack: true })
+    : null,
+);
+const tokensByModelOption = computed(() =>
+  data.value
+    ? timeSeriesOption(theme.value, data.value.tokens_by_model, 'bar', {
+        stack: true,
+        labelFn: metricSeriesLabel,
+      })
+    : null,
 );
 const tokensOption = computed(() =>
   data.value
@@ -60,7 +73,7 @@ const topOption = computed(() =>
 <template>
   <div class="metrics-cost" data-test="metrics-cost">
     <ChartCard
-      title="Расход по исполнителям"
+      title="Spend by executor"
       :option="costOption"
       :loading="loading"
       :empty="isSeriesEmpty(data?.cost_by_executor)"
@@ -68,23 +81,39 @@ const topOption = computed(() =>
       <template #header-extra>
         <el-tooltip
           v-if="hasIndicative"
-          content="kimi/deepseek_api: стоимость оценочная (по прайсу Anthropic), не биллинговая"
+          content="kimi/deepseek_api: cost is estimated (Anthropic pricing), not billed"
           placement="top"
         >
-          <sup class="indicative-mark" data-test="cost-indicative">оценочно ~</sup>
+          <sup class="indicative-mark" data-test="cost-indicative">est. ~</sup>
         </el-tooltip>
       </template>
     </ChartCard>
 
     <ChartCard
-      title="Токены по типам"
+      title="Tokens by executor"
+      :option="tokensByExecutorOption"
+      :loading="loading"
+      :empty="isSeriesEmpty(data?.tokens_by_executor)"
+      data-test="tokens-by-executor"
+    />
+
+    <ChartCard
+      title="Tokens by model"
+      :option="tokensByModelOption"
+      :loading="loading"
+      :empty="isSeriesEmpty(data?.tokens_by_model)"
+      data-test="tokens-by-model"
+    />
+
+    <ChartCard
+      title="Tokens by type"
       :option="tokensOption"
       :loading="loading"
       :empty="isSeriesEmpty(data?.tokens_by_type)"
     />
 
     <ChartCard
-      title="Средняя стоимость прогона"
+      title="Average cost per run"
       :option="cprOption"
       :loading="loading"
       :empty="isSeriesEmpty(data?.cost_per_run)"
@@ -92,7 +121,7 @@ const topOption = computed(() =>
 
     <ChartCard
       v-if="showTopWorkspaces"
-      title="Топ воркспейсов по расходу"
+      title="Top workspaces by spend"
       :option="topOption"
       :loading="loading"
       :empty="topWorkspaces.length === 0"
@@ -100,7 +129,7 @@ const topOption = computed(() =>
     >
       <template #header-extra>
         <span v-if="topWorkspaces.length" class="muted">
-          лидер: {{ formatCostUsd(topWorkspaces[0].total_cost_usd) }}
+          leader: {{ formatCostUsd(topWorkspaces[0].total_cost_usd) }}
         </span>
       </template>
     </ChartCard>
@@ -112,8 +141,12 @@ const topOption = computed(() =>
 
 .metrics-cost {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: $space-md;
+
+  @media (max-width: 900px) {
+    grid-template-columns: 1fr;
+  }
 }
 .indicative-mark {
   color: var(--el-color-warning);

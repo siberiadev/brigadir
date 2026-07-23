@@ -50,6 +50,7 @@ function openWorkspace(item: HomeWorkspaceItem) {
         :key="item.id"
         class="ws-card"
         :class="{ paused: !item.enabled }"
+        shadow="never"
         data-test="ws-card"
         @click="openWorkspace(item)"
       >

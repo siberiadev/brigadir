@@ -116,6 +116,12 @@ export const MetricsCostResponseSchema = z
     cost_by_executor: TimeBucketedSeriesSchema,
     // Four series: input | output | cache_read | cache_creation; points numeric.
     tokens_by_type: TimeBucketedSeriesSchema,
+    // Total tokens (all types summed) stacked by executor_type; points numeric.
+    // The token-usage twin of `cost_by_executor` (same executor breakdown).
+    tokens_by_executor: TimeBucketedSeriesSchema,
+    // Total tokens stacked by the MODEL each run used (from its session-init log
+    // event); '__unknown__' for runs with no model log. Points numeric.
+    tokens_by_model: TimeBucketedSeriesSchema,
     // One series key='cost_per_run'; points money strings.
     cost_per_run: TimeBucketedSeriesSchema,
     // Top-10 by spend; present ONLY when workspace_id is unset, else [] (US2 AS3).

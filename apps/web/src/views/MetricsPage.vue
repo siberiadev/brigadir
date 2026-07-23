@@ -100,19 +100,19 @@ watch(
     />
 
     <el-tabs v-model="activeTab" class="metrics-page__tabs" data-test="metrics-tabs">
-      <el-tab-pane label="Обзор" name="overview" lazy>
+      <el-tab-pane label="Overview" name="overview" lazy>
         <MetricsOverview :filters="filters" />
       </el-tab-pane>
-      <el-tab-pane label="Расходы и токены" name="cost" lazy>
+      <el-tab-pane label="Cost & tokens" name="cost" lazy>
         <MetricsCost :filters="filters" />
       </el-tab-pane>
-      <el-tab-pane label="Здоровье прогонов" name="reliability" lazy>
+      <el-tab-pane label="Run health" name="reliability" lazy>
         <MetricsReliability :filters="filters" />
       </el-tab-pane>
-      <el-tab-pane label="Активность и триггеры" name="activity" lazy>
+      <el-tab-pane label="Activity & triggers" name="activity" lazy>
         <MetricsActivity :filters="filters" />
       </el-tab-pane>
-      <el-tab-pane label="Люди в контуре" name="human" lazy>
+      <el-tab-pane label="Human in the loop" name="human" lazy>
         <MetricsHuman :filters="filters" />
       </el-tab-pane>
     </el-tabs>

@@ -63,6 +63,8 @@ TimeBucketedSeriesSchema = {
 {
   cost_by_executor: TimeBucketedSeries,     // points — строки (деньги), серия на executor_type
   tokens_by_type:   TimeBucketedSeries,     // 4 серии: input|output|cache_read|cache_creation, points — числа
+  tokens_by_executor: TimeBucketedSeries,   // суммарные токены (все типы), серия на executor_type, points — числа
+  tokens_by_model:  TimeBucketedSeries,     // суммарные токены, серия на модель (из session-init log-события прогона; '__unknown__' если лога нет), points — числа
   cost_per_run:     TimeBucketedSeries,     // одна серия key='cost_per_run', points — строки
   top_workspaces_by_cost: Array<{           // топ-10 по расходу (M7); присутствует ТОЛЬКО когда workspace_id не задан; иначе []
     workspace_id: string, name: string, total_cost_usd: string

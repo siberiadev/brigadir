@@ -140,8 +140,36 @@ export class MetricsController {
     const usage = schema.runs.usage;
     const tokenSum = (jsonKey: string) =>
       sql<number>`coalesce(sum((${usage} ->> ${jsonKey})::bigint), 0)::float8`;
+    // All token types summed per row (per-key coalesce so a missing field never
+    // NULLs out the whole sum), then summed over the bucket — the executor twin
+    // of the cost-by-executor stack.
+    const totalTokenSum = sql<number>`coalesce(sum(
+      coalesce((${usage} ->> 'input_tokens')::bigint, 0)
+      + coalesce((${usage} ->> 'output_tokens')::bigint, 0)
+      + coalesce((${usage} ->> 'cache_read_input_tokens')::bigint, 0)
+      + coalesce((${usage} ->> 'cache_creation_input_tokens')::bigint, 0)
+    ), 0)::float8`;
 
-    const [costRows, tokenRows, cprRows, topRows] = await Promise.all([
+    // Tokens attributed to the MODEL each run actually used. The model is not a
+    // column on `runs` — it is captured in the run's session-init `log` event
+    // (`run_events.payload.model`, the same source the run card reads). `rm`
+    // picks one model per run (earliest such log via DISTINCT ON); a LEFT JOIN
+    // keeps runs with no model log, which coalesce to the '__unknown__' bucket
+    // (FR-014 convention). No row multiplication — one `rm` row per run.
+    const modelLookup = this.db
+      .selectDistinctOn([schema.runEvents.runId], {
+        runId: schema.runEvents.runId,
+        model: sql<string>`${schema.runEvents.payload} ->> 'model'`.as('model'),
+      })
+      .from(schema.runEvents)
+      .where(
+        sql`${schema.runEvents.type} = 'log' and ${schema.runEvents.payload} ->> 'model' is not null`,
+      )
+      .orderBy(schema.runEvents.runId, schema.runEvents.id)
+      .as('rm');
+    const modelKey = sql<string>`coalesce(${modelLookup.model}, '__unknown__')`;
+
+    const [costRows, tokenRows, tokenExecRows, tokenModelRows, cprRows, topRows] = await Promise.all([
       this.db
         .select({
           bucketMs: bucket,
@@ -162,6 +190,25 @@ export class MetricsController {
         .from(schema.runs)
         .where(runWhere)
         .groupBy(bucket),
+      this.db
+        .select({
+          bucketMs: bucket,
+          key: schema.runs.executorType,
+          value: totalTokenSum,
+        })
+        .from(schema.runs)
+        .where(runWhere)
+        .groupBy(bucket, schema.runs.executorType),
+      this.db
+        .select({
+          bucketMs: bucket,
+          key: modelKey,
+          value: totalTokenSum,
+        })
+        .from(schema.runs)
+        .leftJoin(modelLookup, eq(modelLookup.runId, schema.runs.id))
+        .where(runWhere)
+        .groupBy(bucket, modelKey),
       this.db
         .select({
           bucketMs: bucket,
@@ -209,6 +256,16 @@ export class MetricsController {
         granularity,
         buckets,
         series: pivotSeries(tokenAgg, buckets, { forceKeys: [...TOKEN_KEYS] }),
+      },
+      tokens_by_executor: {
+        granularity,
+        buckets,
+        series: pivotSeries(tokenExecRows, buckets),
+      },
+      tokens_by_model: {
+        granularity,
+        buckets,
+        series: pivotSeries(tokenModelRows, buckets),
       },
       cost_per_run: {
         granularity,

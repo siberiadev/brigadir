@@ -45,15 +45,15 @@ const medianLabel = computed(() => {
 <template>
   <div v-loading="query.isLoading.value" class="metrics-overview" data-test="metrics-overview">
     <el-card class="ov-card" shadow="never" data-test="ov-cost">
-      <div class="ov-card__label">Расход за период</div>
+      <div class="ov-card__label">Spend (period)</div>
       <div class="ov-card__value">{{ formatCostUsd(data?.total_cost_usd) ?? '$0.00' }}</div>
     </el-card>
 
     <el-card class="ov-card" shadow="never" data-test="ov-runs">
-      <div class="ov-card__label">Прогоны</div>
+      <div class="ov-card__label">Runs</div>
       <div class="ov-card__value">{{ totalRuns }}</div>
       <div class="ov-card__breakdown">
-        <span v-if="statusBreakdown.length === 0" class="ov-card__muted">нет прогонов</span>
+        <span v-if="statusBreakdown.length === 0" class="ov-card__muted">no runs</span>
         <span
           v-for="s in statusBreakdown"
           :key="s.key"
@@ -73,12 +73,12 @@ const medianLabel = computed(() => {
     </el-card>
 
     <el-card class="ov-card" shadow="never" data-test="ov-median">
-      <div class="ov-card__label">Медианная длительность</div>
+      <div class="ov-card__label">Median duration</div>
       <div class="ov-card__value">{{ medianLabel }}</div>
     </el-card>
 
     <el-card class="ov-card" shadow="never" data-test="ov-human">
-      <div class="ov-card__label">Открытые задачи на людях</div>
+      <div class="ov-card__label">Open human tasks</div>
       <div class="ov-card__value">{{ data?.open_human_tasks ?? 0 }}</div>
     </el-card>
   </div>
