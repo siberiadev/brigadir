@@ -106,7 +106,22 @@ describe('metrics timeline (feature 029)', () => {
       // 1 running kimi run in ws2 (unfinished, cost null).
       { workspaceId: ws2, ticketId: p2.ticketId, agentId: p2.agentId, executorType: 'kimi', status: 'running', createdAt: hoursAgo(3), startedAt: hoursAgo(3) },
     ];
-    for (const r of runs) await db.db.insert(schema.runs).values(r);
+    const runIds: string[] = [];
+    for (const r of runs) {
+      const [row] = await db.db
+        .insert(schema.runs)
+        .values(r)
+        .returning({ id: schema.runs.id });
+      runIds.push(row.id);
+    }
+    // A session-init `log` event carrying the model, attached to the FIRST run
+    // (mock, usage(100) → 165 tokens). tokens_by_model reads the model from here;
+    // the other three runs have no model log and fall into '__unknown__'.
+    await db.db.insert(schema.runEvents).values({
+      runId: runIds[0],
+      type: 'log',
+      payload: { model: 'claude-sonnet-5', session_id: 's-1' },
+    });
 
     await db.db.insert(schema.humanTasks).values([
       { workspaceId: ws1, ticketId: p1.ticketId, kind: 'question', title: 'Q1', status: 'open', createdAt: hoursAgo(6) },
@@ -200,12 +215,18 @@ describe('metrics timeline (feature 029)', () => {
   describe('GET /api/metrics/cost', () => {
     const sumPoints = (pts: (number | string)[]) => pts.reduce((a, p) => a + Number(p), 0);
 
-    it('stacks cost by executor, sums tokens by type, keeps series dense (R3 invariant)', async () => {
+    it('stacks cost by executor, sums tokens by type and by executor, keeps series dense (R3 invariant)', async () => {
       const body = await get('/api/metrics/cost'); // 7d default; data seeded in US1
       expect(body.cost_by_executor.granularity).toBe('day');
 
       // Invariant: every series is zero-filled to buckets.length.
-      for (const block of [body.cost_by_executor, body.tokens_by_type, body.cost_per_run]) {
+      for (const block of [
+        body.cost_by_executor,
+        body.tokens_by_type,
+        body.tokens_by_executor,
+        body.tokens_by_model,
+        body.cost_per_run,
+      ]) {
         for (const s of block.series) expect(s.points.length).toBe(block.buckets.length);
       }
 
@@ -224,6 +245,29 @@ describe('metrics timeline (feature 029)', () => {
       ]);
       const input = body.tokens_by_type.series.find((s: { key: string }) => s.key === 'input');
       expect(sumPoints(input.points)).toBe(500);
+
+      // tokens_by_executor: same executor breakdown, ALL token types summed.
+      // mock = (100+50+10+5)*3 + (200+100+20+10) = 825; points are numeric.
+      const mockTokens = body.tokens_by_executor.series.find(
+        (s: { key: string }) => s.key === 'mock',
+      );
+      expect(mockTokens).toBeDefined();
+      expect(mockTokens.points.every((p: unknown) => typeof p === 'number')).toBe(true);
+      expect(sumPoints(mockTokens.points)).toBe(825);
+
+      // tokens_by_model: the first run carries a model log (claude-sonnet-5 → 165
+      // tokens); the other three have none → '__unknown__' (825 - 165 = 660).
+      const modelKeys = body.tokens_by_model.series.map((s: { key: string }) => s.key);
+      expect(modelKeys).toContain('claude-sonnet-5');
+      expect(modelKeys).toContain('__unknown__');
+      const sonnet = body.tokens_by_model.series.find(
+        (s: { key: string }) => s.key === 'claude-sonnet-5',
+      );
+      const unknown = body.tokens_by_model.series.find(
+        (s: { key: string }) => s.key === '__unknown__',
+      );
+      expect(sumPoints(sonnet.points)).toBe(165);
+      expect(sumPoints(unknown.points)).toBe(660);
 
       // cost_per_run is a single money series.
       expect(body.cost_per_run.series.map((s: { key: string }) => s.key)).toEqual(['cost_per_run']);

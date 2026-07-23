@@ -20,15 +20,15 @@ const attentionTotal = computed(() =>
     Couldn't load the summary — retrying.
   </div>
   <div v-else class="tiles" data-test="stat-tiles">
-    <el-card class="tile" data-test="tile-running">
+    <el-card class="tile" shadow="never" data-test="tile-running">
       <div class="label"><span class="pulse-dot" aria-hidden="true" /> Running</div>
       <div class="value">{{ summary?.running ?? 0 }}</div>
     </el-card>
-    <el-card class="tile" data-test="tile-queued">
+    <el-card class="tile" shadow="never" data-test="tile-queued">
       <div class="label">Queued</div>
       <div class="value">{{ summary?.queued ?? 0 }}</div>
     </el-card>
-    <el-card class="tile" data-test="tile-attention">
+    <el-card class="tile" shadow="never" data-test="tile-attention">
       <div class="label">Failed · last 24h</div>
       <div class="value" :class="{ 'is-danger': attentionTotal > 0 }" data-test="tile-attention-value">
         {{ attentionTotal }}
@@ -38,7 +38,7 @@ const attentionTotal = computed(() =>
         {{ summary?.attention_24h.timed_out ?? 0 }} timed out
       </div>
     </el-card>
-    <el-card class="tile" data-test="tile-human">
+    <el-card class="tile" shadow="never" data-test="tile-human">
       <div class="label">Awaiting human</div>
       <div class="value">{{ summary?.human_open ?? 0 }}</div>
     </el-card>

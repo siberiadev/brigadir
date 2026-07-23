@@ -310,14 +310,14 @@ describe('presentEvent — channel_failure (feature 027)', () => {
   it('renders a kv card: tool, attempts, error, target, occurred_at', () => {
     const item = presentEvent(event('channel_failure', payload));
     expect(item.typeKey).toBe('channel_failure');
-    expect(item.title).toBe('Сбой callback-канала');
+    expect(item.title).toBe('Callback channel failure');
     expect(item.bodyFormat).toBe('kv');
     const kv = Object.fromEntries((item.kv ?? []).map((p) => [p.key, p.value]));
-    expect(kv['тулза']).toBe('complete_task');
-    expect(kv['попыток']).toBe('11');
-    expect(kv['ошибка']).toBe('TypeError: fetch failed');
-    expect(kv['цель']).toBe('127.0.0.1:3210');
-    expect(kv['когда']).toBeTruthy(); // occurred_at, не created_at строки
+    expect(kv['tool']).toBe('complete_task');
+    expect(kv['attempts']).toBe('11');
+    expect(kv['error']).toBe('TypeError: fetch failed');
+    expect(kv['target']).toBe('127.0.0.1:3210');
+    expect(kv['when']).toBeTruthy(); // occurred_at, не created_at строки
     expect(item.tags).toEqual([{ label: 'network', tone: 'warning' }]);
   });
 
@@ -338,7 +338,7 @@ describe('presentEvent — channel_failure (feature 027)', () => {
 
   it('malformed payload never crashes and still shows the title', () => {
     const item = presentEvent(event('channel_failure', 'garbage'));
-    expect(item.title).toBe('Сбой callback-канала');
+    expect(item.title).toBe('Callback channel failure');
     expect(item.bodyFormat).toBeNull();
     expect(item.kv).toBeNull();
   });

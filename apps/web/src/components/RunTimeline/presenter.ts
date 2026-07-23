@@ -346,11 +346,11 @@ function presentUndeliveredReport(payload: unknown): Presented {
   const summary = asString(report.summary);
   const runStatus = asString(rec.run_status);
   const parts: string[] = [];
-  if (outcome) parts.push(`итог: ${outcome}`);
-  if (runStatus) parts.push(`статус прогона: ${runStatus}`);
+  if (outcome) parts.push(`outcome: ${outcome}`);
+  if (runStatus) parts.push(`run status: ${runStatus}`);
   const head = parts.join(' · ');
   const body = summary ? (head ? `${head}\n${summary}` : summary) : head || null;
-  return { title: 'Недоставленный отчёт', body, percent: null };
+  return { title: 'Undelivered report', body, percent: null };
 }
 
 /** feature 026: a pre-flight probe found the callback channel down; the run was held, not spawned. */
@@ -359,9 +359,9 @@ function presentChannelDown(payload: unknown): Presented {
   const parts: string[] = [];
   const url = asString(rec.probe_url);
   if (url) parts.push(url);
-  if (typeof rec.consecutive === 'number') parts.push(`подряд неудач: ${rec.consecutive}`);
-  if (typeof rec.retry_in_ms === 'number') parts.push(`повтор через ${rec.retry_in_ms}ms`);
-  return { title: 'Канал недоступен', body: parts.length ? parts.join(' · ') : null, percent: null };
+  if (typeof rec.consecutive === 'number') parts.push(`consecutive failures: ${rec.consecutive}`);
+  if (typeof rec.retry_in_ms === 'number') parts.push(`retry in ${rec.retry_in_ms}ms`);
+  return { title: 'Channel unavailable', body: parts.length ? parts.join(' · ') : null, percent: null };
 }
 
 /**
@@ -375,23 +375,23 @@ function presentChannelFailure(payload: unknown): Presented {
   const error = asRecord(rec.error) ?? {};
   const kv: { key: string; value: string }[] = [];
   const occurredAt = asString(rec.occurred_at);
-  if (occurredAt) kv.push({ key: 'когда', value: new Date(occurredAt).toLocaleString() });
+  if (occurredAt) kv.push({ key: 'when', value: new Date(occurredAt).toLocaleString() });
   const tool = asString(rec.tool);
-  if (tool) kv.push({ key: 'тулза', value: tool });
-  if (typeof rec.attempts === 'number') kv.push({ key: 'попыток', value: String(rec.attempts) });
+  if (tool) kv.push({ key: 'tool', value: tool });
+  if (typeof rec.attempts === 'number') kv.push({ key: 'attempts', value: String(rec.attempts) });
   const errName = asString(error.name);
   const errMessage = asString(error.message);
   if (errName || errMessage) {
-    kv.push({ key: 'ошибка', value: [errName, errMessage].filter(Boolean).join(': ') });
+    kv.push({ key: 'error', value: [errName, errMessage].filter(Boolean).join(': ') });
   }
   if (typeof rec.status === 'number') kv.push({ key: 'HTTP', value: String(rec.status) });
   const target = asString(rec.target);
-  if (target) kv.push({ key: 'цель', value: target });
+  if (target) kv.push({ key: 'target', value: target });
 
   const kind = asString(rec.kind);
   const tags: TimelineTag[] = kind ? [{ label: kind, tone: 'warning' }] : [];
   return {
-    title: 'Сбой callback-канала',
+    title: 'Callback channel failure',
     body: null,
     bodyFormat: kv.length ? 'kv' : null,
     kv: kv.length ? kv : null,

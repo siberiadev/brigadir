@@ -108,17 +108,24 @@ describe('MetricsCostResponseSchema', () => {
   const valid = {
     cost_by_executor: series(true),
     tokens_by_type: series(false),
+    tokens_by_executor: series(false),
+    tokens_by_model: series(false),
     cost_per_run: series(true),
     top_workspaces_by_cost: [
       { workspace_id: 'w-1', name: 'Payments', total_cost_usd: '42.0000' },
     ],
   };
 
-  it('accepts the four cost blocks; top_workspaces may be empty', () => {
+  it('accepts the cost blocks; top_workspaces may be empty', () => {
     expect(MetricsCostResponseSchema.safeParse(valid).success).toBe(true);
     expect(
       MetricsCostResponseSchema.safeParse({ ...valid, top_workspaces_by_cost: [] }).success,
     ).toBe(true);
+  });
+
+  it('requires the tokens_by_executor block (executor token breakdown)', () => {
+    const { tokens_by_executor: _omit, ...missing } = valid;
+    expect(MetricsCostResponseSchema.safeParse(missing).success).toBe(false);
   });
 
   it('rejects a float total_cost_usd in a top-workspace row (money is string)', () => {

@@ -110,11 +110,12 @@ const icon = computed<Component>(() => ICONS[props.item.iconKey] ?? CircleDot);
 </template>
 
 <style scoped lang="scss">
+@use 'sass:math';
 @use '@/styles/variables' as *;
 
 $time-width: 62px;
 $node-size: 24px;
-$rail-x: $time-width + $space-sm + ($node-size / 2);
+$rail-x: $time-width + $space-sm + math.div($node-size, 2);
 $body-indent: $time-width + $space-sm + $node-size + $space-sm;
 
 .event {

@@ -33,7 +33,7 @@ function openRun(item: GlobalRunListItem) {
 </script>
 
 <template>
-  <el-card data-test="live-runs" :body-style="{ padding: '0' }">
+  <el-card shadow="never" data-test="live-runs" :body-style="{ padding: '0' }">
     <template #header>
       <div class="card-head">
         <h3>Live runs</h3>
@@ -90,7 +90,8 @@ function openRun(item: GlobalRunListItem) {
 
   h3 {
     margin: 0;
-    font-size: 15px;
+    font-size: 14px;
+    font-weight: $font-weight-medium;
   }
 }
 .rows {

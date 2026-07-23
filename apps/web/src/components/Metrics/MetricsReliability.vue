@@ -71,7 +71,7 @@ const durationTb = computed(() =>
 const durationOption = computed(() =>
   durationTb.value
     ? timeSeriesOption(theme.value, durationTb.value, 'line', {
-        labelFn: (k) => (k === 'median' ? 'Медиана' : 'p95'),
+        labelFn: (k) => (k === 'median' ? 'Median' : 'p95'),
       })
     : null,
 );
@@ -86,7 +86,7 @@ const failOption = computed(() =>
 <template>
   <div class="metrics-reliability" data-test="metrics-reliability">
     <ChartCard
-      title="Прогоны по статусам"
+      title="Runs by status"
       :option="statusOption"
       :loading="loading"
       :empty="isSeriesEmpty(data?.runs_by_status)"
@@ -98,7 +98,7 @@ const failOption = computed(() =>
       :empty="isSeriesEmpty(data?.success_rate)"
     />
     <ChartCard
-      title="Длительность: медиана и p95 (сек)"
+      title="Duration: median & p95 (s)"
       :option="durationOption"
       :loading="loading"
       :empty="isSeriesEmpty(durationTb ?? undefined)"
@@ -110,7 +110,7 @@ const failOption = computed(() =>
       :empty="isSeriesEmpty(data?.retry_rate)"
     />
     <ChartCard
-      title="Сбои по исполнителям (failed + timed out)"
+      title="Failures by executor (failed + timed out)"
       :option="failOption"
       :loading="loading"
       :empty="isSeriesEmpty(data?.failstats_by_executor)"
@@ -123,7 +123,11 @@ const failOption = computed(() =>
 
 .metrics-reliability {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: $space-md;
+
+  @media (max-width: 900px) {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

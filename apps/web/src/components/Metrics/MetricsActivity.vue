@@ -45,19 +45,19 @@ const workspaceOption = computed(() =>
 <template>
   <div class="metrics-activity" data-test="metrics-activity">
     <ChartCard
-      title="Прогоны по источнику триггера"
+      title="Runs by trigger source"
       :option="sourceOption"
       :loading="loading"
       :empty="isSeriesEmpty(data?.by_source)"
     />
     <ChartCard
-      title="Прогоны по роли агента"
+      title="Runs by agent role"
       :option="roleOption"
       :loading="loading"
       :empty="isSeriesEmpty(data?.by_role)"
     />
     <ChartCard
-      title="Прогоны по воркспейсу"
+      title="Runs by workspace"
       :option="workspaceOption"
       :loading="loading"
       :empty="isSeriesEmpty(data?.by_workspace)"
@@ -70,7 +70,11 @@ const workspaceOption = computed(() =>
 
 .metrics-activity {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: $space-md;
+
+  @media (max-width: 900px) {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

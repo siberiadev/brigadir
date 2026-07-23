@@ -30,6 +30,8 @@ const idleOverview = {
 const emptyCost = {
   cost_by_executor: emptyTb,
   tokens_by_type: emptyTb,
+  tokens_by_executor: emptyTb,
+  tokens_by_model: emptyTb,
   cost_per_run: emptyTb,
   top_workspaces_by_cost: [],
 };

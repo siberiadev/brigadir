@@ -61,7 +61,7 @@ describe('ChannelHealthIndicator', () => {
     await wrapper.find('[data-test="channel-health-indicator"]').trigger('click');
     await flush();
     expect(document.body.querySelector('[data-test="channel-health-popover"]')?.textContent).toContain(
-      'Нет данных',
+      'No data',
     );
   });
 });

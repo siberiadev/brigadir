@@ -22,7 +22,7 @@ const props = withDefaults(
     height?: number;
     emptyDescription?: string;
   }>(),
-  { loading: false, empty: false, height: 260, emptyDescription: 'Нет данных за период' },
+  { loading: false, empty: false, height: 260, emptyDescription: 'No data for the period' },
 );
 
 const bodyStyle = computed(() => ({ height: `${props.height}px` }));

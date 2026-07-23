@@ -16,7 +16,7 @@ const entry = computed(() => props.summary?.spend[period.value]);
 </script>
 
 <template>
-  <el-card data-test="spend-card">
+  <el-card shadow="never" data-test="spend-card">
     <template #header>
       <div class="card-head">
         <h3>Spend</h3>
@@ -52,7 +52,8 @@ const entry = computed(() => props.summary?.spend[period.value]);
 
   h3 {
     margin: 0;
-    font-size: 15px;
+    font-size: 14px;
+    font-weight: $font-weight-medium;
   }
 }
 .total {

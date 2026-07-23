@@ -43,7 +43,7 @@ const executorTypes = computed(() => {
     <el-select
       v-model="workspaceId"
       clearable
-      placeholder="Все воркспейсы"
+      placeholder="All workspaces"
       data-test="filter-workspace"
       class="filter-control"
     >
@@ -57,14 +57,14 @@ const executorTypes = computed(() => {
 
     <el-tooltip
       :disabled="props.executorApplicable"
-      content="Неприменимо к задачам на людях"
+      content="Not applicable to human tasks"
       placement="top"
     >
       <el-select
         v-model="executorType"
         clearable
         :disabled="!props.executorApplicable"
-        placeholder="Все исполнители"
+        placeholder="All executors"
         data-test="filter-executor"
         class="filter-control"
       >

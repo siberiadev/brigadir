@@ -71,7 +71,7 @@ describe('MetricsOverview (US1)', () => {
 
     expect(wrapper.find('[data-test="ov-success"]').text()).toContain('—');
     expect(wrapper.find('[data-test="ov-median"]').text()).toContain('—');
-    expect(wrapper.find('[data-test="ov-runs"]').text()).toContain('нет прогонов');
+    expect(wrapper.find('[data-test="ov-runs"]').text()).toContain('no runs');
     expect(wrapper.find('[data-test="ov-human"]').text()).toContain('0');
   });
 
