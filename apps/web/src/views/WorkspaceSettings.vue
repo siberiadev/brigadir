@@ -236,7 +236,6 @@ function clearAiToken() {
       <div class="block-head">
         <h3>Agent instructions source</h3>
         <el-button
-          v-if="!showAiEdit"
           type="primary"
           link
           data-test="edit-agent-instructions"
@@ -246,7 +245,7 @@ function clearAiToken() {
         </el-button>
       </div>
 
-      <el-descriptions v-if="!showAiEdit" :column="1" border data-test="agent-instructions-block">
+      <el-descriptions :column="1" border data-test="agent-instructions-block">
         <el-descriptions-item label="Effective source">
           <span data-test="ai-effective">{{ effectiveSourceLabel }}</span>
         </el-descriptions-item>
@@ -261,59 +260,6 @@ function clearAiToken() {
           </span>
         </el-descriptions-item>
       </el-descriptions>
-
-      <el-form v-else label-position="top" class="ai-form" @submit.prevent>
-        <el-form-item label="Repository URL">
-          <el-input
-            v-model="aiGitUrl"
-            placeholder="git@github.com:acme/agents.git  (empty = use global / built-in)"
-            data-test="ai-git-url"
-          />
-        </el-form-item>
-        <div class="ai-row">
-          <el-form-item label="Branch / tag / ref (optional)" class="ai-col">
-            <el-input v-model="aiGitRef" placeholder="main" data-test="ai-git-ref" />
-          </el-form-item>
-          <el-form-item label="Subfolder (optional)" class="ai-col">
-            <el-input v-model="aiSubdir" placeholder="roles" data-test="ai-subdir" />
-          </el-form-item>
-        </div>
-        <el-form-item label="Access token (private repos only)">
-          <el-input
-            v-model="aiToken"
-            type="password"
-            show-password
-            :placeholder="
-              workspace.has_agent_instructions_token
-                ? '•••••••• stored — type to replace'
-                : 'none stored'
-            "
-            data-test="ai-token"
-          />
-          <el-button
-            v-if="workspace.has_agent_instructions_token"
-            link
-            type="danger"
-            size="small"
-            data-test="ai-clear-token"
-            @click="clearAiToken"
-          >
-            Clear token
-          </el-button>
-        </el-form-item>
-        <div class="ai-actions">
-          <el-button
-            type="primary"
-            :loading="updateSettings.isPending.value"
-            data-test="ai-save"
-            @click="saveAi"
-          >
-            Save
-          </el-button>
-          <el-button data-test="ai-use-global" @click="useGlobalDefault">Use global default</el-button>
-          <el-button data-test="ai-cancel" @click="showAiEdit = false">Cancel</el-button>
-        </div>
-      </el-form>
     </div>
 
     <!-- Edit: Jira connection -->
@@ -358,6 +304,62 @@ function clearAiToken() {
           @click="configFormRef?.submit()"
         >
           Save settings
+        </el-button>
+      </template>
+    </FormDialog>
+
+    <!-- Edit: agent instructions source (feature 030) -->
+    <FormDialog v-model="showAiEdit" title="Edit agent instructions source">
+      <el-form v-if="showAiEdit" label-position="top" class="ai-form" @submit.prevent>
+        <el-form-item label="Repository URL">
+          <el-input
+            v-model="aiGitUrl"
+            placeholder="git@github.com:acme/agents.git  (empty = use global / built-in)"
+            data-test="ai-git-url"
+          />
+        </el-form-item>
+        <div class="ai-row">
+          <el-form-item label="Branch / tag / ref (optional)" class="ai-col">
+            <el-input v-model="aiGitRef" placeholder="main" data-test="ai-git-ref" />
+          </el-form-item>
+          <el-form-item label="Subfolder (optional)" class="ai-col">
+            <el-input v-model="aiSubdir" placeholder="roles" data-test="ai-subdir" />
+          </el-form-item>
+        </div>
+        <el-form-item label="Access token (private repos only)">
+          <el-input
+            v-model="aiToken"
+            type="password"
+            show-password
+            :placeholder="
+              workspace.has_agent_instructions_token
+                ? '•••••••• stored — type to replace'
+                : 'none stored'
+            "
+            data-test="ai-token"
+          />
+          <el-button
+            v-if="workspace.has_agent_instructions_token"
+            link
+            type="danger"
+            size="small"
+            data-test="ai-clear-token"
+            @click="clearAiToken"
+          >
+            Clear token
+          </el-button>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button data-test="ai-cancel" @click="showAiEdit = false">Cancel</el-button>
+        <el-button data-test="ai-use-global" @click="useGlobalDefault">Use global default</el-button>
+        <el-button
+          type="primary"
+          :loading="updateSettings.isPending.value"
+          data-test="ai-save"
+          @click="saveAi"
+        >
+          Save
         </el-button>
       </template>
     </FormDialog>
