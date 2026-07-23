@@ -77,6 +77,8 @@ describe('AppSidebar — rendering + tooltips (US1)', () => {
     expect(wrapper.find('[data-test="nav-home"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="nav-workspaces"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="nav-human-queue"]').exists()).toBe(true);
+    // Feature 029: the Metrics nav item.
+    expect(wrapper.find('[data-test="nav-metrics"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="sidebar-sign-out"]').exists()).toBe(true);
 
     // Feature 017: Home is the FIRST nav item in the rail.

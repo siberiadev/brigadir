@@ -14,6 +14,7 @@ import ListPagination from '../components/ListPagination.vue';
 import RunStatusTag from '../components/RunStatusTag.vue';
 import { formatDuration } from '../utils/date';
 import { formatCostUsd } from '../utils/currency';
+import { costIsIndicative, indicativeCostTip } from '../utils/executorCost';
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
@@ -71,16 +72,7 @@ function openRun(row: RunListItem) {
 
 // Features 025/028: provider-preset runs (kimi/Moonshot, deepseek_api/DeepSeek)
 // report cost priced against Anthropic's list — mark the value indicative.
-const INDICATIVE_COST_PROVIDERS: Record<string, string> = {
-  kimi: 'Moonshot',
-  deepseek_api: 'DeepSeek',
-};
-function costIsIndicative(row: RunListItem): boolean {
-  return row.executor_type in INDICATIVE_COST_PROVIDERS && row.cost_usd != null;
-}
-function indicativeCostTip(row: RunListItem): string {
-  return `Indicative only — ${row.executor_type} runs are priced against Anthropic’s list, not ${INDICATIVE_COST_PROVIDERS[row.executor_type] ?? 'the provider'}’s.`;
-}
+// Shared helper (utils/executorCost) — was an inline copy here (M6).
 
 // Jira sync (reconcile cycle): countdown to the next scheduled tick + manual
 // trigger. Runs start only from this cycle, so "when is the next sync" is the
@@ -260,8 +252,8 @@ async function stopAllRuns() {
           {{ formatCostUsd(row.cost_usd) ?? '—' }}
           <!-- features 025/028: provider-preset cost is priced against Anthropic's list, indicative only -->
           <el-tooltip
-            v-if="costIsIndicative(row)"
-            :content="indicativeCostTip(row)"
+            v-if="costIsIndicative(row.executor_type, row.cost_usd)"
+            :content="indicativeCostTip(row.executor_type)"
             placement="top"
           >
             <sup class="indicative-mark" data-test="cost-indicative">~</sup>

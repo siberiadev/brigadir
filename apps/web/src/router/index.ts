@@ -81,6 +81,8 @@ export const routes: RouteRecordRaw[] = [
     props: true,
   },
   { path: '/human-queue', name: 'human-queue', component: () => import('../views/HumanQueue.vue') },
+  // Feature 029: read-only metrics timeline dashboard.
+  { path: '/metrics', name: 'metrics', component: () => import('../views/MetricsPage.vue') },
   {
     // Platform Settings (2026-07-13): a shell with its own left sub-navigation;
     // panels are nested children so future sections (Users, Usage) are one
