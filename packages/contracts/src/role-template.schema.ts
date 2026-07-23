@@ -103,3 +103,28 @@ export const ResolvedTemplateSourceSchema = z
   })
   .strict();
 export type ResolvedTemplateSource = z.infer<typeof ResolvedTemplateSourceSchema>;
+
+/**
+ * GET `/api/agent-instructions-settings` — the GLOBAL (platform) template source
+ * (feature 030). `source` is null when none is configured (built-ins are the
+ * platform default). The token is never serialized — only `has_token`.
+ */
+export const AgentInstructionsGlobalSettingsSchema = z
+  .object({
+    source: AgentInstructionsSourceSchema.nullable(),
+    has_token: z.boolean(),
+  })
+  .strict();
+export type AgentInstructionsGlobalSettings = z.infer<typeof AgentInstructionsGlobalSettingsSchema>;
+
+/**
+ * PUT `/api/agent-instructions-settings` — `source` ABSENT keeps it, `null`
+ * clears it; `token` is tri-state (absent keep, null/"" clear, value replace).
+ */
+export const AgentInstructionsGlobalUpdateSchema = z
+  .object({
+    source: AgentInstructionsSourceSchema.nullable().optional(),
+    token: z.string().nullable().optional(),
+  })
+  .strict();
+export type AgentInstructionsGlobalUpdate = z.infer<typeof AgentInstructionsGlobalUpdateSchema>;

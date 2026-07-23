@@ -121,21 +121,21 @@
 
 ### Tests for User Story 3
 
-- [ ] T043 [P] [US3] Unit tests: workspace settings `PUT` token tri-state (absent=keep, null/""=clear, value=replace) and `agent_instructions: null` clears the override, in `apps/backend/src/dashboard/workspaces.controller.spec.ts`
-- [ ] T044 [P] [US3] Unit tests: global agent-instructions settings `GET`/`PUT` (source + tri-state token, `has_token` projection, "token retained" warning on source-only clear), in `apps/backend/src/dashboard/brigadir-agent-settings.controller.spec.ts`
-- [ ] T045 [P] [US3] Unit tests: admin-MCP `create_workspace` `agent_instructions` passthrough and `set_agent_instructions_source` — a token supplied as a tool argument is ignored, only the server's own env config is used, in `packages/admin-mcp/src/tools.spec.ts`
-- [ ] T046 [P] [US3] Component tests: dashboard General template-source form and workspace-settings override block render the effective-source indicator and never display a token value, in `apps/web/test/settings-agent-instructions.spec.ts`
+- [X] T043 [P] [US3] Unit tests: workspace settings `PUT` token tri-state (absent=keep, null/""=clear, value=replace) and `agent_instructions: null` clears the override, in `apps/backend/src/dashboard/workspaces.controller.spec.ts`
+- [X] T044 [P] [US3] Unit tests: global agent-instructions settings `GET`/`PUT` (source + tri-state token, `has_token` projection, "token retained" warning on source-only clear), in `apps/backend/src/dashboard/brigadir-agent-settings.controller.spec.ts`
+- [X] T045 [P] [US3] Unit tests: admin-MCP `create_workspace` `agent_instructions` passthrough and `set_agent_instructions_source` — a token supplied as a tool argument is ignored, only the server's own env config is used, in `packages/admin-mcp/src/tools.spec.ts`
+- [X] T046 [P] [US3] Component tests: dashboard General template-source form and workspace-settings override block render the effective-source indicator and never display a token value, in `apps/web/test/settings-agent-instructions.spec.ts`
 
 ### Implementation for User Story 3
 
-- [ ] T047 [US3] Extend the global brigadir-agent settings schema (`packages/contracts/src/orchestrator-template.schema.ts` or a sibling) with `agent_instructions` source + tri-state token, and add `GET`/`PUT` handling in `apps/backend/src/dashboard/brigadir-agent-settings.controller.ts`, reading/writing via T039's helpers
-- [ ] T048 [US3] Extend `WorkspaceSettingsRequestSchema`, `WorkspaceCreateRequestSchema`, and `WorkspaceResponseSchema` in `packages/contracts/src/dashboard.schema.ts` with `agent_instructions`, `agent_instructions_token` (request tri-state), `has_agent_instructions_token`, and `effective_instructions_level`
-- [ ] T049 [US3] Implement tri-state token handling and the `effective_instructions_level` projection in `apps/backend/src/dashboard/workspaces.controller.ts` (`updateSettings`, `create`, `toResponse`), writing the bytea column alongside the jsonb settings patch from T038
-- [ ] T050 [US3] Add the "Agent instruction templates" section (source form + write-only token + reset-to-built-in) to the dashboard General settings view and its API client in `apps/web/src/views/` and `apps/web/src/api/`
-- [ ] T051 [US3] Add the "Agent instructions source" block (override form + effective-source indicator + "Use global default") to the workspace settings view in `apps/web/src/views/`
-- [ ] T052 [US3] Add `agent_instructions` passthrough to `create_workspace` and a new `set_agent_instructions_source` tool in `packages/admin-mcp/src/tools.ts`, with input/output schemas in `packages/contracts/src/admin-tools.schema.ts`
-- [ ] T053 [US3] Add the optional `BRIGADIR_AGENT_INSTRUCTIONS_TOKEN` env to `packages/admin-mcp/src/main.ts`, injected server-side into `create_workspace`/`set_agent_instructions_source` exactly like the Jira credentials (never from tool arguments)
-- [ ] T054 [US3] Document the new env var in `.env.example` and the admin-MCP section of `CLAUDE.md`
+- [X] T047 [US3] Extend the global brigadir-agent settings schema (`packages/contracts/src/orchestrator-template.schema.ts` or a sibling) with `agent_instructions` source + tri-state token, and add `GET`/`PUT` handling in `apps/backend/src/dashboard/brigadir-agent-settings.controller.ts`, reading/writing via T039's helpers
+- [X] T048 [US3] Extend `WorkspaceSettingsRequestSchema`, `WorkspaceCreateRequestSchema`, and `WorkspaceResponseSchema` in `packages/contracts/src/dashboard.schema.ts` with `agent_instructions`, `agent_instructions_token` (request tri-state), `has_agent_instructions_token`, and `effective_instructions_level`
+- [X] T049 [US3] Implement tri-state token handling and the `effective_instructions_level` projection in `apps/backend/src/dashboard/workspaces.controller.ts` (`updateSettings`, `create`, `toResponse`), writing the bytea column alongside the jsonb settings patch from T038
+- [X] T050 [US3] Add the "Agent instruction templates" section (source form + write-only token + reset-to-built-in) to the dashboard General settings view and its API client in `apps/web/src/views/` and `apps/web/src/api/`
+- [X] T051 [US3] Add the "Agent instructions source" block (override form + effective-source indicator + "Use global default") to the workspace settings view in `apps/web/src/views/`
+- [X] T052 [US3] Add `agent_instructions` passthrough to `create_workspace` and a new `set_agent_instructions_source` tool in `packages/admin-mcp/src/tools.ts`, with input/output schemas in `packages/contracts/src/admin-tools.schema.ts`
+- [X] T053 [US3] Add the optional `BRIGADIR_AGENT_INSTRUCTIONS_TOKEN` env to `packages/admin-mcp/src/main.ts`, injected server-side into `create_workspace`/`set_agent_instructions_source` exactly like the Jira credentials (never from tool arguments)
+- [X] T054 [US3] Document the new env var in `.env.example` and the admin-MCP section of `CLAUDE.md`
 
 **Checkpoint**: All three user stories are independently functional — [quickstart.md](quickstart.md) Scenarios 7–8 pass; SC-006 verified.
 
@@ -146,8 +146,8 @@
 **Purpose**: Whole-feature validation and housekeeping after all desired stories are complete.
 
 - [ ] T055 [P] Run all 8 [quickstart.md](quickstart.md) scenarios end-to-end against a running stack
-- [ ] T056 [P] Add a `docs/progress.md` journal entry for feature 030
-- [ ] T057 Root gate pass: `pnpm typecheck && pnpm lint && pnpm test`
+- [X] T056 [P] Add a `docs/progress.md` journal entry for feature 030
+- [X] T057 Root gate pass: `pnpm typecheck && pnpm lint && pnpm test`
 - [ ] T058 `pnpm test:integration` full pass (testcontainers + bare-git fixture suites)
 - [ ] T059 [P] Diff `DEFAULT_ROLE_TEMPLATES` (T015) against `git@github.com:siberiadev/agents.git` for drift and reconcile
 

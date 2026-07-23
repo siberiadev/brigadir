@@ -9,6 +9,7 @@ import { HomeController } from './home.controller';
 import { MetricsController } from './metrics.controller';
 import { HumanTasksController } from './human-tasks.controller';
 import { BrigadirAgentSettingsController } from './brigadir-agent-settings.controller';
+import { AgentInstructionsSettingsController } from './agent-instructions-settings.controller';
 import { ChannelHealthController } from './channel-health.controller';
 import { ChannelHealthService } from './channel-health.service';
 import { ReconcileController } from './reconcile.controller';
@@ -41,6 +42,8 @@ import { DashboardTokenGuard } from './dashboard-token.guard';
     MetricsController,
     HumanTasksController,
     BrigadirAgentSettingsController,
+    // Feature 030: global agent role-template source settings.
+    AgentInstructionsSettingsController,
     // Feature 027 (US4): channel-health агрегат.
     ChannelHealthController,
     // Статус/ручной запуск реконсайл-цикла (кнопка «Sync now» на Runs).

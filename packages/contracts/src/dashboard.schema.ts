@@ -2,6 +2,14 @@ import { z } from 'zod';
 import { WorkspaceRepositorySchema } from './jira.types';
 import { TeamAgentSchema } from './report.schema';
 import { makePaginatedResponseSchema } from './pagination.schema';
+import { AgentInstructionsSourceSchema, TemplateSourceLevelSchema } from './role-template.schema';
+
+/**
+ * Feature 030: token tri-state on write requests — ABSENT keeps the stored
+ * token, `null` or "" clears it, a non-empty string replaces it. Same posture
+ * as the executor-secrets `api_key` field. Never serialized back (write-only).
+ */
+export const AgentInstructionsTokenWriteSchema = z.string().nullable().optional();
 
 /**
  * Dashboard REST API request/response contracts (feature 005,
@@ -57,6 +65,10 @@ export const WorkspaceCreateRequestSchema = z
     expires_at: z.string().datetime(),
     board: z.string().min(1),
     repositories: z.array(WorkspaceRepositorySchema).default([]),
+    // Feature 030: optional per-workspace role-template source at creation
+    // (non-secret url/ref/subdir); the optional token is write-only (sealed).
+    agent_instructions: AgentInstructionsSourceSchema.optional(),
+    agent_instructions_token: AgentInstructionsTokenWriteSchema,
   })
   .strict();
 export type WorkspaceCreateRequest = z.infer<typeof WorkspaceCreateRequestSchema>;
@@ -85,6 +97,10 @@ export const WorkspaceSettingsRequestSchema = z
     // Jira Components. Absent ⇒ unchanged (settings jsonb; no DDL — mirrors
     // WorkspaceSettings.ticket_scoping, OFF by default).
     ticket_scoping: z.boolean().optional(),
+    // Feature 030: role-template source override. ABSENT ⇒ unchanged; `null` ⇒
+    // clear the override (fall back to global/built-in). Token is tri-state.
+    agent_instructions: AgentInstructionsSourceSchema.nullable().optional(),
+    agent_instructions_token: AgentInstructionsTokenWriteSchema,
   })
   .strict();
 export type WorkspaceSettingsRequest = z.infer<typeof WorkspaceSettingsRequestSchema>;
@@ -117,6 +133,12 @@ export const WorkspaceResponseSchema = z
     // Feature 020 (D2b): ticket repository scoping via Jira Components. Absent
     // settings key ⇒ false (OFF).
     ticket_scoping: z.boolean(),
+    // Feature 030: the workspace's role-template source override (non-secret;
+    // null = no override) + whether a sealed token is stored (never the token)
+    // + which level is effective for this workspace by configuration presence.
+    agent_instructions: AgentInstructionsSourceSchema.nullable(),
+    has_agent_instructions_token: z.boolean(),
+    effective_instructions_level: TemplateSourceLevelSchema,
     created_at: z.string(),
     updated_at: z.string(),
   })

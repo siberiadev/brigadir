@@ -64,6 +64,10 @@ describe('dashboard schemas (T119)', () => {
       scope_jql: 'labels = ai',
       enabled: true,
       ticket_scoping: false,
+      // Feature 030 additive fields (agent role-template source).
+      agent_instructions: null,
+      has_agent_instructions_token: false,
+      effective_instructions_level: 'builtin' as const,
       created_at: '2026-07-12T00:00:00.000Z',
       updated_at: '2026-07-12T00:00:00.000Z',
     };

@@ -184,6 +184,15 @@ export const AdminRepositoryInputSchema = z
   })
   .strict();
 
+/** Feature 030: role-template source for a workspace/platform (non-secret). */
+export const AdminAgentInstructionsSourceSchema = z
+  .object({
+    git_url: z.string().min(1).describe('Template repo clone URL (https or ssh; no file://).'),
+    git_ref: z.string().min(1).optional().describe('Optional branch/tag/SHA to pin.'),
+    subdir: z.string().min(1).optional().describe('Optional folder holding roles/*.md (default "roles").'),
+  })
+  .strict();
+
 export const CreateWorkspaceInputSchema = z
   .object({
     name: z.string().min(1).max(200).describe('Human-readable workspace name.'),
@@ -207,6 +216,10 @@ export const CreateWorkspaceInputSchema = z
       .max(50)
       .optional()
       .describe('Optional repositories the workspace agents work in.'),
+    agent_instructions: AdminAgentInstructionsSourceSchema.optional().describe(
+      'Optional role-template source override for this workspace. A private-repo token, ' +
+        'if the repo needs one, is injected from the server env — never passed here.',
+    ),
   })
   .strict();
 
@@ -218,6 +231,26 @@ export const CreateWorkspaceResultSchema = z
     enabled: z
       .literal(false)
       .describe('ALWAYS false — the backend creates workspaces PAUSED (feature 011); Start stays with the human.'),
+  })
+  .strict();
+
+// --- set_agent_instructions_source (feature 030) ---
+
+export const SetAgentInstructionsSourceInputSchema = z
+  .object({
+    workspace_id: uuid()
+      .optional()
+      .describe('Workspace to set the override on. OMIT to set the GLOBAL platform source.'),
+    source: AdminAgentInstructionsSourceSchema.nullable().describe(
+      'The role-template source to set, or null to clear (fall back to global/built-in).',
+    ),
+  })
+  .strict();
+
+export const SetAgentInstructionsSourceResultSchema = z
+  .object({
+    level: z.enum(['workspace', 'global']).describe('Which level was written.'),
+    source: AdminAgentInstructionsSourceSchema.nullable().describe('The stored source (null if cleared).'),
   })
   .strict();
 
@@ -349,6 +382,15 @@ export const AdminTools = {
       'the orchestrator is server-protected.',
     input: AdminUpdateAgentInputSchema,
     output: AgentWriteResultSchema,
+  },
+  set_agent_instructions_source: {
+    description:
+      'Set (or clear with source=null) the agent role-template git source for a workspace ' +
+      '(workspace_id) or the whole platform (omit workspace_id). A private-repo token, if ' +
+      'configured, is injected from the server env — never passed here. Precedence at run time: ' +
+      'workspace override → global → built-in defaults.',
+    input: SetAgentInstructionsSourceInputSchema,
+    output: SetAgentInstructionsSourceResultSchema,
   },
 } as const;
 

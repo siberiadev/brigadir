@@ -233,3 +233,85 @@ describe('brigadir-admin tool handlers (feature 012)', () => {
     expect(res.isError).toBe(true);
   });
 });
+
+describe('brigadir-admin agent role-template source (feature 030)', () => {
+  const WS = '11111111-1111-4111-8111-111111111111';
+  const CREATE_ARGS = {
+    name: 'A',
+    jira_site_url: 'https://x.atlassian.net',
+    board: '42',
+    expires_at: '2027-01-01T00:00:00.000Z',
+  };
+
+  it('create_workspace passes agent_instructions through and injects the token from config (not args)', async () => {
+    const { handlers, captured } = harness(
+      () => jsonResponse(201, { id: 'w1', project_key: 'BRIG', board_type: 'kanban' }),
+      { agentInstructionsToken: 'ghp_from_config' },
+    );
+    const res = await handlers.create_workspace({
+      ...CREATE_ARGS,
+      agent_instructions: { git_url: 'https://github.com/acme/agents.git', subdir: 'roles' },
+      // A smuggled token arg MUST be ignored (Principle V).
+      agent_instructions_token: 'ghp_SMUGGLED',
+    });
+    const body = captured.body as Record<string, unknown>;
+    expect(body.agent_instructions).toEqual({ git_url: 'https://github.com/acme/agents.git', subdir: 'roles' });
+    expect(body.agent_instructions_token).toBe('ghp_from_config');
+    expect(res.isError).toBeUndefined();
+  });
+
+  it('create_workspace omits the token when the server has none configured', async () => {
+    const { handlers, captured } = harness(() =>
+      jsonResponse(201, { id: 'w1', project_key: 'BRIG', board_type: 'kanban' }),
+    );
+    await handlers.create_workspace({
+      ...CREATE_ARGS,
+      agent_instructions: { git_url: 'https://github.com/acme/agents.git' },
+    });
+    const body = captured.body as Record<string, unknown>;
+    expect(body.agent_instructions).toEqual({ git_url: 'https://github.com/acme/agents.git' });
+    expect('agent_instructions_token' in body).toBe(false);
+  });
+
+  it('set_agent_instructions_source (workspace) PUTs the settings endpoint with the config token', async () => {
+    const { handlers, captured } = harness(
+      () => jsonResponse(200, { id: 'w1', agent_instructions: { git_url: 'https://github.com/acme/agents.git' } }),
+      { agentInstructionsToken: 'ghp_from_config' },
+    );
+    const res = await handlers.set_agent_instructions_source({
+      workspace_id: WS,
+      source: { git_url: 'https://github.com/acme/agents.git' },
+    });
+    expect(captured.method).toBe('PUT');
+    expect(captured.url).toBe(`http://backend.test/api/workspaces/${WS}/settings`);
+    const body = captured.body as Record<string, unknown>;
+    expect(body.agent_instructions).toEqual({ git_url: 'https://github.com/acme/agents.git' });
+    expect(body.agent_instructions_token).toBe('ghp_from_config');
+    expect(res.structuredContent).toEqual({ level: 'workspace', source: { git_url: 'https://github.com/acme/agents.git' } });
+  });
+
+  it('set_agent_instructions_source (global) PUTs the global endpoint; no token when unconfigured', async () => {
+    const { handlers, captured } = harness(() =>
+      jsonResponse(200, { source: { git_url: 'https://github.com/acme/agents.git' }, has_token: false }),
+    );
+    const res = await handlers.set_agent_instructions_source({
+      source: { git_url: 'https://github.com/acme/agents.git' },
+    });
+    expect(captured.url).toBe('http://backend.test/api/agent-instructions-settings');
+    const body = captured.body as Record<string, unknown>;
+    expect(body.source).toEqual({ git_url: 'https://github.com/acme/agents.git' });
+    expect('token' in body).toBe(false);
+    expect(res.structuredContent).toEqual({ level: 'global', source: { git_url: 'https://github.com/acme/agents.git' } });
+  });
+
+  it('set_agent_instructions_source with source=null clears and never sends a token', async () => {
+    const { handlers, captured } = harness(() => jsonResponse(200, { id: 'w1', agent_instructions: null }), {
+      agentInstructionsToken: 'ghp_from_config',
+    });
+    const res = await handlers.set_agent_instructions_source({ workspace_id: WS, source: null });
+    const body = captured.body as Record<string, unknown>;
+    expect(body.agent_instructions).toBeNull();
+    expect('agent_instructions_token' in body).toBe(false);
+    expect(res.structuredContent).toEqual({ level: 'workspace', source: null });
+  });
+});

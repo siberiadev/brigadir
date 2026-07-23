@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
-import { useWorkspace, useSetTicketScoping } from '../composables/useWorkspaces';
+import { useWorkspace, useSetTicketScoping, useUpdateSettings } from '../composables/useWorkspaces';
 import CredentialBadge from '../components/CredentialBadge.vue';
 import ConnectionForm from '../components/ConnectionForm/ConnectionForm.vue';
 import ConfigForm from '../components/ConfigForm/ConfigForm.vue';
@@ -64,6 +64,80 @@ function onTicketScopingChange(value: string | number | boolean) {
             : 'Ticket scoping disabled.',
         ),
       onError: () => ElMessage.error('Failed to update ticket scoping.'),
+    },
+  );
+}
+
+// --- feature 030: per-workspace role-template source override ---
+const updateSettings = useUpdateSettings(props.id);
+const showAiEdit = ref(false);
+const aiGitUrl = ref('');
+const aiGitRef = ref('');
+const aiSubdir = ref('');
+const aiToken = ref('');
+
+const effectiveSourceLabel = computed(() => {
+  switch (workspace.value?.effective_instructions_level) {
+    case 'workspace':
+      return 'This workspace’s own repository';
+    case 'global':
+      return 'The global repository';
+    default:
+      return 'Built-in defaults';
+  }
+});
+
+function openAiEdit() {
+  const src = workspace.value?.agent_instructions ?? null;
+  aiGitUrl.value = src?.git_url ?? '';
+  aiGitRef.value = src?.git_ref ?? '';
+  aiSubdir.value = src?.subdir ?? '';
+  aiToken.value = '';
+  showAiEdit.value = true;
+}
+
+function saveAi() {
+  const url = aiGitUrl.value.trim();
+  updateSettings.mutate(
+    {
+      agent_instructions: url
+        ? {
+            git_url: url,
+            ...(aiGitRef.value.trim() ? { git_ref: aiGitRef.value.trim() } : {}),
+            ...(aiSubdir.value.trim() ? { subdir: aiSubdir.value.trim() } : {}),
+          }
+        : null,
+      ...(aiToken.value ? { agent_instructions_token: aiToken.value } : {}),
+    },
+    {
+      onSuccess: () => {
+        showAiEdit.value = false;
+        ElMessage.success('Template source saved — effective on the next team generation.');
+      },
+      onError: () => ElMessage.error('Could not save the template source.'),
+    },
+  );
+}
+
+function useGlobalDefault() {
+  updateSettings.mutate(
+    { agent_instructions: null },
+    {
+      onSuccess: () => {
+        showAiEdit.value = false;
+        ElMessage.success('Override cleared — using the global / built-in source.');
+      },
+      onError: () => ElMessage.error('Could not clear the override.'),
+    },
+  );
+}
+
+function clearAiToken() {
+  updateSettings.mutate(
+    { agent_instructions_token: '' },
+    {
+      onSuccess: () => ElMessage.success('Token cleared.'),
+      onError: () => ElMessage.error('Could not clear the token.'),
     },
   );
 }
@@ -155,6 +229,91 @@ function onTicketScopingChange(value: string | number | boolean) {
           </div>
         </el-descriptions-item>
       </el-descriptions>
+    </div>
+
+    <!-- Feature 030: agent role-template source override -->
+    <div class="block">
+      <div class="block-head">
+        <h3>Agent instructions source</h3>
+        <el-button
+          v-if="!showAiEdit"
+          type="primary"
+          link
+          data-test="edit-agent-instructions"
+          @click="openAiEdit"
+        >
+          Edit
+        </el-button>
+      </div>
+
+      <el-descriptions v-if="!showAiEdit" :column="1" border data-test="agent-instructions-block">
+        <el-descriptions-item label="Effective source">
+          <span data-test="ai-effective">{{ effectiveSourceLabel }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="Override repository">
+          <span data-test="ai-override">
+            {{ workspace.agent_instructions?.git_url ?? 'None (using global / built-in)' }}
+          </span>
+        </el-descriptions-item>
+        <el-descriptions-item label="Access token">
+          <span data-test="ai-token-state">
+            {{ workspace.has_agent_instructions_token ? 'Token stored' : 'No token' }}
+          </span>
+        </el-descriptions-item>
+      </el-descriptions>
+
+      <el-form v-else label-position="top" class="ai-form" @submit.prevent>
+        <el-form-item label="Repository URL">
+          <el-input
+            v-model="aiGitUrl"
+            placeholder="git@github.com:acme/agents.git  (empty = use global / built-in)"
+            data-test="ai-git-url"
+          />
+        </el-form-item>
+        <div class="ai-row">
+          <el-form-item label="Branch / tag / ref (optional)" class="ai-col">
+            <el-input v-model="aiGitRef" placeholder="main" data-test="ai-git-ref" />
+          </el-form-item>
+          <el-form-item label="Subfolder (optional)" class="ai-col">
+            <el-input v-model="aiSubdir" placeholder="roles" data-test="ai-subdir" />
+          </el-form-item>
+        </div>
+        <el-form-item label="Access token (private repos only)">
+          <el-input
+            v-model="aiToken"
+            type="password"
+            show-password
+            :placeholder="
+              workspace.has_agent_instructions_token
+                ? '•••••••• stored — type to replace'
+                : 'none stored'
+            "
+            data-test="ai-token"
+          />
+          <el-button
+            v-if="workspace.has_agent_instructions_token"
+            link
+            type="danger"
+            size="small"
+            data-test="ai-clear-token"
+            @click="clearAiToken"
+          >
+            Clear token
+          </el-button>
+        </el-form-item>
+        <div class="ai-actions">
+          <el-button
+            type="primary"
+            :loading="updateSettings.isPending.value"
+            data-test="ai-save"
+            @click="saveAi"
+          >
+            Save
+          </el-button>
+          <el-button data-test="ai-use-global" @click="useGlobalDefault">Use global default</el-button>
+          <el-button data-test="ai-cancel" @click="showAiEdit = false">Cancel</el-button>
+        </div>
+      </el-form>
     </div>
 
     <!-- Edit: Jira connection -->
@@ -252,5 +411,19 @@ function onTicketScopingChange(value: string | number | boolean) {
 .ticket-scoping-hint {
   color: var(--el-text-color-secondary);
   font-size: 12px;
+}
+.ai-form {
+  margin-top: 4px;
+}
+.ai-row {
+  display: flex;
+  gap: 16px;
+}
+.ai-col {
+  flex: 1;
+}
+.ai-actions {
+  display: flex;
+  gap: 8px;
 }
 </style>
