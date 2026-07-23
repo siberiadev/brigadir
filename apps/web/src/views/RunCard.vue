@@ -14,6 +14,7 @@ import { formatDuration } from '../utils/date';
 import { formatCost, formatCostUsd } from '../utils/currency';
 import { formatTokens } from '../utils/number';
 import { pluralize } from '../utils/pluralize';
+import { costIsIndicative as costIsIndicativeFn, indicativeCostTip } from '../utils/executorCost';
 
 const props = defineProps<{ id: string }>();
 
@@ -110,23 +111,16 @@ const executorLabel = computed(() => {
   return executorModel.value ? `${type} · ${executorModel.value}` : type;
 });
 
-// Feature 025: kimi/Moonshot runs report cost priced against Anthropic's
-// list, not the provider's — the figure is indicative only, so flag it
-// wherever a real value shows (a bare "—" needs no caveat). deepseek_api left
-// this map once the worker started repricing its runs from token usage at
-// DeepSeek rates (libs/executors provider-pricing.ts; historical rows
-// backfilled).
-const INDICATIVE_COST_PROVIDERS: Record<string, string> = {
-  kimi: 'Moonshot',
-};
-const costIsIndicative = computed(
-  () =>
-    (run.value?.executor_type ?? '') in INDICATIVE_COST_PROVIDERS && run.value?.cost_usd != null,
+// Feature 025: kimi/Moonshot runs report cost priced against Anthropic's list,
+// not the provider's — the figure is indicative only, so flag it wherever a
+// real value shows (a bare "—" needs no caveat). Shared helper
+// (utils/executorCost) — was an inline copy here (M6). deepseek_api left the
+// indicative set once the worker started repricing its runs from token usage at
+// DeepSeek rates (libs/executors provider-pricing.ts; historical rows backfilled).
+const costIsIndicative = computed(() =>
+  costIsIndicativeFn(run.value?.executor_type, run.value?.cost_usd),
 );
-const INDICATIVE_COST_TIP = computed(
-  () =>
-    `Indicative only — ${run.value?.executor_type} runs are priced against Anthropic’s list, not ${INDICATIVE_COST_PROVIDERS[run.value?.executor_type ?? ''] ?? 'the provider'}’s.`,
-);
+const INDICATIVE_COST_TIP = computed(() => indicativeCostTip(run.value?.executor_type));
 
 // Token counts from the persisted CLI `result.usage`. The meta item is hidden
 // entirely when the run carries none (mock runs, pre-usage legacy runs) — no

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Component } from 'vue';
 import { useRoute, type RouteLocationRaw } from 'vue-router';
-import { House, LayoutGrid, Inbox, LogOut, Settings } from 'lucide-vue-next';
+import { House, LayoutGrid, Inbox, LogOut, Settings, BarChart3 } from 'lucide-vue-next';
 import type { ChannelHealthResponse } from '@brigadir/contracts';
 import AnimatedIcon from './AnimatedIcon.vue';
 import ChannelHealthIndicator from './ChannelHealthIndicator.vue';
@@ -20,7 +20,7 @@ const emit = defineEmits<{ (e: 'sign-out'): void }>();
 // Static, two-item nav config (data-model.md NavItem). `LogOut` is imported for
 // the bottom-pinned sign-out control rendered below the nav.
 type NavItem = {
-  key: 'home' | 'workspaces' | 'human-queue';
+  key: 'home' | 'workspaces' | 'human-queue' | 'metrics';
   label: string;
   icon: Component;
   to: RouteLocationRaw;
@@ -52,6 +52,14 @@ const navItems: NavItem[] = [
     icon: Inbox,
     to: '/human-queue',
     isActive: (path) => path === '/human-queue',
+  },
+  {
+    // Feature 029: read-only metrics timeline dashboard.
+    key: 'metrics',
+    label: 'Metrics',
+    icon: BarChart3,
+    to: '/metrics',
+    isActive: (path) => path === '/metrics',
   },
 ];
 

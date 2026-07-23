@@ -6,6 +6,7 @@ import { AgentsController } from './agents.controller';
 import { ExecutorsController } from './executors.controller';
 import { RunsController } from './runs.controller';
 import { HomeController } from './home.controller';
+import { MetricsController } from './metrics.controller';
 import { HumanTasksController } from './human-tasks.controller';
 import { BrigadirAgentSettingsController } from './brigadir-agent-settings.controller';
 import { ChannelHealthController } from './channel-health.controller';
@@ -36,6 +37,8 @@ import { DashboardTokenGuard } from './dashboard-token.guard';
     ExecutorsController,
     RunsController,
     HomeController,
+    // Feature 029: read-only metrics timeline aggregates.
+    MetricsController,
     HumanTasksController,
     BrigadirAgentSettingsController,
     // Feature 027 (US4): channel-health агрегат.
