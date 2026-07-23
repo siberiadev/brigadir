@@ -3,10 +3,12 @@ import { AppConfigModule } from '@brigadir/app-config';
 import { RunsModule } from '@brigadir/runs';
 import { PipelineModule } from '@brigadir/pipeline';
 import { HumanTasksModule } from '@brigadir/human-tasks';
+import { AgentTemplatesModule } from '@brigadir/agent-templates';
 import { CallbackController } from './callback.controller';
 import { CallbackHealthController } from './callback-health.controller';
 import { CallbackService } from './callback.service';
 import { JiraReadService } from './jira-read.service';
+import { TemplateReadService } from './template-read.service';
 import { RunTokenGuard } from './run-token.guard';
 
 /**
@@ -21,9 +23,9 @@ import { RunTokenGuard } from './run-token.guard';
  * this process.
  */
 @Module({
-  imports: [AppConfigModule, RunsModule, PipelineModule, HumanTasksModule],
+  imports: [AppConfigModule, RunsModule, PipelineModule, HumanTasksModule, AgentTemplatesModule],
   // CallbackHealthController is additive and unguarded (feature 026, US4).
   controllers: [CallbackController, CallbackHealthController],
-  providers: [CallbackService, JiraReadService, RunTokenGuard],
+  providers: [CallbackService, JiraReadService, TemplateReadService, RunTokenGuard],
 })
 export class CallbackModule {}

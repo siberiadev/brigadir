@@ -56,6 +56,66 @@ describe('createToolHandlers (T095)', () => {
     expect(await exists(outboxFilePath(markerPath, 'run-1'))).toBe(false);
   });
 
+  it('list_role_templates GETs the templates endpoint and never writes the marker', async () => {
+    const markerPath = await setup();
+    let url = '';
+    const handlers = createToolHandlers({
+      callbackUrl: 'http://callback.test/api/callbacks',
+      runId: 'run-1',
+      runToken: 'tok',
+      markerPath,
+      fetchImpl: async (u) => {
+        url = String(u);
+        return jsonResponse(200, { source: { level: 'builtin' }, items: [{ slug: 'developer', role: 'Developer' }] });
+      },
+    });
+
+    const result = await handlers.list_role_templates({});
+
+    expect(url).toBe('http://callback.test/api/callbacks/runs/run-1/templates');
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(result.content[0].text)).toMatchObject({ items: [{ slug: 'developer' }] });
+    expect(await exists(markerPath)).toBe(false);
+  });
+
+  it('get_role_template requires a slug and GETs the slug endpoint', async () => {
+    const markerPath = await setup();
+    let url = '';
+    const handlers = createToolHandlers({
+      callbackUrl: 'http://callback.test/api/callbacks',
+      runId: 'run-1',
+      runToken: 'tok',
+      markerPath,
+      fetchImpl: async (u) => {
+        url = String(u);
+        return jsonResponse(200, { slug: 'developer', role: 'Developer', body: '# Role' });
+      },
+    });
+
+    const missing = await handlers.get_role_template({});
+    expect(missing.isError).toBe(true);
+
+    const ok = await handlers.get_role_template({ slug: 'developer' });
+    expect(url).toBe('http://callback.test/api/callbacks/runs/run-1/templates/developer');
+    expect(JSON.parse(ok.content[0].text)).toMatchObject({ slug: 'developer' });
+  });
+
+  it('get_role_template surfaces a 404 (unknown slug) as a tool error carrying available', async () => {
+    const markerPath = await setup();
+    const handlers = createToolHandlers({
+      callbackUrl: 'http://callback.test/api/callbacks',
+      runId: 'run-1',
+      runToken: 'tok',
+      markerPath,
+      fetchImpl: async () =>
+        jsonResponse(404, { ok: false, error: 'unknown role template "x"', available: ['developer'] }),
+    });
+
+    const result = await handlers.get_role_template({ slug: 'x' });
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text)).toMatchObject({ available: ['developer'] });
+  });
+
   it('a network-error complete_task leaves a durable outbox with the report', async () => {
     const markerPath = await setup();
     const handlers = createToolHandlers({

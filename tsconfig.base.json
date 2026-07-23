@@ -30,7 +30,8 @@
       "@brigadir/ingest": ["libs/ingest/src"],
       "@brigadir/scrubber": ["libs/scrubber/src"],
       "@brigadir/callback": ["libs/callback/src"],
-      "@brigadir/human-tasks": ["libs/human-tasks/src"]
+      "@brigadir/human-tasks": ["libs/human-tasks/src"],
+      "@brigadir/agent-templates": ["libs/agent-templates/src"]
     }
   }
 }

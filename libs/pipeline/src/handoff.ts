@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { type BrigadirDb, schema, getWorkspaceSetupInstruction } from '@brigadir/database';
 import { type AgentReport, type TriggerEvent, normalizeReportArtifacts } from '@brigadir/contracts';
+import { resolveTemplateSource, type TemplateCatalog } from '@brigadir/agent-templates';
 import { getReworkBudget } from './rework-budget';
 
 /**
@@ -59,9 +60,34 @@ const DETAILS_BUDGET = 4000;
 // The editable workspace-setup protocol is schema-capped at 20k; same cap here
 // so a stored value never exceeds what the PUT would accept.
 const SETUP_PROTOCOL_BUDGET = 20000;
+const TEMPLATE_CATALOG_BUDGET = 4000;
 
 function trunc(value: string, budget: number): string {
   return value.length <= budget ? value : `${value.slice(0, budget)}…`;
+}
+
+/**
+ * The role-template catalog block for the workspace-setup handoff (feature 030,
+ * contracts/role-templates.md §4). Bounded like every other handoff field; the
+ * orchestrator fetches full bodies on demand via get_role_template.
+ */
+function roleTemplateCatalogLines(catalog: TemplateCatalog): string[] {
+  const { source, templates } = catalog;
+  const where =
+    source.level === 'workspace'
+      ? `workspace repo ${source.git_url ?? ''}`.trim()
+      : source.level === 'global'
+        ? `global repo ${source.git_url ?? ''}`.trim()
+        : 'built-in defaults';
+  const lines = [`Role templates available (source: ${where}):`];
+  for (const t of templates) {
+    const desc = t.description ? ` — ${t.description}` : '';
+    const hint = t.model_hint ? ` (hint: ${t.model_hint})` : '';
+    lines.push(`- ${t.slug}${desc}${hint}`);
+  }
+  if (source.diagnostic) lines.push(`(note: ${source.diagnostic})`);
+  lines.push('Fetch a template\'s full text with get_role_template(slug); adapt it to THIS project.');
+  return [trunc(lines.join('\n'), TEMPLATE_CATALOG_BUDGET)];
 }
 
 /**
@@ -398,6 +424,16 @@ async function buildWorkspaceSetupSection(
     }
   }
   lines.push('');
+
+  // Feature 030: the role-template catalog. Best-effort and bounded — a
+  // resolution failure omits the block (the setup instruction degrades to
+  // "proceed without templates"), never fails the run.
+  try {
+    lines.push(...roleTemplateCatalogLines(resolveTemplateSource()));
+    lines.push('');
+  } catch {
+    // no catalog block — setup proceeds without templates
+  }
 
   // The study/name/deliver protocol is an OPERATOR-EDITABLE global setting
   // (2026-07-16, `workspace_setup_instruction`), read live so an edit applies

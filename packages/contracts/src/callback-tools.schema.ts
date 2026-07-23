@@ -72,6 +72,24 @@ export const GetTicketSchema = z
   })
   .strict();
 
+/**
+ * Role-template tools (feature 030 / contracts/role-templates.md) — available to
+ * EVERY callback-wired run like the read-only Jira tools. Read-only catalog
+ * lookups scoped to the run's own workspace; they carry template TEXT only —
+ * never source URLs-with-credentials, tokens, or cache paths.
+ */
+export const ListRoleTemplatesSchema = z.object({}).strict();
+
+export const GetRoleTemplateSchema = z
+  .object({
+    slug: z
+      .string()
+      .min(1)
+      .max(100)
+      .describe('Role template slug from the catalog (e.g. "developer"). See list_role_templates.'),
+  })
+  .strict();
+
 export const CallbackTools = {
   report_progress: ReportProgressSchema,
   request_human: RequestHumanSchema,
@@ -79,9 +97,12 @@ export const CallbackTools = {
   get_project_overview: GetProjectOverviewSchema,
   search_tickets: SearchTicketsSchema,
   get_ticket: GetTicketSchema,
+  list_role_templates: ListRoleTemplatesSchema,
+  get_role_template: GetRoleTemplateSchema,
 } as const;
 
 export type ReportProgressInput = z.infer<typeof ReportProgressSchema>;
 export type RequestHumanInput = z.infer<typeof RequestHumanSchema>;
 export type SearchTicketsInput = z.infer<typeof SearchTicketsSchema>;
 export type GetTicketInput = z.infer<typeof GetTicketSchema>;
+export type GetRoleTemplateInput = z.infer<typeof GetRoleTemplateSchema>;

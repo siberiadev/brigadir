@@ -100,6 +100,9 @@ describe('buildArgs — useCallbackChannel (T103, D6)', () => {
       'mcp__brigadir__get_project_overview',
       'mcp__brigadir__search_tickets',
       'mcp__brigadir__get_ticket',
+      // feature 030 read-only role-template tools — same pre-allow rationale.
+      'mcp__brigadir__list_role_templates',
+      'mcp__brigadir__get_role_template',
     ]);
 
     const mcpConfigIdx = args.indexOf('--mcp-config');

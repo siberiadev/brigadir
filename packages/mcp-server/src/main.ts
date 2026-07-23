@@ -103,6 +103,20 @@ const TOOL_DEFS = [
       'Read one ticket of this workspace by key: summary, description, status, type, labels, links, and the latest comments. Read-only.',
     schema: CallbackTools.get_ticket,
   },
+  // feature 030: read-only role-template catalog. Curated per-role instruction
+  // prompts to adapt into a generated team; carry template text only.
+  {
+    name: 'list_role_templates',
+    description:
+      'List the role instruction templates available for this workspace (slug, role, description, model_hint, trigger_status_hint) plus which source they came from. Adapt a chosen template to THIS project — never copy verbatim. Read-only.',
+    schema: CallbackTools.list_role_templates,
+  },
+  {
+    name: 'get_role_template',
+    description:
+      'Read one role template by slug (from list_role_templates): its full instruction-prompt body to adapt for a generated agent. Read-only.',
+    schema: CallbackTools.get_role_template,
+  },
 ] as const;
 
 const server = new Server({ name: 'brigadir', version: '0.0.1' }, { capabilities: { tools: {} } });
@@ -132,6 +146,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request): Promise<ServerR
       return (await handlers.search_tickets(args)) as unknown as ServerResult;
     case 'get_ticket':
       return (await handlers.get_ticket(args)) as unknown as ServerResult;
+    case 'list_role_templates':
+      return (await handlers.list_role_templates(args)) as unknown as ServerResult;
+    case 'get_role_template':
+      return (await handlers.get_role_template(args)) as unknown as ServerResult;
     default:
       return {
         content: [{ type: 'text', text: `unknown tool: ${name}` }],

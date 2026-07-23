@@ -17,6 +17,10 @@ export const CALLBACK_TOOL_NAMES = [
   'mcp__brigadir__get_project_overview',
   'mcp__brigadir__search_tickets',
   'mcp__brigadir__get_ticket',
+  // Feature 030: role-template catalog lookups — read-only, pre-allowed for the
+  // same reason as the Jira read tools (a live run must not stall on a prompt).
+  'mcp__brigadir__list_role_templates',
+  'mcp__brigadir__get_role_template',
 ] as const;
 
 export interface ArgsInput {
