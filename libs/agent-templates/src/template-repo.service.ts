@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import type { ResolvedTemplateSource, RoleTemplate, RoleTemplateSummary } from '@brigadir/contracts';
+import { DRIZZLE, type BrigadirDb } from '@brigadir/database';
 import { resolveTemplateSource } from './template-source.resolver';
 
 /** Thrown by `get` for a slug not present in the effective source. */
@@ -37,13 +38,15 @@ export function toSummary(t: RoleTemplate): RoleTemplateSummary {
  */
 @Injectable()
 export class TemplateRepoService {
-  async list(_workspaceId: string): Promise<TemplateListResult> {
-    const { source, templates } = resolveTemplateSource();
+  constructor(@Inject(DRIZZLE) private readonly db: BrigadirDb) {}
+
+  async list(workspaceId: string): Promise<TemplateListResult> {
+    const { source, templates } = await resolveTemplateSource(this.db, workspaceId);
     return { source, items: templates.map(toSummary) };
   }
 
-  async get(_workspaceId: string, slug: string): Promise<RoleTemplate> {
-    const { templates } = resolveTemplateSource();
+  async get(workspaceId: string, slug: string): Promise<RoleTemplate> {
+    const { templates } = await resolveTemplateSource(this.db, workspaceId);
     const found = templates.find((t) => t.slug === slug);
     if (!found) {
       throw new RoleTemplateNotFoundError(

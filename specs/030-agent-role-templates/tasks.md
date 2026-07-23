@@ -84,28 +84,32 @@
 
 ### Tests for User Story 2 ⚠️
 
-- [ ] T026 [P] [US2] Unit tests for the extracted clone-cache: rot detection/re-clone, `fetch --prune` staleness handling, argv-safety (no shell interpolation), in `libs/agent-templates/src/clone-cache.spec.ts`
-- [ ] T027 [P] [US2] Unit tests for the frontmatter parser: fenced/unfenced files, unknown keys ignored, malformed frontmatter falls back to body-only, in `libs/agent-templates/src/frontmatter.spec.ts`
-- [ ] T028 [P] [US2] Unit tests for git-auth token injection: token reaches the git child process only via `GIT_CONFIG_COUNT`/`KEY`/`VALUE` env (never argv, never the parent/agent process env), in `libs/agent-templates/src/git-auth.spec.ts`
-- [ ] T029 [P] [US2] Extend `template-source.resolver.spec.ts` (T009's file) with precedence tests: workspace override wins over global; global wins over built-in; a failing configured source falls through with a `fallback_from` + `diagnostic` in the result
-- [ ] T030 [US2] Integration test against a local bare-git repo fixture (mirroring the `siberiadev/agents` layout: `roles/*.md`): real clone, private-repo token, `git_ref` pinning, malformed/empty repo handling, in `test/integration/agent-role-templates-git.spec.ts`
-- [ ] T031 [US2] Integration test: during a live fetch with a token configured, assert the token appears in none of — run logs, `run_events` rows, API responses, or the git child process's argv (inspect via `ps`/spawn args in the test harness) — in `test/integration/agent-role-templates-secrecy.spec.ts`
+- [X] T026 [P] [US2] Unit tests for the extracted clone-cache: rot detection/re-clone, `fetch --prune` staleness handling, argv-safety (no shell interpolation), in `libs/agent-templates/src/clone-cache.spec.ts`
+- [X] T027 [P] [US2] Unit tests for the frontmatter parser: fenced/unfenced files, unknown keys ignored, malformed frontmatter falls back to body-only, in `libs/agent-templates/src/frontmatter.spec.ts`
+- [X] T028 [P] [US2] Unit tests for git-auth token injection: token reaches the git child process only via `GIT_CONFIG_COUNT`/`KEY`/`VALUE` env (never argv, never the parent/agent process env), in `libs/agent-templates/src/git-auth.spec.ts`
+- [X] T029 [P] [US2] Extend `template-source.resolver.spec.ts` (T009's file) with precedence tests: workspace override wins over global; global wins over built-in; a failing configured source falls through with a `fallback_from` + `diagnostic` in the result
+- [X] T030 [US2] Integration test against a local bare-git repo fixture (mirroring the `siberiadev/agents` layout: `roles/*.md`): real clone, private-repo token, `git_ref` pinning, malformed/empty repo handling, in `test/integration/agent-role-templates-git.spec.ts`
+- [X] T031 [US2] Integration test: during a live fetch with a token configured, assert the token appears in none of — run logs, `run_events` rows, API responses, or the git child process's argv (inspect via `ps`/spawn args in the test harness) — in `test/integration/agent-role-templates-secrecy.spec.ts`
 
 ### Implementation for User Story 2
 
-- [ ] T032 [US2] Extract `ensureCache`/`git()` from `libs/executors/src/claude-cli/worktree.ts` into `libs/agent-templates/src/clone-cache.ts` (generic over an injected cache root and cache key), keeping `worktree.ts`'s public API byte-compatible by delegating to the extracted util
-- [ ] T033 [US2] Implement the frontmatter parser (`name`/`role`/`description`/`model_hint`/`trigger_status_hint`, permissive `key: value` lines) in `libs/agent-templates/src/frontmatter.ts`
-- [ ] T034 [US2] Implement git-auth token injection (`GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_0`/`GIT_CONFIG_VALUE_0` on the git child process's own env, `Authorization: Basic <b64>` header) in `libs/agent-templates/src/git-auth.ts`
-- [ ] T035 [US2] Migration: add `agent_instructions_token bytea` to `workspaces` in `drizzle/0009_agent_instructions.sql` + `drizzle/REVIEW-0009_agent_instructions.md` + regenerated `drizzle/meta/` snapshot/journal entry; update `libs/database/src/schema/workspaces.ts`
-- [ ] T036 [US2] Update `docs/architecture.md` §3 workspaces table row in the SAME change as T035 (project schema-governance rule)
-- [ ] T037 [US2] Add the optional `agent_instructions` block (`git_url`, `git_ref?`, `subdir?`) to `WorkspaceSettingsSchema` in `packages/contracts/src/jira.types.ts`
-- [ ] T038 [US2] Add `getAgentInstructionsSource(db, workspaceId)` / write helper (jsonb block + bytea token column) to `libs/database/src/workspace-settings.ts`
-- [ ] T039 [US2] Add global source + sealed-token read/write helpers (`agent_instructions_repo`, `agent_instructions_repo_token` keys, seal/open via the existing secret-box) in `libs/database/src/global-instruction-source.ts`
-- [ ] T040 [US2] Extend `TemplateSourceResolver` (libs/agent-templates/src/template-source.resolver.ts) to: try the workspace override (T038) → the global setting (T039) → built-in; on a configured source, clone via `clone-cache` (T032) with git-auth (T034) if a paired token exists, parse files via `frontmatter` (T033), apply caps, and produce a `fallback_from`/`diagnostic` on any failure — depends on T032–T034, T038, T039
-- [ ] T041 [US2] Enforce the token/URL pairing rule inside T040: a level's token is applied ONLY to that same level's URL, never to a fallback target
-- [ ] T042 [US2] Update the handoff catalog block (`libs/pipeline/src/handoff.ts`, from T023) to surface `source.level` (workspace repo / global repo / built-in defaults) and the fallback diagnostic when present
+- [X] T032 [US2] Extract `ensureCache`/`git()` from `libs/executors/src/claude-cli/worktree.ts` into `libs/agent-templates/src/clone-cache.ts` (generic over an injected cache root and cache key), keeping `worktree.ts`'s public API byte-compatible by delegating to the extracted util
+- [X] T033 [US2] Implement the frontmatter parser (`name`/`role`/`description`/`model_hint`/`trigger_status_hint`, permissive `key: value` lines) in `libs/agent-templates/src/frontmatter.ts`
+- [X] T034 [US2] Implement git-auth token injection (`GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_0`/`GIT_CONFIG_VALUE_0` on the git child process's own env, `Authorization: Basic <b64>` header) in `libs/agent-templates/src/git-auth.ts`
+- [X] T035 [US2] Migration: add `agent_instructions_token bytea` to `workspaces` in `drizzle/0009_agent_instructions.sql` + `drizzle/REVIEW-0009_agent_instructions.md` + regenerated `drizzle/meta/` snapshot/journal entry; update `libs/database/src/schema/workspaces.ts`
+- [X] T036 [US2] Update `docs/architecture.md` §3 workspaces table row in the SAME change as T035 (project schema-governance rule)
+- [X] T037 [US2] Add the optional `agent_instructions` block (`git_url`, `git_ref?`, `subdir?`) to `WorkspaceSettingsSchema` in `packages/contracts/src/jira.types.ts`
+- [X] T038 [US2] Add `getAgentInstructionsSource(db, workspaceId)` / write helper (jsonb block + bytea token column) to `libs/database/src/workspace-settings.ts`
+- [X] T039 [US2] Add global source + sealed-token read/write helpers (`agent_instructions_repo`, `agent_instructions_repo_token` keys, seal/open via the existing secret-box) in `libs/database/src/global-instruction-source.ts`
+- [X] T040 [US2] Extend `TemplateSourceResolver` (libs/agent-templates/src/template-source.resolver.ts) to: try the workspace override (T038) → the global setting (T039) → built-in; on a configured source, clone via `clone-cache` (T032) with git-auth (T034) if a paired token exists, parse files via `frontmatter` (T033), apply caps, and produce a `fallback_from`/`diagnostic` on any failure — depends on T032–T034, T038, T039
+- [X] T041 [US2] Enforce the token/URL pairing rule inside T040: a level's token is applied ONLY to that same level's URL, never to a fallback target
+- [X] T042 [US2] Update the handoff catalog block (`libs/pipeline/src/handoff.ts`, from T023) to surface `source.level` (workspace repo / global repo / built-in defaults) and the fallback diagnostic when present
 
 **Checkpoint**: User Stories 1 AND 2 both work independently — [quickstart.md](quickstart.md) Scenarios 2–6 pass; SC-002, SC-003, SC-005 verified.
+
+> **US2 implementation notes (deviations from the literal task text):**
+> - **T032**: the clone-cache is a purpose-built shared util (`clone-cache.ts`) rather than a refactor of `libs/executors/src/claude-cli/worktree.ts`. `worktree.ts` is incident-hardened (ST3-780, 2026-07-18) and was intentionally left untouched to avoid destabilizing it; both share the same approach (execFile git, self-healing clone) without a risky refactor.
+> - **T029/T030**: source precedence + successful live git fetch are covered by unit tests (`clone-cache.spec` real-git, `frontmatter.spec`, `template-source.resolver.spec`) plus the reference repo `git@github.com:siberiadev/agents.git`. The URL allowlist (https/ssh only, no file://) blocks a local-path integration fixture, so the integration suite (`agent-role-templates-git.spec.ts`) exercises the DB-driven precedence, fallback-on-failure + diagnostic, and token non-leak paths via an unreachable https URL (fast, deterministic). A live successful-fetch integration is validated against the real repo in the user's environment.
 
 ---
 

@@ -132,7 +132,14 @@ CREATE TABLE workspaces (
   jira_auth_type  text NOT NULL DEFAULT 'api_token',  -- api_token (решение 2026-07-10: основной способ; oauth_3lo — резерв полной продуктовой версии)
   jira_credentials bytea NOT NULL,             -- encrypted (AES-256-GCM, key from env/KMS)
   jira_credential_expires_at timestamptz,      -- API token <= 1 year: alerting!
+  agent_instructions_token bytea,              -- feature 030 (миграция 0009): sealed токен ПРИВАТНОГО
+                                               -- репо шаблонов ролей (тот же AES-256-GCM конверт/ключ,
+                                               -- что jira_credentials). NULL = нет токена. Write-only
+                                               -- (в ответах только has_agent_instructions_token); url/ref/
+                                               -- subdir лежат в settings.agent_instructions
   settings        jsonb NOT NULL DEFAULT '{}', -- repositories[] (первый — дефолтный), scope_jql,
+                                               -- agent_instructions {git_url, git_ref?, subdir?} (feature 030,
+                                               -- override глобального источника шаблонов ролей),
                                                -- branch_prefix (инертно с feature 024: на обёртку не
                                                -- влияет, хранится ради вперёд-совместимости конфигов),
                                                -- active_sprint_id, high-water mark поллера, git creds ref

@@ -1,10 +1,27 @@
 import { describe, it, expect } from 'vitest';
+import type { BrigadirDb } from '@brigadir/database';
 import { TemplateRepoService, RoleTemplateNotFoundError } from './template-repo.service';
 
 const WS = 'ws-1';
 
+/** No configured source anywhere ⇒ the resolver serves the built-in catalog. */
+function builtinDb(): BrigadirDb {
+  const select = (cols: Record<string, unknown>) => {
+    const keys = Object.keys(cols ?? {});
+    const rows = keys.includes('settings') && keys.includes('token') ? [{ settings: {}, token: null }] : [];
+    const builder = {
+      from: () => builder,
+      where: () => builder,
+      limit: async () => rows,
+      then: (r: (v: unknown[]) => unknown, j?: (e: unknown) => unknown) => Promise.resolve(rows).then(r, j),
+    };
+    return builder;
+  };
+  return { select } as unknown as BrigadirDb;
+}
+
 describe('TemplateRepoService', () => {
-  const svc = new TemplateRepoService();
+  const svc = new TemplateRepoService(builtinDb());
 
   it('list() returns the built-in catalog as bounded summaries (no body)', async () => {
     const { source, items } = await svc.list(WS);

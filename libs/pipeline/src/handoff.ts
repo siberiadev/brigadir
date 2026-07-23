@@ -425,11 +425,12 @@ async function buildWorkspaceSetupSection(
   }
   lines.push('');
 
-  // Feature 030: the role-template catalog. Best-effort and bounded — a
-  // resolution failure omits the block (the setup instruction degrades to
-  // "proceed without templates"), never fails the run.
+  // Feature 030: the role-template catalog. Best-effort and bounded — the
+  // resolver itself falls back to built-ins with a diagnostic on any source
+  // failure; this try/catch is belt-and-suspenders so an unexpected throw omits
+  // the block (setup then proceeds without templates) rather than failing.
   try {
-    lines.push(...roleTemplateCatalogLines(resolveTemplateSource()));
+    lines.push(...roleTemplateCatalogLines(await resolveTemplateSource(db, workspaceId)));
     lines.push('');
   } catch {
     // no catalog block — setup proceeds without templates
