@@ -40,6 +40,9 @@ export const sampleWorkspace: WorkspaceResponse = {
   expires_at: '2027-07-12T00:00:00.000Z',
   credential_status: 'ok',
   repositories: [{ name: 'api', git_url: 'git@github.com:acme/api.git', default_branch: 'main' }],
+  // Feature 031: workspace env defaults + names-only secret view.
+  env: {},
+  env_secret_keys: { workspace: [], repos: {}, agents: {} },
   // Feature 008 (FR-014): the additive read-only fields the Settings tab renders
   // and its edit modals seed from.
   bot_email: 'bot@acme.io',

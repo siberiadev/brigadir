@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { scrub, REDACTED } from './scrubber';
+import { scrub, makeScrub, REDACTED } from './scrubber';
 
 describe('scrub (T098, FR-024)', () => {
   it('redacts an ANTHROPIC_API_KEY-shaped secret', () => {
@@ -70,5 +70,51 @@ describe('scrub (T098, FR-024)', () => {
       expect(out).not.toContain(secret);
     }
     expect(out).toContain('Ordinary sentence describing the change with no secrets at all.');
+  });
+});
+
+describe('makeScrub (feature 031 — per-run literal redaction)', () => {
+  it('redacts a short low-entropy secret the global scrubber would miss', () => {
+    const password = 's3cretpw';
+    // The global scrubber leaves this dictionary-ish value alone...
+    expect(scrub(`connecting with ${password}`)).toContain(password);
+    // ...but a run-scoped scrub built from the actual value redacts it.
+    const runScrub = makeScrub([password]);
+    const out = runScrub(`connecting with ${password} now`);
+    expect(out).not.toContain(password);
+    expect(out).toContain(REDACTED);
+    expect(out).toContain('connecting with');
+  });
+
+  it('redacts a value embedded inside a connection string', () => {
+    const secret = 'p@ss w:rd/123';
+    const runScrub = makeScrub([secret]);
+    const out = runScrub(`DATABASE_URL=postgres://user:${secret}@host:5432/db`);
+    expect(out).not.toContain(secret);
+  });
+
+  it('still delegates to the global scrubber for pattern/entropy secrets', () => {
+    const apiKey = 'sk-ant-api03-' + 'z'.repeat(40);
+    const runScrub = makeScrub(['unrelated']);
+    expect(runScrub(`key ${apiKey}`)).not.toContain(apiKey);
+  });
+
+  it('ignores literals shorter than 4 chars (too collision-prone)', () => {
+    const runScrub = makeScrub(['ab', '']);
+    expect(runScrub('ab cd ab')).toBe('ab cd ab');
+  });
+
+  it('returns the global scrub function when there are no usable literals', () => {
+    expect(makeScrub([])).toBe(scrub);
+    expect(makeScrub(['xy'])).toBe(scrub); // all filtered out
+  });
+
+  it('fully masks a secret that contains a shorter secret as a substring', () => {
+    const shortS = 'token123';
+    const longS = 'token1234567';
+    const runScrub = makeScrub([shortS, longS]);
+    const out = runScrub(`a=${longS} b=${shortS}`);
+    expect(out).not.toContain(shortS);
+    expect(out).not.toContain(longS);
   });
 });

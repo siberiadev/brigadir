@@ -172,6 +172,27 @@ export const AgentWriteResultSchema = z
 // --- create_workspace ---
 
 /** Repositories accepted by create_workspace; `default_branch` defaults to "main". */
+/**
+ * Feature 031: one env variable for admin tooling. Exactly ONE of `value`
+ * (non-secret literal) or `secret_from_env` (the NAME of a variable in the
+ * MCP server's OWN process env, resolved server-side) — a secret value NEVER
+ * travels through the model, mirroring the feature-030 token discipline.
+ */
+export const AdminEnvRowSchema = z
+  .object({
+    key: z.string().min(1).describe('Env var name (A–Z, 0–9, _; not starting with a digit; not reserved).'),
+    value: z.string().optional().describe('Non-secret literal value.'),
+    secret_from_env: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Name of a variable in the MCP SERVER env to seal as a secret (value never passed here).'),
+  })
+  .strict()
+  .refine((r) => (r.value !== undefined) !== (r.secret_from_env !== undefined), {
+    message: 'provide exactly one of value | secret_from_env',
+  });
+
 export const AdminRepositoryInputSchema = z
   .object({
     name: z.string().min(1).describe('Short repo label used to reference it from an agent.'),
@@ -181,6 +202,35 @@ export const AdminRepositoryInputSchema = z
       .min(1)
       .optional()
       .describe('Base branch the agent branches from (default "main").'),
+    env: z
+      .array(AdminEnvRowSchema)
+      .optional()
+      .describe('Optional env vars injected into runs mounting this repo (secrets via secret_from_env).'),
+  })
+  .strict();
+
+/** Feature 031: the scope a set_env call targets. */
+export const SetEnvScopeSchema = z.union([
+  z.literal('workspace'),
+  z.object({ repository: z.string().min(1).describe('Repository name or id.') }).strict(),
+  z.object({ agent: z.string().min(1).describe('Agent key or id.') }).strict(),
+]);
+
+export const SetEnvInputSchema = z
+  .object({
+    workspace_id: uuid(),
+    scope: SetEnvScopeSchema.describe('workspace | { repository } | { agent }.'),
+    set: z.array(AdminEnvRowSchema).optional().describe('Env vars to upsert (secrets via secret_from_env).'),
+    delete: z.array(z.string()).optional().describe('Env var names to remove (from secret and non-secret homes).'),
+  })
+  .strict();
+
+export const SetEnvResultSchema = z
+  .object({
+    scope: z.string(),
+    plain_keys: z.array(z.string()),
+    secret_keys: z.array(z.string()),
+    deleted: z.array(z.string()),
   })
   .strict();
 
@@ -391,6 +441,15 @@ export const AdminTools = {
       'workspace override → global → built-in defaults.',
     input: SetAgentInstructionsSourceInputSchema,
     output: SetAgentInstructionsSourceResultSchema,
+  },
+  set_env: {
+    description:
+      'Set/delete environment variables for a workspace, one repository, or one agent so agents ' +
+      'can run and test services. Non-secret values are stored openly; SECRET values are passed ' +
+      'as secret_from_env (the NAME of a variable in THIS MCP server\'s env) and sealed server-side ' +
+      '— never send a secret literal. Precedence at run time: workspace → repository → agent.',
+    input: SetEnvInputSchema,
+    output: SetEnvResultSchema,
   },
 } as const;
 

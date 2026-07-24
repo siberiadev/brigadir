@@ -7,6 +7,7 @@ import type {
   WorkspaceRotateRequest,
   WorkspaceSettingsRequest,
   TicketCountRequest,
+  EnvSecretsWriteRequest,
 } from '@brigadir/contracts';
 import { workspacesApi } from '../api/workspaces';
 
@@ -72,6 +73,21 @@ export function useUpdateSettings(workspaceId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: WorkspaceSettingsRequest) => api.updateSettings(workspaceId, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: workspacesKey });
+      qc.invalidateQueries({ queryKey: workspaceKey(workspaceId) });
+    },
+  });
+}
+
+/**
+ * feature 031: write-only secret env for a workspace/repo/agent scope. On
+ * success invalidates the workspace detail so masked rows + summaries refresh.
+ */
+export function useUpdateEnvSecrets(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: EnvSecretsWriteRequest) => api.updateEnvSecrets(workspaceId, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: workspacesKey });
       qc.invalidateQueries({ queryKey: workspaceKey(workspaceId) });

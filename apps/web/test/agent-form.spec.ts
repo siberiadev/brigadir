@@ -3,7 +3,7 @@ import { http, HttpResponse } from 'msw';
 import type { VueWrapper } from '@vue/test-utils';
 import { server } from './server';
 import { mountWithProviders, flush } from './mount';
-import { paginated, sampleStatuses, sampleAgent, sampleExecutors, sampleDisabledExecutor } from './handlers';
+import { paginated, sampleStatuses, sampleAgent, sampleExecutors, sampleDisabledExecutor, sampleWorkspace } from './handlers';
 import AgentForm from '../src/components/AgentForm/AgentForm.vue';
 
 /**
@@ -381,5 +381,43 @@ describe('AgentForm — initialTriggerStatus prefill (feature 018)', () => {
     const wrapper = mountForm();
     await flush();
     expect(selectByTest(wrapper, 'trigger-status-select').props('modelValue')).toBe('');
+  });
+});
+
+describe('AgentForm — per-agent env overrides (feature 031, US4)', () => {
+  it('keeps the env section collapsed until "Show advanced" is opened', async () => {
+    const wrapper = mountForm();
+    await flush();
+    expect(wrapper.find('[data-test="agent-env-section"]').exists()).toBe(false);
+    await wrapper.find('[data-test="toggle-advanced"]').trigger('click');
+    await flush();
+    expect(wrapper.find('[data-test="agent-env-section"]').exists()).toBe(true);
+  });
+
+  it('marks an override that shadows a workspace default', async () => {
+    // Workspace defines NODE_ENV; the agent overrides it → "overrides" badge.
+    server.use(
+      http.get('/api/workspaces/:id', () =>
+        HttpResponse.json({
+          ...sampleWorkspace,
+          env: { NODE_ENV: 'test' },
+          env_secret_keys: { workspace: [], repos: {}, agents: {} },
+        }),
+      ),
+    );
+    const agent = { ...sampleAgent, behavior: { use_callback_channel: true, env: { NODE_ENV: 'e2e' } } };
+    const wrapper = mountForm(agent);
+    await flush();
+    await wrapper.find('[data-test="toggle-advanced"]').trigger('click');
+    await flush();
+    expect(wrapper.find('[data-test="env-override-badge"]').exists()).toBe(true);
+  });
+
+  it('create mode hints that the agent must be saved before adding secret overrides', async () => {
+    const wrapper = mountForm();
+    await flush();
+    await wrapper.find('[data-test="toggle-advanced"]').trigger('click');
+    await flush();
+    expect(wrapper.find('[data-test="agent-env-new"]').exists()).toBe(true);
   });
 });

@@ -10,6 +10,7 @@ import {
   getWorkspaceSettings,
   getScopeJql,
   patchWorkspaceSettings,
+  normalizeRepositoryIds,
   seedOrchestratorAgent,
   setWorkspaceInstructionSource,
   setWorkspaceInstructionToken,
@@ -30,6 +31,7 @@ import {
   WorkspaceCreateRequestSchema,
   WorkspaceRotateRequestSchema,
   WorkspaceSettingsRequestSchema,
+  EnvSecretsWriteRequestSchema,
   CreateTeamRequestSchema,
   TicketCountRequestSchema,
   type CreateTeamResponse,
@@ -40,7 +42,11 @@ import {
   type WaitingTicket,
   type TicketCountResponse,
   type JiraBoardType,
+  type EnvSecretKeys,
+  type EnvSecretScope,
 } from '@brigadir/contracts';
+import { openEnvSecrets, sealEnvSecrets, envSecretKeys, type EnvSecretsDocument } from '@brigadir/executors';
+import { SecretBoxError } from '@brigadir/jira';
 import { DashboardTokenGuard } from './dashboard-token.guard';
 import { conflictError, fieldError, notFoundError, statusesUnavailable, validationError, zodIssuePath } from './dashboard.errors';
 import { extractBoardId, deriveCredentialStatus, parsePagination } from './dashboard.helpers';
@@ -48,6 +54,24 @@ import { extractBoardId, deriveCredentialStatus, parsePagination } from './dashb
 /** Minimal response shape — avoids an `@types/express` dependency (same as agents.controller). */
 interface DashboardHttpResponse {
   status(code: number): void;
+}
+
+const EMPTY_ENV_SECRET_KEYS: EnvSecretKeys = { workspace: [], repos: {}, agents: {} };
+
+/**
+ * Feature 031: names-only view of a workspace's sealed env-secrets blob for the
+ * read surface. NULL blob ⇒ empty. A corrupt/unopenable blob yields empty keys
+ * here (the loud fail-fast on unopenable secrets is reserved for RUN spawn,
+ * D7/T027 — a corrupt blob must not break unrelated dashboard reads).
+ */
+function readEnvSecretKeys(blob: Buffer | Uint8Array | null): EnvSecretKeys {
+  if (!blob) return EMPTY_ENV_SECRET_KEYS;
+  try {
+    return envSecretKeys(openEnvSecrets(blob));
+  } catch (err) {
+    if (err instanceof SecretBoxError) return EMPTY_ENV_SECRET_KEYS;
+    throw err;
+  }
 }
 
 /**
@@ -190,7 +214,10 @@ export class WorkspacesController {
         // Start switch (PUT :id/settings {enabled:true}) opens it.
         // feature 030: optional role-template source override (non-secret).
         settings: {
-          repositories: req.repositories,
+          // Feature 031: assign stable repo ids at creation so secret env can be
+          // keyed by id immediately (admin create_workspace applies repo secrets
+          // right after this insert).
+          repositories: normalizeRepositoryIds(req.repositories),
           enabled: false,
           ...(req.agent_instructions ? { agent_instructions: req.agent_instructions } : {}),
         },
@@ -441,7 +468,45 @@ export class WorkspacesController {
     // in a sealed column — strip both from the plain settings patch (a token
     // must NEVER land in the jsonb blob).
     const { agent_instructions, agent_instructions_token, ...settingsPatch } = parsed.data;
-    await patchWorkspaceSettings(this.db, id, settingsPatch);
+
+    // Feature 031: one home per key — a non-secret env value must not collide
+    // with a stored secret of the same name in the same scope. Checked against
+    // the CURRENT sealed doc before persisting (409). Repos are matched by id.
+    const [secRow] = await this.db
+      .select({ envSecrets: schema.workspaces.envSecrets })
+      .from(schema.workspaces)
+      .where(eq(schema.workspaces.id, id))
+      .limit(1);
+    const secretsDoc: EnvSecretsDocument = secRow?.envSecrets ? openEnvSecrets(secRow.envSecrets) : {};
+    if (settingsPatch.env) {
+      this.guardNoSecretCollision(settingsPatch.env, secretsDoc.workspace, 'workspace');
+    }
+    for (const repo of settingsPatch.repositories ?? []) {
+      if (repo.id && repo.env) {
+        this.guardNoSecretCollision(repo.env, secretsDoc.repos?.[repo.id], `repository "${repo.name}"`);
+      }
+    }
+
+    const next = await patchWorkspaceSettings(this.db, id, settingsPatch);
+
+    // Feature 031 (T029): prune sealed secrets for repositories that were
+    // removed by this write (repo delete cascades its secrets).
+    if (settingsPatch.repositories && secretsDoc.repos) {
+      const liveIds = new Set((next.repositories ?? []).map((r) => r.id).filter(Boolean));
+      const pruned: Record<string, Record<string, string>> = {};
+      let changed = false;
+      for (const [repoId, values] of Object.entries(secretsDoc.repos)) {
+        if (liveIds.has(repoId)) pruned[repoId] = values;
+        else changed = true;
+      }
+      if (changed) {
+        const doc: EnvSecretsDocument = { ...secretsDoc, repos: pruned };
+        await this.db
+          .update(schema.workspaces)
+          .set({ envSecrets: sealEnvSecrets(doc), updatedAt: sql`now()` })
+          .where(eq(schema.workspaces.id, id));
+      }
+    }
     if (agent_instructions !== undefined) {
       await setWorkspaceInstructionSource(this.db, id, agent_instructions); // null clears
     }
@@ -454,6 +519,112 @@ export class WorkspacesController {
       );
     }
     return this.toResponse(id);
+  }
+
+  /**
+   * Feature 031 (US2): write-only secret env. `set` upserts sealed values,
+   * `delete` removes keys, scoped to workspace / one repository / one agent.
+   * Values are NEVER echoed — the response carries only the names-only view.
+   * A key that already exists as a NON-secret value in the same scope is a 409
+   * (one home per key).
+   */
+  @Put(':id/env-secrets')
+  async updateEnvSecrets(@Param('id') id: string, @Body() body: unknown): Promise<WorkspaceResponse> {
+    const parsed = EnvSecretsWriteRequestSchema.safeParse(body);
+    if (!parsed.success) throw zodToValidationError(parsed.error);
+    const { scope, set, delete: del } = parsed.data;
+
+    const [row] = await this.db
+      .select({ settings: schema.workspaces.settings, envSecrets: schema.workspaces.envSecrets })
+      .from(schema.workspaces)
+      .where(eq(schema.workspaces.id, id))
+      .limit(1);
+    if (!row) throw notFoundError('workspace_not_found', 'Workspace not found.');
+    const settings = (row.settings ?? {}) as {
+      env?: Record<string, string>;
+      repositories?: { id?: string; name: string; env?: Record<string, string> }[];
+    };
+
+    // Resolve the target scope + the plaintext map that shares its "one home".
+    let plaintext: Record<string, string>;
+    let apply: (doc: EnvSecretsDocument, next: Record<string, string> | undefined) => void;
+    if (scope === 'workspace') {
+      plaintext = settings.env ?? {};
+      apply = (doc, next) => {
+        if (next) doc.workspace = next;
+        else delete doc.workspace;
+      };
+    } else if ('repository_id' in scope) {
+      const repo = (settings.repositories ?? []).find((r) => r.id === scope.repository_id);
+      if (!repo) throw notFoundError('repository_not_found', 'Repository not found in this workspace.');
+      plaintext = repo.env ?? {};
+      apply = (doc, next) => {
+        doc.repos = { ...(doc.repos ?? {}) };
+        if (next) doc.repos[scope.repository_id] = next;
+        else delete doc.repos[scope.repository_id];
+      };
+    } else {
+      const [agent] = await this.db
+        .select({ behavior: schema.agents.behavior })
+        .from(schema.agents)
+        .where(and(eq(schema.agents.id, scope.agent_id), eq(schema.agents.workspaceId, id)))
+        .limit(1);
+      if (!agent) throw notFoundError('agent_not_found', 'Agent not found in this workspace.');
+      plaintext = ((agent.behavior ?? {}) as { env?: Record<string, string> }).env ?? {};
+      apply = (doc, next) => {
+        doc.agents = { ...(doc.agents ?? {}) };
+        if (next) doc.agents[scope.agent_id] = next;
+        else delete doc.agents[scope.agent_id];
+      };
+    }
+
+    // One home per key: a secret must not shadow a non-secret of the same name.
+    for (const key of Object.keys(set ?? {})) {
+      if (key in plaintext) {
+        throw conflictError(
+          'env_key_conflict',
+          `env key "${key}" is already defined as a non-secret value in this scope`,
+        );
+      }
+    }
+
+    // Read-modify-write the sealed doc. An unopenable existing blob is a hard
+    // error here (fail loud — never silently drop stored secrets on a write).
+    const doc: EnvSecretsDocument = row.envSecrets ? openEnvSecrets(row.envSecrets) : {};
+    const current = this.scopeSubmap(doc, scope);
+    const next: Record<string, string> = { ...current, ...(set ?? {}) };
+    for (const key of del ?? []) delete next[key];
+    apply(doc, Object.keys(next).length > 0 ? next : undefined);
+
+    await this.db
+      .update(schema.workspaces)
+      .set({ envSecrets: sealEnvSecrets(doc), updatedAt: sql`now()` })
+      .where(eq(schema.workspaces.id, id));
+    return this.toResponse(id);
+  }
+
+  /** Reject (409) any plaintext env key that already exists as a secret in the same scope. */
+  private guardNoSecretCollision(
+    plaintext: Record<string, string>,
+    secret: Record<string, string> | undefined,
+    scopeLabel: string,
+  ): void {
+    if (!secret) return;
+    for (const key of Object.keys(plaintext)) {
+      if (key in secret) {
+        throw conflictError(
+          'env_key_conflict',
+          `env key "${key}" is already defined as a secret in ${scopeLabel}`,
+        );
+      }
+    }
+  }
+
+  /** The current secret submap for a scope inside a decrypted doc. */
+  private scopeSubmap(doc: EnvSecretsDocument, scope: EnvSecretScope): Record<string, string> {
+    if (scope === 'workspace') return doc.workspace ?? {};
+    if ('repository_id' in scope) return doc.repos?.[scope.repository_id] ?? {};
+    return doc.agents?.[scope.agent_id] ?? {};
   }
 
   @Put(':id/jira-connection')
@@ -559,6 +730,10 @@ export class WorkspacesController {
       expires_at: row.jiraCredentialExpiresAt ? row.jiraCredentialExpiresAt.toISOString() : null,
       credential_status: deriveCredentialStatus(row.jiraCredentialExpiresAt),
       repositories: settings.repositories ?? [],
+      // Feature 031: non-secret workspace env defaults (values shown openly) and
+      // the names-only view of ALL secret env. Secret VALUES are never serialized.
+      env: settings.env ?? {},
+      env_secret_keys: readEnvSecretKeys(row.envSecrets),
       // Feature 008 (FR-014): the additive, non-breaking read-only fields the
       // Settings tab renders and seeds its edit modals from. Only `.email` is
       // surfaced — `api_token` is discarded, never serialized (Principle V).

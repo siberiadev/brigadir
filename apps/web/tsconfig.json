@@ -26,7 +26,8 @@
       ],
       "@brigadir/contracts/executor-type-sets": [
         "../../packages/contracts/src/executor-type-sets.ts"
-      ]
+      ],
+      "@brigadir/contracts/env": ["../../packages/contracts/src/env.constants.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.vue", "test/**/*.ts", "vite.config.ts", "vitest.config.ts", "env.d.ts"]

@@ -15,7 +15,8 @@ import {
 } from '@nestjs/common';
 import { and, eq, sql } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
-import { StatusesService, StatusesUnavailable } from '@brigadir/jira';
+import { StatusesService, StatusesUnavailable, SecretBoxError } from '@brigadir/jira';
+import { openEnvSecrets, sealEnvSecrets, type EnvSecretsDocument } from '@brigadir/executors';
 import { RunTriggerService } from '@brigadir/runs';
 import {
   AgentWriteRequestSchema,
@@ -143,6 +144,10 @@ export class AgentsController {
       ]);
     }
 
+    // Feature 031 (T030): a non-secret per-agent env key must not collide with a
+    // stored secret of the same name for this agent (one home per key).
+    await this.guardAgentEnvNoSecretCollision(req.workspace_id, id, req.behavior?.env);
+
     const values = this.toInsertValues(req);
 
     // feature 010 (FR-019): the orchestrator's identity (name), trigger fields
@@ -217,8 +222,72 @@ export class AgentsController {
       await this.db.update(schema.agents).set({ enabled: false }).where(eq(schema.agents.id, id));
       return { soft_deleted: true };
     }
+    // Feature 031 (T029): fetch the workspace before the row disappears so we
+    // can prune this agent's sealed secret env in the same operation.
+    const [toDelete] = await this.db
+      .select({ workspaceId: schema.agents.workspaceId })
+      .from(schema.agents)
+      .where(eq(schema.agents.id, id))
+      .limit(1);
     await this.db.delete(schema.agents).where(eq(schema.agents.id, id));
+    if (toDelete) await this.pruneAgentSecrets(toDelete.workspaceId, id);
     return { soft_deleted: false };
+  }
+
+  /** Reject (409) a per-agent env key that already exists as a secret for this agent. */
+  private async guardAgentEnvNoSecretCollision(
+    workspaceId: string,
+    agentId: string,
+    envPatch: Record<string, string> | undefined,
+  ): Promise<void> {
+    if (!envPatch || Object.keys(envPatch).length === 0) return;
+    const [ws] = await this.db
+      .select({ envSecrets: schema.workspaces.envSecrets })
+      .from(schema.workspaces)
+      .where(eq(schema.workspaces.id, workspaceId))
+      .limit(1);
+    if (!ws?.envSecrets) return;
+    let doc: EnvSecretsDocument;
+    try {
+      doc = openEnvSecrets(ws.envSecrets);
+    } catch (err) {
+      if (err instanceof SecretBoxError) return; // corrupt blob: a write must not crash on it here
+      throw err;
+    }
+    const secret = doc.agents?.[agentId];
+    if (!secret) return;
+    for (const key of Object.keys(envPatch)) {
+      if (key in secret) {
+        throw new ConflictException({
+          ok: false,
+          error: `env key "${key}" is already defined as a secret for this agent`,
+        });
+      }
+    }
+  }
+
+  /** Remove an agent's sealed secret env from its workspace's env-secrets blob. */
+  private async pruneAgentSecrets(workspaceId: string, agentId: string): Promise<void> {
+    const [ws] = await this.db
+      .select({ envSecrets: schema.workspaces.envSecrets })
+      .from(schema.workspaces)
+      .where(eq(schema.workspaces.id, workspaceId))
+      .limit(1);
+    if (!ws?.envSecrets) return;
+    let doc: EnvSecretsDocument;
+    try {
+      doc = openEnvSecrets(ws.envSecrets);
+    } catch (err) {
+      if (err instanceof SecretBoxError) return;
+      throw err;
+    }
+    if (!doc.agents || !(agentId in doc.agents)) return;
+    const agents = { ...doc.agents };
+    delete agents[agentId];
+    await this.db
+      .update(schema.workspaces)
+      .set({ envSecrets: sealEnvSecrets({ ...doc, agents }), updatedAt: sql`now()` })
+      .where(eq(schema.workspaces.id, workspaceId));
   }
 
   @Post(':id/test-run')

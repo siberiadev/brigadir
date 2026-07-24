@@ -59,6 +59,9 @@ describe('dashboard schemas (T119)', () => {
       expires_at: '2027-07-12T00:00:00.000Z',
       credential_status: 'ok' as const,
       repositories: [],
+      // Feature 031 additive fields (env defaults + names-only secret view).
+      env: {},
+      env_secret_keys: { workspace: [], repos: {}, agents: {} },
       bot_email: 'bot@acme.io',
       branch_prefix: 'feature',
       scope_jql: 'labels = ai',

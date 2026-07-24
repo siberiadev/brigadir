@@ -22,6 +22,8 @@ import type {
   RunContext,
 } from '../agent-executor.interface';
 import { openExecutorSecrets } from '../executor-secrets';
+import { openEnvSecrets, type EnvSecretsDocument } from '../env-secrets';
+import { assembleRunUserEnv, applyUserEnv } from '../user-env';
 import {
   resolveClaudeCliConfig,
   resolveEffectiveAuth,
@@ -36,7 +38,8 @@ import {
 import { buildArgs } from './args';
 import { resolveCostUsd } from './provider-pricing';
 import { buildChildEnv } from './env-allowlist';
-import { scrub } from '@brigadir/scrubber';
+import { makeScrub } from '@brigadir/scrubber';
+import { SecretBoxError } from '@brigadir/jira';
 import { ClaudeStreamParser, type TerminalResult } from './stream-parser';
 import {
   prepareAll,
@@ -215,6 +218,8 @@ export class ClaudeCliExecutor implements AgentExecutor {
       apiKey,
       noRepo,
       setupRun,
+      userEnv,
+      envSecretValues,
     } = await this.loadRunConfig(ctx);
 
     // The run's workspace dir: the parent `worktreeRoot/<runId>` holding one
@@ -339,7 +344,17 @@ export class ClaudeCliExecutor implements AgentExecutor {
       return { exitStatus: 'crashed', diagnostics: err instanceof Error ? err.message : String(err) };
     }
 
-    const result = await this.runProcess(ctx, signal, workspaceDir, runtimeConfig, mcpConfig, auth, apiKey);
+    const result = await this.runProcess(
+      ctx,
+      signal,
+      workspaceDir,
+      runtimeConfig,
+      mcpConfig,
+      auth,
+      apiKey,
+      userEnv,
+      envSecretValues,
+    );
 
     try {
       await mcpConfig?.cleanup();
@@ -390,6 +405,8 @@ export class ClaudeCliExecutor implements AgentExecutor {
     mcpConfig: WrittenMcpConfig | undefined,
     auth: EffectiveAuth,
     apiKey: string | undefined,
+    userEnv: Record<string, string>,
+    envSecretValues: string[],
   ): Promise<ExecutorResult> {
     const argv = buildArgs({
       model: runtimeConfig.model,
@@ -402,6 +419,17 @@ export class ClaudeCliExecutor implements AgentExecutor {
       stopHookSettingsJson: mcpConfig?.settingsJson,
     });
     const env = buildChildEnv(process.env);
+    // Feature 031: inject operator env AFTER the allowlist floor and BEFORE the
+    // platform's own auth/provider injection — so platform-managed keys always
+    // win and `ALLOWLIST_KEYS` is never widened. applyUserEnv drops any
+    // reserved key defensively (write surfaces already reject them) and returns
+    // the dropped list for a diagnostic.
+    const droppedReserved = applyUserEnv(env, userEnv);
+    if (droppedReserved.length > 0) {
+      this.logger.warn(
+        `run ${ctx.runId}: dropped ${droppedReserved.length} reserved env key(s) from operator config: ${droppedReserved.join(', ')}`,
+      );
+    }
     // Per-profile auth injection (feature 018; api_key mode since 2026-07-14):
     // DELIBERATE additions of the profile's own values AFTER the allowlist
     // pass — the HOST's ANTHROPIC_API_KEY / AWS_* / CLAUDE_CODE_USE_BEDROCK /
@@ -430,7 +458,12 @@ export class ClaudeCliExecutor implements AgentExecutor {
 
     // feature 026 (Constitution V): scrub every tool_call string the parser
     // persists, including strings nested in a complete_task report.
-    const parser = new ClaudeStreamParser({ scrub });
+    // feature 031: a run-scoped scrubber ALSO redacts this run's secret env
+    // VALUES — a short/low-entropy secret the global scrubber would miss must
+    // never surface in run events, reports, or diagnostics (FR-007). No secret
+    // env ⇒ `makeScrub` returns the plain global `scrub` (zero overhead).
+    const runScrub = makeScrub(envSecretValues);
+    const parser = new ClaudeStreamParser({ scrub: runScrub });
     const stderrTail = new StderrTail();
     let externalRef: string | undefined;
     let terminal: TerminalResult | undefined;
@@ -557,7 +590,8 @@ export class ClaudeCliExecutor implements AgentExecutor {
             await persistRunEvent('error', {
               source: 'stderr-tail',
               reason: 'timeout',
-              stderr: stderrTail.text,
+              // feature 031: scrub secret env values a service may have logged.
+              stderr: runScrub(stderrTail.text),
             });
           }
           settle({
@@ -615,7 +649,8 @@ export class ClaudeCliExecutor implements AgentExecutor {
         }
 
         // No terminal `result` event ever arrived: nonzero/unexpected exit.
-        const tail = stderrTail.text;
+        // feature 031: scrub secret env values a service may have logged.
+        const tail = runScrub(stderrTail.text);
         settle({
           exitStatus: 'crashed',
           externalRef,
@@ -643,6 +678,10 @@ export class ClaudeCliExecutor implements AgentExecutor {
     apiKey: string | undefined;
     noRepo: boolean;
     setupRun: boolean;
+    /** Feature 031: merged operator env to inject (empty for no-repo runs). */
+    userEnv: Record<string, string>;
+    /** Feature 031: secret env VALUES in this run, for the run-scoped scrubber. */
+    envSecretValues: string[];
   }> {
     const runId = ctx.runId;
     const [row] = await this.db
@@ -651,6 +690,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
         executorName: schema.executors.name,
         executorSecrets: schema.executors.secrets,
         behavior: schema.agents.behavior,
+        agentId: schema.runs.agentId,
         workspaceId: schema.runs.workspaceId,
         ticketId: schema.runs.ticketId,
         triggerEvent: schema.runs.triggerEvent,
@@ -680,6 +720,8 @@ export class ClaudeCliExecutor implements AgentExecutor {
       repository?: string;
       repositories?: string[];
       workspace_mode?: string;
+      // Feature 031: non-secret per-agent env override (highest operator layer).
+      env?: Record<string, string>;
     };
 
     if (setupRun) {
@@ -816,6 +858,18 @@ export class ClaudeCliExecutor implements AgentExecutor {
       }
     }
 
+    // Feature 031: assemble the operator env for this run. Repo-mounted runs
+    // only — triage (workspace_mode: 'none') and no-repo-degraded setup runs
+    // get nothing, exactly like DEFAULT_REPO_RUN_ALLOWED_TOOLS (research D4).
+    const { userEnv, envSecretValues } = noRepo
+      ? { userEnv: {}, envSecretValues: [] }
+      : await this.resolveRunUserEnv({
+          workspaceId: row.workspaceId,
+          agentId: row.agentId,
+          agentEnv: behavior.env,
+          mountedRepoNames: repos.map((r) => r.name),
+        });
+
     return {
       runtimeConfig,
       repos,
@@ -827,7 +881,65 @@ export class ClaudeCliExecutor implements AgentExecutor {
       apiKey,
       noRepo,
       setupRun,
+      userEnv,
+      envSecretValues,
     };
+  }
+
+  /**
+   * Feature 031: read the workspace's non-secret env config + sealed
+   * env-secrets blob and assemble the merged operator env for a repo-mounted
+   * run (workspace ⊕ mounted repos in mount order ⊕ agent). Mounted repos are
+   * matched to their settings entry by name to recover `id` (secret keying) and
+   * `env`. An env-secrets blob that fails to open is a FAIL-FAST before spawn
+   * (D7) — running with silently-missing secrets is never acceptable.
+   */
+  private async resolveRunUserEnv(args: {
+    workspaceId: string;
+    agentId: string;
+    agentEnv?: Record<string, string>;
+    mountedRepoNames: string[];
+  }): Promise<{ userEnv: Record<string, string>; envSecretValues: string[] }> {
+    const [ws] = await this.db
+      .select({ settings: schema.workspaces.settings, envSecrets: schema.workspaces.envSecrets })
+      .from(schema.workspaces)
+      .where(eq(schema.workspaces.id, args.workspaceId))
+      .limit(1);
+    const settings = (ws?.settings ?? {}) as {
+      env?: Record<string, string>;
+      repositories?: { id?: string; name: string; env?: Record<string, string> }[];
+    };
+
+    let secrets: EnvSecretsDocument = {};
+    if (ws?.envSecrets) {
+      try {
+        secrets = openEnvSecrets(ws.envSecrets);
+      } catch (err) {
+        if (err instanceof SecretBoxError) {
+          throw new Error(
+            `workspace ${args.workspaceId} env-secrets blob failed to decrypt — ` +
+              `fix BRIGADIR_CREDENTIALS_KEY or re-enter the secret env values (feature 031)`,
+            { cause: err },
+          );
+        }
+        throw err;
+      }
+    }
+
+    const repoEntries = settings.repositories ?? [];
+    const mountedRepos = args.mountedRepoNames.map((name) => {
+      const entry = repoEntries.find((r) => r.name === name);
+      return { id: entry?.id, env: entry?.env };
+    });
+
+    const { userEnv, secretValues } = assembleRunUserEnv({
+      workspaceEnv: settings.env,
+      agentEnv: args.agentEnv,
+      mountedRepos,
+      agentId: args.agentId,
+      secrets: { workspace: secrets.workspace, repos: secrets.repos, agents: secrets.agents },
+    });
+    return { userEnv, envSecretValues: secretValues };
   }
 
   /**

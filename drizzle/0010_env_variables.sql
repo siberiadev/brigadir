@@ -1,0 +1,1 @@
+ALTER TABLE "workspaces" ADD COLUMN "env_secrets" "bytea";

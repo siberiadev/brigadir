@@ -15,8 +15,10 @@ import { MAX_PAGE_SIZE } from '@brigadir/contracts/pagination';
 import { useStatuses } from '../../composables/useStatuses';
 import { useAgents, useCreateAgent, useUpdateAgent, useTestRun } from '../../composables/useAgents';
 import { useExecutors } from '../../composables/useExecutors';
-import { useTicketCount } from '../../composables/useWorkspaces';
+import { useTicketCount, useWorkspace, useUpdateEnvSecrets } from '../../composables/useWorkspaces';
 import { ApiError } from '../../api/client';
+import EnvVarsTable from '../EnvVarsTable/EnvVarsTable.vue';
+import type { EnvSecretKeys } from '@brigadir/contracts';
 
 const props = defineProps<{
   workspaceId: string;
@@ -88,7 +90,41 @@ const form = reactive({
   allowed_tools: (a?.behavior?.allowed_tools as string[] | undefined) ?? [],
   required_checks: (a?.behavior?.required_checks as string[] | undefined) ?? [],
   use_callback_channel: (a?.behavior?.use_callback_channel as boolean | undefined) ?? true,
+  // Feature 031: per-agent non-secret env override (highest layer). Saved with
+  // the form; secret overrides go through the env-secrets endpoint (edit only).
+  env: { ...((a?.behavior?.env as Record<string, string> | undefined) ?? {}) },
 });
+
+// Feature 031: workspace context for the agent env override — inherited keys
+// (workspace defaults) drive the "overrides" badges, and the agent's secret
+// key names come from the workspace's names-only view.
+const workspaceQuery = useWorkspace(props.workspaceId);
+const inheritedEnvKeys = computed(() => Object.keys(workspaceQuery.data.value?.env ?? {}));
+const agentSecretKeys = ref<string[]>([]);
+watch(
+  () => workspaceQuery.data.value?.env_secret_keys as EnvSecretKeys | undefined,
+  (keys) => {
+    if (keys && props.agent) agentSecretKeys.value = keys.agents[props.agent.id] ?? [];
+  },
+  { immediate: true },
+);
+const envSecrets = useUpdateEnvSecrets(props.workspaceId);
+function addAgentSecret(key: string, value: string) {
+  if (!props.agent) return; // create first — no agent id yet
+  void envSecrets
+    .mutateAsync({ scope: { agent_id: props.agent.id }, set: { [key]: value } })
+    .then((res) => {
+      agentSecretKeys.value = res.env_secret_keys.agents[props.agent!.id] ?? [];
+    });
+}
+function removeAgentSecret(key: string) {
+  if (!props.agent) return;
+  void envSecrets
+    .mutateAsync({ scope: { agent_id: props.agent.id }, delete: [key] })
+    .then((res) => {
+      agentSecretKeys.value = res.env_secret_keys.agents[props.agent!.id] ?? [];
+    });
+}
 
 // Default a fresh form to an ENABLED claude_cli profile (else the first enabled one).
 watch(executorOptions, (opts) => {
@@ -189,6 +225,8 @@ function buildRequest(): AgentWriteRequest {
       allowed_tools: form.allowed_tools,
       required_checks: form.required_checks,
       use_callback_channel: form.use_callback_channel,
+      // Feature 031: per-agent non-secret env override.
+      env: form.env,
       // NO model key: the executor profile's model is the single source of
       // truth; a legacy behavior.model on old rows is ignored by the runtime.
     },
@@ -469,6 +507,24 @@ defineExpose({ submit, saving });
       <el-form-item label="Required checks">
         <el-select v-model="form.required_checks" multiple filterable allow-create data-test="required-checks-select" />
       </el-form-item>
+      <el-form-item label="Environment overrides">
+        <div class="agent-env" data-test="agent-env-section">
+          <p class="agent-env-hint">
+            Override workspace and repository env for this agent only. Applies to new runs.
+          </p>
+          <EnvVarsTable
+            v-model="form.env"
+            :secret-keys="agentSecretKeys"
+            :inherited-keys="inheritedEnvKeys"
+            data-test="agent-env"
+            @add-secret="addAgentSecret"
+            @remove-secret="removeAgentSecret"
+          />
+          <p v-if="!isEdit" class="agent-env-hint" data-test="agent-env-new">
+            Save the agent first to add secret overrides.
+          </p>
+        </div>
+      </el-form-item>
     </template>
 
     <el-form-item label="Use callback channel">
@@ -499,6 +555,14 @@ defineExpose({ submit, saving });
 <style scoped lang="scss">
 .agent-form {
   max-width: 640px;
+}
+.agent-env {
+  width: 100%;
+}
+.agent-env-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin: 0 0 8px;
 }
 .two-col {
   display: flex;

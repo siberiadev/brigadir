@@ -161,6 +161,41 @@ function asRecord(v: unknown): Record<string, unknown> {
   return (v ?? {}) as Record<string, unknown>;
 }
 
+/**
+ * Feature 031: split admin env rows into non-secret and secret maps, resolving
+ * each `secret_from_env` against the MCP SERVER's own process env (a secret
+ * value NEVER travels through the model). Returns an error string if a row is
+ * malformed or a referenced env var is missing.
+ */
+function splitEnvRows(
+  rows: unknown,
+): { plain: Record<string, string>; secret: Record<string, string> } | { error: string } {
+  const plain: Record<string, string> = {};
+  const secret: Record<string, string> = {};
+  if (rows === undefined) return { plain, secret };
+  if (!Array.isArray(rows)) return { error: 'env must be an array of { key, value | secret_from_env }' };
+  for (const raw of rows) {
+    const r = asRecord(raw);
+    const key = typeof r.key === 'string' ? r.key : '';
+    if (!key) return { error: 'each env row needs a key' };
+    const hasValue = typeof r.value === 'string';
+    const fromEnv = typeof r.secret_from_env === 'string' ? r.secret_from_env : '';
+    if (hasValue === !!fromEnv) {
+      return { error: `env "${key}": provide exactly one of value | secret_from_env` };
+    }
+    if (hasValue) {
+      plain[key] = r.value as string;
+    } else {
+      const resolved = process.env[fromEnv];
+      if (resolved === undefined) {
+        return { error: `env "${key}": secret_from_env "${fromEnv}" is not set in the MCP server environment` };
+      }
+      secret[key] = resolved;
+    }
+  }
+  return { plain, secret };
+}
+
 export interface AdminToolHandlers {
   list_workspaces(args: unknown): Promise<ToolCallResult>;
   get_workspace(args: unknown): Promise<ToolCallResult>;
@@ -173,6 +208,7 @@ export interface AdminToolHandlers {
   create_agent(args: unknown): Promise<ToolCallResult>;
   update_agent(args: unknown): Promise<ToolCallResult>;
   set_agent_instructions_source(args: unknown): Promise<ToolCallResult>;
+  set_env(args: unknown): Promise<ToolCallResult>;
 }
 
 export function createToolHandlers(config: AdminToolConfig): AdminToolHandlers {
@@ -250,13 +286,26 @@ export function createToolHandlers(config: AdminToolConfig): AdminToolHandlers {
       const a = asRecord(args);
       // Build the body from NAMED fields only — the Jira email/token come from
       // config, never from args (a smuggled `jira_api_token` arg is ignored).
-      const repositories = Array.isArray(a.repositories)
-        ? (a.repositories as Record<string, unknown>[]).map((r) => ({
-            name: r.name,
-            git_url: r.git_url,
-            default_branch: typeof r.default_branch === 'string' && r.default_branch.length > 0 ? r.default_branch : 'main',
-          }))
-        : [];
+      // Feature 031: repo env — non-secret values ride the create body; secrets
+      // (secret_from_env) are resolved from THIS server's env and applied after
+      // creation (keyed by the repo id the backend assigns). Keyed by repo name.
+      const repoSecretsByName: Record<string, Record<string, string>> = {};
+      const repositories: Record<string, unknown>[] = [];
+      if (Array.isArray(a.repositories)) {
+        for (const raw of a.repositories as Record<string, unknown>[]) {
+          const split = splitEnvRows(raw.env);
+          if ('error' in split) return localError(split.error);
+          const name = raw.name as string;
+          if (Object.keys(split.secret).length > 0) repoSecretsByName[name] = split.secret;
+          repositories.push({
+            name: raw.name,
+            git_url: raw.git_url,
+            default_branch:
+              typeof raw.default_branch === 'string' && raw.default_branch.length > 0 ? raw.default_branch : 'main',
+            ...(Object.keys(split.plain).length > 0 ? { env: split.plain } : {}),
+          });
+        }
+      }
       // Feature 030: pass the (non-secret) template-source override through; the
       // private-repo token comes from the server's OWN env, never from args.
       const ai = asRecord(a.agent_instructions);
@@ -284,6 +333,23 @@ export function createToolHandlers(config: AdminToolConfig): AdminToolHandlers {
       const res = await call('POST', '/api/workspaces', body);
       if (res.status < 200 || res.status >= 300) return toolError(res.body);
       const w = asRecord(res.body);
+
+      // Feature 031: apply repo secret env, keyed by the repo id the backend
+      // assigned (repos carry a stable id from creation). A secret whose repo
+      // can't be resolved is surfaced rather than silently dropped.
+      const createdRepos = (w.repositories ?? []) as Record<string, unknown>[];
+      for (const [name, secret] of Object.entries(repoSecretsByName)) {
+        const repoId = createdRepos.find((r) => r.name === name)?.id;
+        if (typeof repoId !== 'string') {
+          return localError(`workspace created, but repository "${name}" had no id to attach its secret env`);
+        }
+        const sres = await call('PUT', `/api/workspaces/${encodeURIComponent(String(w.id))}/env-secrets`, {
+          scope: { repository_id: repoId },
+          set: secret,
+        });
+        if (sres.status < 200 || sres.status >= 300) return toolError(sres.body);
+      }
+
       return ok({
         workspace_id: w.id,
         project_key: w.project_key,
@@ -370,6 +436,98 @@ export function createToolHandlers(config: AdminToolConfig): AdminToolHandlers {
       if (res.status < 200 || res.status >= 300) return toolError(res.body);
       const b = asRecord(res.body);
       return ok({ level: 'global', source: b.source ?? null });
+    },
+
+    async set_env(args: unknown): Promise<ToolCallResult> {
+      const wsId = requireId(args, 'workspace_id');
+      if (!wsId) return localError('workspace_id is required');
+      const a = asRecord(args);
+      const split = splitEnvRows(a.set);
+      if ('error' in split) return localError(split.error);
+      const del = Array.isArray(a.delete) ? (a.delete as unknown[]).filter((k): k is string => typeof k === 'string') : [];
+
+      // Read the workspace once — resolves repo name→id and carries the current
+      // plaintext env for a read-modify-write.
+      const wsRes = await call('GET', `/api/workspaces/${encodeURIComponent(wsId)}`);
+      if (wsRes.status < 200 || wsRes.status >= 300) return toolError(wsRes.body);
+      const ws = asRecord(wsRes.body);
+      const repos = (ws.repositories ?? []) as Record<string, unknown>[];
+
+      // Resolve scope → the env-secrets scope + a plaintext applier.
+      const scope = a.scope;
+      let secretScope: Record<string, unknown> | 'workspace';
+      let scopeLabel: string;
+      let applyPlain: ((merged: Record<string, string>) => Promise<HttpResult>) | null;
+      let currentPlain: Record<string, string>;
+
+      if (scope === 'workspace') {
+        secretScope = 'workspace';
+        scopeLabel = 'workspace';
+        currentPlain = (ws.env ?? {}) as Record<string, string>;
+        applyPlain = (merged) =>
+          call('PUT', `/api/workspaces/${encodeURIComponent(wsId)}/settings`, { env: merged });
+      } else if (asRecord(scope).repository !== undefined) {
+        const ref = String(asRecord(scope).repository);
+        const repo = repos.find((r) => r.id === ref || r.name === ref);
+        if (!repo || typeof repo.id !== 'string') return localError(`repository "${ref}" not found in workspace`);
+        const repoId = repo.id;
+        secretScope = { repository_id: repoId };
+        scopeLabel = `repository ${repo.name as string}`;
+        currentPlain = (repo.env ?? {}) as Record<string, string>;
+        applyPlain = (merged) => {
+          const nextRepos = repos.map((r) =>
+            r.id === repoId
+              ? { name: r.name, git_url: r.git_url, default_branch: r.default_branch, id: r.id, env: merged }
+              : { name: r.name, git_url: r.git_url, default_branch: r.default_branch, id: r.id, env: r.env },
+          );
+          return call('PUT', `/api/workspaces/${encodeURIComponent(wsId)}/settings`, { repositories: nextRepos });
+        };
+      } else if (asRecord(scope).agent !== undefined) {
+        const ref = String(asRecord(scope).agent);
+        const agRes = await call('GET', `/api/agents?workspace=${encodeURIComponent(wsId)}&page_size=100`);
+        if (agRes.status < 200 || agRes.status >= 300) return toolError(agRes.body);
+        const agents = ((agRes.body ?? {}) as Paginated<Record<string, unknown>>).items ?? [];
+        const agent = agents.find((ag) => ag.id === ref || ag.key === ref);
+        if (!agent || typeof agent.id !== 'string') return localError(`agent "${ref}" not found in workspace`);
+        secretScope = { agent_id: agent.id };
+        scopeLabel = `agent ${agent.key as string}`;
+        currentPlain = {};
+        // Non-secret agent env lives in behavior.env and is best edited via
+        // update_agent (which runs the full agent lint); set_env handles agent
+        // SECRETS. A plaintext agent row here is a clear, actionable error.
+        applyPlain = null;
+      } else {
+        return localError('scope must be "workspace" | { repository } | { agent }');
+      }
+
+      if (applyPlain === null && Object.keys(split.plain).length > 0) {
+        return localError('non-secret agent env: set behavior.env via update_agent; set_env handles agent secrets');
+      }
+
+      // 1) Secrets (and secret-side deletes) through the write-only endpoint.
+      if (Object.keys(split.secret).length > 0 || del.length > 0) {
+        const sres = await call('PUT', `/api/workspaces/${encodeURIComponent(wsId)}/env-secrets`, {
+          scope: secretScope,
+          ...(Object.keys(split.secret).length > 0 ? { set: split.secret } : {}),
+          ...(del.length > 0 ? { delete: del } : {}),
+        });
+        if (sres.status < 200 || sres.status >= 300) return toolError(sres.body);
+      }
+
+      // 2) Non-secret upserts + deletes through settings (read-modify-write).
+      if (applyPlain && (Object.keys(split.plain).length > 0 || del.length > 0)) {
+        const merged = { ...currentPlain, ...split.plain };
+        for (const k of del) delete merged[k];
+        const pres = await applyPlain(merged);
+        if (pres.status < 200 || pres.status >= 300) return toolError(pres.body);
+      }
+
+      return ok({
+        scope: scopeLabel,
+        plain_keys: Object.keys(split.plain),
+        secret_keys: Object.keys(split.secret),
+        deleted: del,
+      });
     },
   };
 }

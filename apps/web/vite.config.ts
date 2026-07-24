@@ -35,6 +35,11 @@ export default defineConfig({
       '@brigadir/contracts/executor-type-sets': fileURLToPath(
         new URL('../../packages/contracts/src/executor-type-sets.ts', import.meta.url),
       ),
+      // Same pattern for the env-variable rules (feature 031, dep-free TS source
+      // module) — the EnvVarsTable form validates keys/caps at runtime.
+      '@brigadir/contracts/env': fileURLToPath(
+        new URL('../../packages/contracts/src/env.constants.ts', import.meta.url),
+      ),
     },
   },
   server: {

@@ -68,3 +68,29 @@ export function scrub(text: string): string {
   out = redactHighEntropySpans(out);
   return out;
 }
+
+function escapeRegExp(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Feature 031: build a scrub function that ALSO redacts exact occurrences of
+ * the given literals (a run's decrypted secret env values) before delegating to
+ * the global {@link scrub}. Needed because a secret env value may be a short or
+ * low-entropy string (e.g. a dictionary password) that neither the named
+ * patterns nor the entropy heuristic would catch — FR-007 demands zero leakage
+ * of the ACTUAL configured values.
+ *
+ * Literals shorter than 4 chars are ignored (too collision-prone to redact
+ * safely); empty input yields a plain wrapper equivalent to {@link scrub}. The
+ * global `scrub` is unchanged, so every existing call site is unaffected.
+ */
+export function makeScrub(extraLiterals: string[]): (text: string) => string {
+  const literals = [...new Set(extraLiterals.filter((s) => s.length >= 4))]
+    // Redact longer literals first so a secret that contains another as a
+    // substring is fully masked rather than partially.
+    .sort((a, b) => b.length - a.length);
+  if (literals.length === 0) return scrub;
+  const literalRe = new RegExp(literals.map(escapeRegExp).join('|'), 'g');
+  return (text: string): string => scrub(text.replace(literalRe, REDACTED));
+}

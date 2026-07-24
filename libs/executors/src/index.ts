@@ -1,5 +1,7 @@
 export * from './executors.module';
 export * from './executor-secrets';
+export * from './env-secrets';
+export * from './user-env';
 export * from './agent-executor.interface';
 export * from './executor.registry';
 export * from './mock.executor';

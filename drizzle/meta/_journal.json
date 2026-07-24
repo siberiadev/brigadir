@@ -71,6 +71,13 @@
       "when": 1784813442787,
       "tag": "0009_agent_instructions",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1784855047052,
+      "tag": "0010_env_variables",
+      "breakpoints": true
     }
   ]
 }

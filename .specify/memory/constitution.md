@@ -157,6 +157,19 @@ Secrets never appear in argv and never in the agent process environment.
 - Credentials at rest (Jira tokens, executor secrets) are stored encrypted
   (AES-256-GCM) with expiry tracking and alerting.
 
+- Narrowing (feature 031): the rule "secrets never in the agent process
+  environment" governs *platform* secrets (run tokens, vendor API keys, git
+  credentials) — those remain structurally unreachable, and the env allowlist
+  floor (`env-allowlist.ts`) is NOT widened (explicit security test). An
+  operator MAY supply *service* env for a run (DATABASE_URL, PORT, test-integration
+  keys) at workspace/repository/agent scope: it is intended for the agent process
+  by definition, scoped to exactly what the operator chose to hand over, sealed
+  at rest in the same AES-256-GCM envelope, injected AFTER the allowlist floor and
+  BEFORE the platform's own auth/provider values (so a reserved key can never be
+  overridden — write surfaces also reject reserved keys), and every secret VALUE
+  is registered with the per-run scrubber so it cannot surface in run events,
+  reports, or Jira. This is analogous to the feature-015 repo-access narrowing.
+
 **Rationale**: Agents execute untrusted-adjacent model output; keeping
 secrets structurally unreachable is the only defense that does not depend
 on the model behaving.

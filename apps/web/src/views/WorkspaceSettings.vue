@@ -293,6 +293,8 @@ function clearAiToken() {
         :branch-prefix="workspace.branch_prefix"
         :scope-jql="workspace.scope_jql"
         :repositories="workspace.repositories"
+        :env="workspace.env"
+        :env-secret-keys="workspace.env_secret_keys"
         @saved="onConfigSaved"
       />
       <template #footer>

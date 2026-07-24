@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { AgentInstructionsSourceSchema } from './role-template.schema';
+import { EnvMapSchema } from './env.schema';
 
 /**
  * Jira Cloud value types (REST v3 + Agile 1.0) and the workspace settings blob.
@@ -111,9 +112,19 @@ export type JiraCredentials = z.infer<typeof JiraCredentialsSchema>;
  */
 export const WorkspaceRepositorySchema = z
   .object({
+    // Feature 031: stable identity for keying secret env (`env_secrets.repos`)
+    // and addressing the settings card dialog. OPTIONAL for read-compat with
+    // pre-031 blobs; lazily backfilled on the next settings write. NEVER key
+    // secrets by `name` — it is mutable (rename would orphan the secrets).
+    id: z.string().uuid().optional(),
     name: z.string().min(1),
     git_url: z.string().min(1),
     default_branch: z.string().min(1),
+    // Feature 031: non-secret per-repository env injected into runs mounting
+    // this repo (primary home). Lives and dies with the entry — rename-safe,
+    // delete-cascades by construction. Secret values for this repo live in the
+    // sealed `workspaces.env_secrets` blob keyed by `id`, never here.
+    env: EnvMapSchema.optional(),
   })
   .strict();
 export type WorkspaceRepository = z.infer<typeof WorkspaceRepositorySchema>;
@@ -129,6 +140,10 @@ export const WorkspaceSettingsSchema = z
     scope_jql: z.string().min(1).optional(),
     // Ordered; first = the default repository agents inherit (feature 005).
     repositories: z.array(WorkspaceRepositorySchema).optional(),
+    // Feature 031: non-secret workspace-level env DEFAULTS — the lowest layer,
+    // shared by every repo-mounted run of this workspace (repo and agent env
+    // override it). Secret workspace defaults live in `env_secrets.workspace`.
+    env: EnvMapSchema.optional(),
     // Workspace pause flag (feature 006, data-model additive item 2). ABSENT ⇒
     // treated as enabled; the reconcile pass selects
     // `settings->>'enabled' IS DISTINCT FROM 'false'`. No DDL — jsonb value only.
