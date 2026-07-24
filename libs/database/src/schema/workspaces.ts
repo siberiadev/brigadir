@@ -23,6 +23,14 @@ export const workspaces = pgTable('workspaces', {
   // expose only has_agent_instructions_token). The non-secret url/ref/subdir
   // live in `settings.agent_instructions`.
   agentInstructionsToken: bytea('agent_instructions_token'),
+  // Feature 031 (migration 0010): sealed per-workspace env-secrets document
+  // (AES-256-GCM secret-box, same key/codec as jira_credentials). NULL = no
+  // secret env configured. Holds a JSON doc { workspace?, repos?, agents? } of
+  // secret env values across all three scopes. WRITE-ONLY over the API
+  // (responses expose only key NAMES via env_secret_keys). Non-secret env
+  // lives openly in `settings.env` / `settings.repositories[].env` /
+  // `agents.behavior.env`.
+  envSecrets: bytea('env_secrets'),
   settings: jsonb('settings').notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

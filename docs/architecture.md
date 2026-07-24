@@ -132,12 +132,23 @@ CREATE TABLE workspaces (
   jira_auth_type  text NOT NULL DEFAULT 'api_token',  -- api_token (решение 2026-07-10: основной способ; oauth_3lo — резерв полной продуктовой версии)
   jira_credentials bytea NOT NULL,             -- encrypted (AES-256-GCM, key from env/KMS)
   jira_credential_expires_at timestamptz,      -- API token <= 1 year: alerting!
+  env_secrets     bytea,                       -- feature 031 (миграция 0010): sealed JSON-документ
+                                               -- { workspace?, repos?:{repoId→env}, agents?:{agentId→env} }
+                                               -- секретных env-значений всех трёх скоупов (тот же
+                                               -- AES-256-GCM конверт/ключ). NULL = нет секретов. WRITE-ONLY
+                                               -- (в ответах только имена ключей — env_secret_keys). Несекретный
+                                               -- env лежит открыто в settings.env / settings.repositories[].env /
+                                               -- agents.behavior.env. Инжектится в спаун ПОСЛЕ allowlist-floor и
+                                               -- ДО auth/provider (platform-ключи всегда побеждают; allowlist не
+                                               -- расширяется). Только repo-mounted прогоны (triage — нет)
   agent_instructions_token bytea,              -- feature 030 (миграция 0009): sealed токен ПРИВАТНОГО
                                                -- репо шаблонов ролей (тот же AES-256-GCM конверт/ключ,
                                                -- что jira_credentials). NULL = нет токена. Write-only
                                                -- (в ответах только has_agent_instructions_token); url/ref/
                                                -- subdir лежат в settings.agent_instructions
-  settings        jsonb NOT NULL DEFAULT '{}', -- repositories[] (первый — дефолтный), scope_jql,
+  settings        jsonb NOT NULL DEFAULT '{}', -- repositories[] (первый — дефолтный; feature 031: у каждой
+                                               -- записи стабильный id + опц. env — несекретный per-repo env),
+                                               -- env (feature 031: несекретные workspace-дефолты env), scope_jql,
                                                -- agent_instructions {git_url, git_ref?, subdir?} (feature 030,
                                                -- override глобального источника шаблонов ролей),
                                                -- branch_prefix (инертно с feature 024: на обёртку не
@@ -204,6 +215,7 @@ CREATE TABLE agents (
   status_success  text NOT NULL,               -- у оркестратора — инертный placeholder (см. FR-007): completed-run оркестратора не делает generic transition
   status_failure  text NOT NULL,               -- обычно "Blocked"
   behavior        jsonb NOT NULL DEFAULT '{}', -- behavior options (см. §7); у оркестратора { workspace_mode: 'none' } → no-repo run
+                                               -- feature 031: behavior.env — несекретный per-agent env override (высший слой)
   timeout_minutes int NOT NULL DEFAULT 45,
   max_budget_usd  numeric(8,2),
   max_attempts    int NOT NULL DEFAULT 2,
@@ -367,6 +379,10 @@ export interface RunContext {
   };
   limits: { timeoutMs: number; maxBudgetUsd?: number; maxTurns?: number };
   env: Record<string, string>;    // sanitized! никакого ANTHROPIC_API_KEY из окружения хоста
+  // Примечание (feature 031): операторский env НЕ едет через это поле — компоновка
+  // (workspace ⊕ mounted repos ⊕ agent, плюс расшифрованные секреты) происходит
+  // ВНУТРИ ClaudeCliExecutor.loadRunConfig (только там известен итоговый набор
+  // смонтированных репо) и инжектится в спаун ПОСЛЕ allowlist-floor и ДО auth/provider.
 }
 
 export interface ExecutorResult {

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import {
   WorkspaceSettingsSchema,
@@ -29,6 +30,16 @@ export async function getWorkspaceSettings(db: Db, workspaceId: string): Promise
   return WorkspaceSettingsSchema.parse(row.settings ?? {});
 }
 
+/**
+ * Feature 031: assign a stable `id` to any repository entry missing one, so
+ * secret env can be keyed by id (rename-safe) and the settings card dialog has
+ * a handle. Idempotent — entries that already have an id are untouched. Pure
+ * (does not mutate the input array).
+ */
+export function normalizeRepositoryIds(repos: WorkspaceRepository[]): WorkspaceRepository[] {
+  return repos.map((repo) => (repo.id ? repo : { ...repo, id: randomUUID() }));
+}
+
 /** Shallow-merge a partial patch into settings and persist (bumps updated_at). */
 export async function patchWorkspaceSettings(
   db: Db,
@@ -36,7 +47,10 @@ export async function patchWorkspaceSettings(
   patch: Partial<WorkspaceSettings>,
 ): Promise<WorkspaceSettings> {
   const current = await getWorkspaceSettings(db, workspaceId);
-  const next = WorkspaceSettingsSchema.parse({ ...current, ...patch });
+  const merged: Partial<WorkspaceSettings> = { ...current, ...patch };
+  // Backfill repo ids on any write that carries the repositories list.
+  if (merged.repositories) merged.repositories = normalizeRepositoryIds(merged.repositories);
+  const next = WorkspaceSettingsSchema.parse(merged);
   await db
     .update(schema.workspaces)
     .set({ settings: next, updatedAt: sql`now()` })

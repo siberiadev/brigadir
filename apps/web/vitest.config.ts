@@ -21,6 +21,9 @@ export default defineConfig({
       '@brigadir/contracts/executor-type-sets': fileURLToPath(
         new URL('../../packages/contracts/src/executor-type-sets.ts', import.meta.url),
       ),
+      '@brigadir/contracts/env': fileURLToPath(
+        new URL('../../packages/contracts/src/env.constants.ts', import.meta.url),
+      ),
     },
   },
   test: {

@@ -315,3 +315,130 @@ describe('brigadir-admin agent role-template source (feature 030)', () => {
     expect(res.structuredContent).toEqual({ level: 'workspace', source: null });
   });
 });
+
+describe('brigadir-admin env variables (feature 031)', () => {
+  interface Call { url: string; method?: string; body: unknown }
+
+  /** Multi-call harness: scripts a response per call and records all of them. */
+  function envHarness(script: (call: Call, i: number) => Response, overrides: Partial<AdminToolConfig> = {}) {
+    const calls: Call[] = [];
+    const config: AdminToolConfig = {
+      apiUrl: 'http://backend.test',
+      dashboardToken: 'dash-secret',
+      jiraEmail: 'bot@acme.com',
+      jiraApiToken: 'jira-secret',
+      retryDelayMs: () => 0,
+      fetchImpl: async (url, init) => {
+        const call: Call = {
+          url: String(url),
+          method: init?.method,
+          body: init?.body ? JSON.parse(init.body as string) : undefined,
+        };
+        calls.push(call);
+        return script(call, calls.length - 1);
+      },
+      ...overrides,
+    };
+    return { handlers: createToolHandlers(config), calls };
+  }
+
+  it('create_workspace maps repo env: literal value inline, secret_from_env resolved and sealed after create', async () => {
+    process.env.ADMIN_TEST_DB_URL = 'postgres://svc:sealed-secret@h/db';
+    try {
+      const { handlers, calls } = envHarness((call) => {
+        if (call.method === 'POST') {
+          return jsonResponse(201, {
+            id: 'w9',
+            project_key: 'BRIG',
+            board_type: 'kanban',
+            enabled: false,
+            repositories: [{ id: 'repo-1', name: 'api' }],
+          });
+        }
+        return jsonResponse(200, { env_secret_keys: { workspace: [], repos: { 'repo-1': ['DATABASE_URL'] }, agents: {} } });
+      });
+      const res = await handlers.create_workspace({
+        name: 'ws',
+        jira_site_url: 'https://acme.atlassian.net',
+        board: '42',
+        expires_at: '2027-07-12T00:00:00.000Z',
+        repositories: [
+          { name: 'api', git_url: 'https://git/api.git', env: [
+            { key: 'PORT', value: '3100' },
+            { key: 'DATABASE_URL', secret_from_env: 'ADMIN_TEST_DB_URL' },
+          ] },
+        ],
+      });
+      expect(res.isError).toBeUndefined();
+      // POST carries the non-secret env inline...
+      const post = calls.find((c) => c.method === 'POST')!;
+      const repos = (post.body as { repositories: { env?: Record<string, string> }[] }).repositories;
+      expect(repos[0].env).toEqual({ PORT: '3100' });
+      // ...and the secret literal is NOT in the POST body at all.
+      expect(JSON.stringify(post.body)).not.toContain('sealed-secret');
+      // The secret goes to env-secrets keyed by repo id.
+      const put = calls.find((c) => c.url.endsWith('/env-secrets'))!;
+      expect(put.body).toEqual({ scope: { repository_id: 'repo-1' }, set: { DATABASE_URL: 'postgres://svc:sealed-secret@h/db' } });
+    } finally {
+      delete process.env.ADMIN_TEST_DB_URL;
+    }
+  });
+
+  it('create_workspace errors (nothing sealed) when a secret_from_env var is missing', async () => {
+    const { handlers, calls } = envHarness(() => jsonResponse(201, { id: 'w9', repositories: [] }));
+    const res = await handlers.create_workspace({
+      name: 'ws',
+      jira_site_url: 'https://acme.atlassian.net',
+      board: '42',
+      expires_at: '2027-07-12T00:00:00.000Z',
+      repositories: [{ name: 'api', git_url: 'https://git/api.git', env: [{ key: 'X', secret_from_env: 'DOES_NOT_EXIST_031' }] }],
+    });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('DOES_NOT_EXIST_031');
+    expect(calls.length).toBe(0); // failed before any HTTP call
+  });
+
+  it('set_env resolves a repository name→id and writes secret to env-secrets; literal never in the result', async () => {
+    process.env.ADMIN_TEST_TOKEN = 'top-secret-value';
+    try {
+      const { handlers, calls } = envHarness((call) => {
+        if (call.method === 'GET') {
+          return jsonResponse(200, { id: 'w1', repositories: [{ id: 'repo-1', name: 'api', env: {} }], env: {} });
+        }
+        return jsonResponse(200, { env_secret_keys: { workspace: [], repos: { 'repo-1': ['API_TOKEN'] }, agents: {} } });
+      });
+      const res = await handlers.set_env({
+        workspace_id: 'w1',
+        scope: { repository: 'api' },
+        set: [{ key: 'API_TOKEN', secret_from_env: 'ADMIN_TEST_TOKEN' }],
+      });
+      expect(res.isError).toBeUndefined();
+      const put = calls.find((c) => c.url.endsWith('/env-secrets'))!;
+      expect(put.body).toEqual({ scope: { repository_id: 'repo-1' }, set: { API_TOKEN: 'top-secret-value' } });
+      // The result the model sees carries only key names, never the value.
+      expect(res.content[0].text).not.toContain('top-secret-value');
+      expect(res.structuredContent).toMatchObject({ secret_keys: ['API_TOKEN'] });
+    } finally {
+      delete process.env.ADMIN_TEST_TOKEN;
+    }
+  });
+
+  it('set_env writes a non-secret workspace value via settings (read-modify-write)', async () => {
+    const { handlers, calls } = envHarness((call) => {
+      if (call.method === 'GET') return jsonResponse(200, { id: 'w1', repositories: [], env: { EXISTING: '1' } });
+      return jsonResponse(200, { id: 'w1', env: { EXISTING: '1', NODE_ENV: 'test' } });
+    });
+    const res = await handlers.set_env({ workspace_id: 'w1', scope: 'workspace', set: [{ key: 'NODE_ENV', value: 'test' }] });
+    expect(res.isError).toBeUndefined();
+    const put = calls.find((c) => c.method === 'PUT')!;
+    expect(put.url).toContain('/settings');
+    expect((put.body as { env: Record<string, string> }).env).toEqual({ EXISTING: '1', NODE_ENV: 'test' });
+  });
+
+  it('set_env rejects an unknown repository', async () => {
+    const { handlers } = envHarness(() => jsonResponse(200, { id: 'w1', repositories: [], env: {} }));
+    const res = await handlers.set_env({ workspace_id: 'w1', scope: { repository: 'ghost' }, set: [{ key: 'X', value: '1' }] });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('ghost');
+  });
+});

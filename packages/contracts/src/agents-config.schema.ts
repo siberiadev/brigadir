@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { slugifyAgentKey } from './agent-key';
+import { EnvMapSchema } from './env.schema';
 
 /**
  * agents.yaml configuration schema.
@@ -233,6 +234,10 @@ export const AgentBehaviorSchema = z
     // valid forever — stored rows are never rewritten. When both are present,
     // `repositories` wins (research D1).
     repository: z.string().min(1).optional(),
+    // Feature 031: non-secret per-agent env override — the HIGHEST operator
+    // layer (overrides workspace and repository env for this agent's runs).
+    // Secret agent overrides live in `env_secrets.agents[agentId]`.
+    env: EnvMapSchema.optional(),
   })
   .passthrough();
 

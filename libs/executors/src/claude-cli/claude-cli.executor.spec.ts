@@ -22,6 +22,7 @@ import { prepareAll, cleanupAll } from './worktree';
 import { spawnGroup } from './process-group';
 import { ClaudeCliExecutor } from './claude-cli.executor';
 import { DEFAULT_REPO_RUN_ALLOWED_TOOLS } from './claude-cli.config';
+import { buildChildEnv } from './env-allowlist';
 
 const prepareMock = prepareAll as unknown as ReturnType<typeof vi.fn>;
 const cleanupMock = cleanupAll as unknown as ReturnType<typeof vi.fn>;
@@ -1049,5 +1050,86 @@ describe('ClaudeCliExecutor ticket scoping (feature 020)', () => {
     expect(result.exitStatus).toBe('crashed'); // no terminal event driven — irrelevant here
     expect(prepareMock).not.toHaveBeenCalled();
     expect(scopingEvents(db)).toHaveLength(0);
+  });
+});
+
+describe('ClaudeCliExecutor operator env (feature 031)', () => {
+  let worktreeDir: string;
+
+  beforeEach(async () => {
+    worktreeDir = await mkdtemp(join(tmpdir(), 'brigadir-executor-env-'));
+    prepareMock.mockReset().mockResolvedValue(fakeWorkspace(worktreeDir));
+    cleanupMock.mockReset().mockResolvedValue(undefined);
+    spawnGroupMock.mockReset();
+  });
+
+  afterEach(async () => {
+    await rm(worktreeDir, { recursive: true, force: true });
+  });
+
+  const config = { ...executorConfig, repository: undefined };
+
+  function makeEnvExecutor(settings: Record<string, unknown>, behavior: Record<string, unknown> = {}) {
+    const db = fakeDb(config, behavior, settings);
+    const fakeJira = { getFeatureContext: vi.fn().mockResolvedValue({ linked: [] }) };
+    return new ClaudeCliExecutor(db as never, null, fakeJira as never);
+  }
+
+  async function spawnEnvFor(settings: Record<string, unknown>, behavior: Record<string, unknown> = {}) {
+    const executor = makeEnvExecutor(settings, behavior);
+    const group = makeGroup();
+    spawnGroupMock.mockReturnValue(group);
+    const runPromise = executor.run(makeCtx(), new AbortController().signal);
+    await waitForSpawn(spawnGroupMock);
+    group.child.emit('close', 0, null);
+    await runPromise;
+    return (spawnGroupMock.mock.calls[0][2] as { env: Record<string, string> }).env;
+  }
+
+  const repo = (env?: Record<string, string>) => ({
+    id: 'r-product',
+    name: 'product',
+    git_url: 'git@acme:product.git',
+    default_branch: 'main',
+    ...(env ? { env } : {}),
+  });
+
+  it('injects workspace + repo env, repo overriding workspace on a shared key (US1)', async () => {
+    const env = await spawnEnvFor({
+      env: { NODE_ENV: 'test', WS_ONLY: 'w' },
+      repositories: [repo({ PORT: '3100', NODE_ENV: 'e2e' })],
+    });
+    expect(env.WS_ONLY).toBe('w');
+    expect(env.PORT).toBe('3100');
+    expect(env.NODE_ENV).toBe('e2e'); // repo beats workspace
+  });
+
+  it('never lets a host var outside the allowlist leak, even with user env set (T085 extension)', async () => {
+    process.env.BRIGADIR_TEST_LEAK_031 = 'must-not-appear';
+    try {
+      const env = await spawnEnvFor({
+        env: { SAFE: 'ok' },
+        repositories: [repo()],
+      });
+      expect(env.SAFE).toBe('ok');
+      expect(env.BRIGADIR_TEST_LEAK_031).toBeUndefined();
+    } finally {
+      delete process.env.BRIGADIR_TEST_LEAK_031;
+    }
+  });
+
+  it('drops a reserved key present in stored config (defense-in-depth)', async () => {
+    const env = await spawnEnvFor({
+      // A hand-edited/legacy blob smuggling a reserved key must not override PATH.
+      env: { PATH: '/evil', GOOD: 'yes' },
+      repositories: [repo()],
+    });
+    expect(env.GOOD).toBe('yes');
+    expect(env.PATH).not.toBe('/evil');
+  });
+
+  it('zero-config workspace: child env is byte-identical to the pre-feature floor (SC-005)', async () => {
+    const env = await spawnEnvFor({ repositories: [repo()] });
+    expect(env).toEqual(buildChildEnv(process.env));
   });
 });

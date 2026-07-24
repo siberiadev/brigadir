@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { WorkspaceRepositorySchema } from './jira.types';
+import { EnvMapSchema } from './env.schema';
 import { TeamAgentSchema } from './report.schema';
 import { makePaginatedResponseSchema } from './pagination.schema';
 import { AgentInstructionsSourceSchema, TemplateSourceLevelSchema } from './role-template.schema';
@@ -89,6 +90,9 @@ export const WorkspaceSettingsRequestSchema = z
     scope_jql: z.string().min(1).optional(),
     branch_prefix: z.string().min(1).optional(),
     repositories: z.array(WorkspaceRepositorySchema).optional(),
+    // Feature 031: non-secret workspace-level env defaults. Absent ⇒ unchanged;
+    // an empty object clears them. Secret defaults go via PUT .../env-secrets.
+    env: EnvMapSchema.optional(),
     // Feature 006 (US5): the enabled/pause flag. Absent ⇒ unchanged; `false`
     // pauses the workspace in the multi-workspace reconcile loop (settings jsonb;
     // no DDL — mirrors WorkspaceSettings.enabled).
@@ -105,6 +109,48 @@ export const WorkspaceSettingsRequestSchema = z
   .strict();
 export type WorkspaceSettingsRequest = z.infer<typeof WorkspaceSettingsRequestSchema>;
 
+// --- Feature 031: env-secrets (write-only) ---
+
+/**
+ * The scope an env-secrets write targets. Workspace-wide default, one
+ * repository (by its stable id), or one agent (by id). Mirrors the three
+ * non-secret env homes.
+ */
+export const EnvSecretScopeSchema = z.union([
+  z.literal('workspace'),
+  z.object({ repository_id: z.string().uuid() }).strict(),
+  z.object({ agent_id: z.string().uuid() }).strict(),
+]);
+export type EnvSecretScope = z.infer<typeof EnvSecretScopeSchema>;
+
+/**
+ * PUT /api/workspaces/:id/env-secrets — write-only. `set` upserts secret values
+ * (validated like any env value), `delete` removes keys. Values are NEVER
+ * echoed back; the response returns only the updated key-name view.
+ */
+export const EnvSecretsWriteRequestSchema = z
+  .object({
+    scope: EnvSecretScopeSchema,
+    set: EnvMapSchema.optional(),
+    delete: z.array(z.string()).optional(),
+  })
+  .strict();
+export type EnvSecretsWriteRequest = z.infer<typeof EnvSecretsWriteRequestSchema>;
+
+/**
+ * Names-only view of the sealed env-secrets doc (never values). Per scope:
+ * workspace defaults, per-repo (keyed by repo id), per-agent (keyed by agent
+ * id). Drives masked rows, "N secret" summaries, and override badges.
+ */
+export const EnvSecretKeysSchema = z
+  .object({
+    workspace: z.array(z.string()),
+    repos: z.record(z.string(), z.array(z.string())),
+    agents: z.record(z.string(), z.array(z.string())),
+  })
+  .strict();
+export type EnvSecretKeys = z.infer<typeof EnvSecretKeysSchema>;
+
 // --- Workspace responses (credentials NEVER serialized) ---
 
 export const WorkspaceResponseSchema = z
@@ -118,6 +164,11 @@ export const WorkspaceResponseSchema = z
     expires_at: z.string().nullable(),
     credential_status: CredentialStatusSchema,
     repositories: z.array(WorkspaceRepositorySchema),
+    // Feature 031: non-secret workspace-level env defaults (values shown openly)
+    // + names-only view of ALL secret env across the three scopes. Secret VALUES
+    // are never part of any response (write-only).
+    env: EnvMapSchema,
+    env_secret_keys: EnvSecretKeysSchema,
     // Feature 008 (FR-014): the single additive, non-breaking extension. The
     // Settings tab's read-only blocks render these and its edit modals SEED from
     // them (killing the `feat`/`""` hard-coded-default footgun). All three are
@@ -241,6 +292,9 @@ export const AgentBehaviorRequestSchema = z
     required_checks: z.array(z.string()).optional(),
     use_callback_channel: z.boolean().optional(),
     status_ids: AgentStatusIdsSchema.optional(),
+    // Feature 031: non-secret per-agent env override. Secret agent overrides go
+    // via PUT .../env-secrets with scope { agent_id }.
+    env: EnvMapSchema.optional(),
   })
   .passthrough();
 

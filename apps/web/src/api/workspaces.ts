@@ -10,6 +10,7 @@ import type {
   WorkspaceSettingsRequest,
   TicketCountRequest,
   TicketCountResponse,
+  EnvSecretsWriteRequest,
 } from '@brigadir/contracts';
 import { apiClient, toQuery, type ApiClient } from './client';
 
@@ -34,6 +35,10 @@ export function workspacesApi(client: ApiClient = apiClient) {
       client.put<WorkspaceResponse>(`/api/workspaces/${id}/jira-connection`, body),
     updateSettings: (id: string, body: WorkspaceSettingsRequest) =>
       client.put<WorkspaceResponse>(`/api/workspaces/${id}/settings`, body),
+    // feature 031: write-only secret env (values never returned). Scope =
+    // workspace | { repository_id } | { agent_id }.
+    updateEnvSecrets: (id: string, body: EnvSecretsWriteRequest) =>
+      client.put<WorkspaceResponse>(`/api/workspaces/${id}/env-secrets`, body),
     // feature 011: start the orchestrator's workspace-setup run (202 {run_id};
     // 409 worker_agents_exist | no_orchestrator | setup_run_active).
     generateAgents: (id: string) =>
