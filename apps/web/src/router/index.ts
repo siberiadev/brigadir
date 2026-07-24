@@ -57,13 +57,50 @@ export const routes: RouteRecordRaw[] = [
       },
       {
         // Feature 008 (US3): the standalone settings page is retired — settings
-        // is now a nested tab child. Declared BEFORE `:catchAll` so the
-        // `/workspaces/:id/settings` deep-link resolves to this tab and is not
-        // swallowed by the unknown-tab redirect (guarded by a test — R1 risk).
+        // is a nested tab child. Feature 031: settings itself became a shell
+        // with a left sub-nav + its own nested children (General / Jira /
+        // Environment / Agents). The empty child keeps the `settings` route name
+        // (deep-links + the top tab strip) and redirects to General. Every child
+        // carries `meta.tab: 'settings'` so the top-level WorkspaceTabs highlights
+        // the Settings tab on any sub-route. Declared BEFORE `:catchAll`.
         path: 'settings',
-        name: 'settings',
         component: () => import('../views/WorkspaceSettings.vue'),
         props: true,
+        children: [
+          {
+            path: '',
+            name: 'settings',
+            redirect: (to) => ({ name: 'settings-general', params: { id: to.params.id } }),
+          },
+          {
+            path: 'general',
+            name: 'settings-general',
+            component: () => import('../views/workspace-settings/GeneralPanel.vue'),
+            props: true,
+            meta: { tab: 'settings' },
+          },
+          {
+            path: 'jira',
+            name: 'settings-jira',
+            component: () => import('../views/workspace-settings/JiraPanel.vue'),
+            props: true,
+            meta: { tab: 'settings' },
+          },
+          {
+            path: 'environment',
+            name: 'settings-environment',
+            component: () => import('../views/workspace-settings/EnvironmentPanel.vue'),
+            props: true,
+            meta: { tab: 'settings' },
+          },
+          {
+            path: 'agents',
+            name: 'settings-agents',
+            component: () => import('../views/workspace-settings/AgentsPanel.vue'),
+            props: true,
+            meta: { tab: 'settings' },
+          },
+        ],
       },
       {
         // Unknown tab → fall back to Runs, the default tab (реш. 2026-07-15;

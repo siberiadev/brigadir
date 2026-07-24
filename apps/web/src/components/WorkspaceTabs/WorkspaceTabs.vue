@@ -17,7 +17,17 @@ const props = defineProps<{
 const route = useRoute();
 const router = useRouter();
 
-const active = computed<string>(() => (route.name as string | undefined) ?? props.tabs[0]?.name ?? '');
+// The active tab is the route name, EXCEPT a route may pin itself to a parent
+// tab via `meta.tab` — feature 031: the settings sub-routes (settings-general,
+// settings-environment, …) all set `meta.tab: 'settings'` so the Settings tab
+// stays highlighted on any settings sub-page.
+const active = computed<string>(
+  () =>
+    (route.meta.tab as string | undefined) ??
+    (route.name as string | undefined) ??
+    props.tabs[0]?.name ??
+    '',
+);
 
 function onTabChange(name: TabPaneName): void {
   router.push({ name: String(name), params: { id: props.id } });

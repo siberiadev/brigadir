@@ -129,9 +129,11 @@ describe('WorkspaceTabs — unknown-tab fallback & settings precedence (US2)', (
   it('resolves /settings to the nested settings tab ahead of the catch-all (008/R1)', async () => {
     const { router } = await mountApp('/workspaces/ws-1/agents');
 
-    // Feature 008 retired the standalone page: the deep-link now resolves to the
-    // nested `settings` tab child, declared before `:catchAll` so it is not
-    // swallowed by the unknown-tab redirect.
+    // Feature 008 retired the standalone page; feature 031 made settings a shell
+    // whose empty child (name `settings`) redirects to General. `resolve` does
+    // NOT follow redirects — it returns the matched `settings` record, proving
+    // the deep-link resolves ahead of the `:catchAll` (only navigation follows
+    // the redirect on to settings-general).
     expect(router.resolve('/workspaces/ws-1/settings').name).toBe('settings');
   });
 });
@@ -213,13 +215,16 @@ describe('WorkspaceList — list stays focused on lifecycle actions (US3)', () =
     expect(router.currentRoute.value.path).toBe('/workspaces');
   });
 
-  it('clicking Settings navigates to the settings tab, not the agents tab (008)', async () => {
+  it('clicking Settings navigates to the settings section, not the agents tab (008)', async () => {
     const { wrapper, router } = await mountList();
 
     await wrapper.find('[data-test="open-settings-ws-1"]').trigger('click');
-    await settle(() => router.currentRoute.value.name === 'settings');
+    // Feature 031: settings became a shell whose empty route redirects to the
+    // General sub-panel; the child pins the Settings tab via meta.tab.
+    await settle(() => router.currentRoute.value.name === 'settings-general');
 
-    expect(router.currentRoute.value.name).toBe('settings');
+    expect(router.currentRoute.value.name).toBe('settings-general');
+    expect(router.currentRoute.value.meta.tab).toBe('settings');
     expect(router.currentRoute.value.name).not.toBe('agents');
   });
 });
