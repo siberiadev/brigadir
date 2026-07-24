@@ -129,6 +129,7 @@ defineExpose({ submit, saving, canSave, remove, isEdit });
       v-model="repoEnv"
       :secret-keys="secretKeys"
       :inherited-keys="workspaceEnvKeys ?? []"
+      :secrets-enabled="!!repoId"
       data-test="repo-form-env"
       @add-secret="addSecret"
       @remove-secret="removeSecret"

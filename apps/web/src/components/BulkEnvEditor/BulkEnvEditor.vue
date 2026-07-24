@@ -47,6 +47,7 @@ function apply() {
   <FormDialog
     :model-value="modelValue"
     :title="title ?? 'Add from .env'"
+    width="820px"
     @update:model-value="emit('update:modelValue', $event)"
   >
     <p class="hint">
