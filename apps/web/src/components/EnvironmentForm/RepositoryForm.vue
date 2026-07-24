@@ -3,6 +3,8 @@ import { computed, reactive, ref } from 'vue';
 import type { WorkspaceRepository, EnvSecretKeys } from '@brigadir/contracts';
 import { useUpdateSettings, useUpdateEnvSecrets } from '../../composables/useWorkspaces';
 import EnvVarsTable from '../EnvVarsTable/EnvVarsTable.vue';
+import BulkEnvEditor from '../BulkEnvEditor/BulkEnvEditor.vue';
+import type { BulkEnvResult } from '../BulkEnvEditor/bulk-env';
 
 /**
  * Single-repository editor (feature 031 settings restructure). Edits ONE repo
@@ -57,6 +59,21 @@ function removeSecret(key: string) {
     .then((res) => (secretKeys.value = res.env_secret_keys.repos[repoId] ?? []));
 }
 
+// --- bulk ".env" editor ---
+const showBulk = ref(false);
+function onBulkApply({ plainEnv, secretSet, secretDelete }: BulkEnvResult) {
+  repoEnv.value = plainEnv; // replace non-secret env (saved with the form)
+  const set = Object.keys(secretSet).length ? secretSet : undefined;
+  const del = secretDelete.length ? secretDelete : undefined;
+  // Secret changes persist immediately (write-only store); a new repo has no id
+  // and therefore no existing secrets to mask, so nothing to send.
+  if (repoId && (set || del)) {
+    void envSecrets
+      .mutateAsync({ scope: { repository_id: repoId }, set, delete: del })
+      .then((res) => (secretKeys.value = res.env_secret_keys.repos[repoId] ?? []));
+  }
+}
+
 /** The full repositories array with this repo replaced (by id) or appended. */
 function nextRepositories(): WorkspaceRepository[] {
   const env = Object.keys(repoEnv.value).length ? repoEnv.value : undefined;
@@ -104,7 +121,10 @@ defineExpose({ submit, saving, canSave, remove, isEdit });
       </el-form-item>
     </div>
 
-    <h4 class="sub">Environment</h4>
+    <div class="env-head">
+      <h4 class="sub">Environment</h4>
+      <el-button size="small" data-test="repo-bulk-env" @click="showBulk = true">Add from .env</el-button>
+    </div>
     <EnvVarsTable
       v-model="repoEnv"
       :secret-keys="secretKeys"
@@ -116,6 +136,13 @@ defineExpose({ submit, saving, canSave, remove, isEdit });
     <p v-if="!repoId" class="env-hint" data-test="repo-form-new-hint">
       Save the repository first to add secret variables.
     </p>
+
+    <BulkEnvEditor
+      v-model="showBulk"
+      :plain-env="repoEnv"
+      :secret-keys="secretKeys"
+      @apply="onBulkApply"
+    />
   </el-form>
 </template>
 
@@ -127,8 +154,14 @@ defineExpose({ submit, saving, canSave, remove, isEdit });
   display: flex;
   flex-direction: column;
 }
-.sub {
+.env-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   margin: 8px 0;
+}
+.sub {
+  margin: 0;
   font-size: 14px;
   font-weight: 600;
 }

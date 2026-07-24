@@ -18,6 +18,8 @@ import { useExecutors } from '../../composables/useExecutors';
 import { useTicketCount, useWorkspace, useUpdateEnvSecrets } from '../../composables/useWorkspaces';
 import { ApiError } from '../../api/client';
 import EnvVarsTable from '../EnvVarsTable/EnvVarsTable.vue';
+import BulkEnvEditor from '../BulkEnvEditor/BulkEnvEditor.vue';
+import type { BulkEnvResult } from '../BulkEnvEditor/bulk-env';
 import type { EnvSecretKeys } from '@brigadir/contracts';
 
 const props = defineProps<{
@@ -124,6 +126,21 @@ function removeAgentSecret(key: string) {
     .then((res) => {
       agentSecretKeys.value = res.env_secret_keys.agents[props.agent!.id] ?? [];
     });
+}
+
+// --- bulk ".env" editor ---
+const showBulkEnv = ref(false);
+function onBulkEnvApply({ plainEnv, secretSet, secretDelete }: BulkEnvResult) {
+  form.env = plainEnv; // replace non-secret override (saved with the form)
+  const set = Object.keys(secretSet).length ? secretSet : undefined;
+  const del = secretDelete.length ? secretDelete : undefined;
+  // A brand-new agent has no id yet, so it has no existing secrets to mask.
+  if (props.agent && (set || del)) {
+    const agentId = props.agent.id;
+    void envSecrets
+      .mutateAsync({ scope: { agent_id: agentId }, set, delete: del })
+      .then((res) => (agentSecretKeys.value = res.env_secret_keys.agents[agentId] ?? []));
+  }
 }
 
 // Default a fresh form to an ENABLED claude_cli profile (else the first enabled one).
@@ -509,9 +526,12 @@ defineExpose({ submit, saving });
       </el-form-item>
       <el-form-item label="Environment overrides">
         <div class="agent-env" data-test="agent-env-section">
-          <p class="agent-env-hint">
-            Override workspace and repository env for this agent only. Applies to new runs.
-          </p>
+          <div class="agent-env-head">
+            <p class="agent-env-hint">
+              Override workspace and repository env for this agent only. Applies to new runs.
+            </p>
+            <el-button size="small" data-test="agent-bulk-env" @click="showBulkEnv = true">Add from .env</el-button>
+          </div>
           <EnvVarsTable
             v-model="form.env"
             :secret-keys="agentSecretKeys"
@@ -523,6 +543,12 @@ defineExpose({ submit, saving });
           <p v-if="!isEdit" class="agent-env-hint" data-test="agent-env-new">
             Save the agent first to add secret overrides.
           </p>
+          <BulkEnvEditor
+            v-model="showBulkEnv"
+            :plain-env="form.env"
+            :secret-keys="agentSecretKeys"
+            @apply="onBulkEnvApply"
+          />
         </div>
       </el-form-item>
     </template>
@@ -558,6 +584,12 @@ defineExpose({ submit, saving });
 }
 .agent-env {
   width: 100%;
+}
+.agent-env-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
 }
 .agent-env-hint {
   font-size: 12px;
