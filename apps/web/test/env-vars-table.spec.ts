@@ -28,6 +28,25 @@ describe('EnvVarsTable', () => {
     expect(toggle.classes()).not.toContain('is-checked');
   });
 
+  it('keeps the secret switch live for a pending plain var (added after open, e.g. bulk Apply)', async () => {
+    // Opens with PORT already persisted; NEW_VAR arrives later (bulk Apply / add row).
+    const w = mountTable({ modelValue: { PORT: '3100' } });
+    await flush();
+    await w.setProps({ modelValue: { PORT: '3100', NEW_VAR: 'v' } });
+    await flush();
+
+    // Persisted var stays locked…
+    expect(w.find('[data-test="env-plain-secret-PORT"]').classes()).toContain('is-disabled');
+    // …the freshly-added one is toggleable.
+    const pending = w.find('[data-test="env-plain-secret-NEW_VAR"]');
+    expect(pending.classes()).not.toContain('is-disabled');
+
+    await pending.trigger('click');
+    // Flipping it emits add-secret and drops it from the plain set.
+    expect(w.emitted('add-secret')?.[0]).toEqual(['NEW_VAR', 'v']);
+    expect(w.emitted('update:modelValue')?.at(-1)?.[0]).toEqual({ PORT: '3100' });
+  });
+
   it('renders a saved secret row: masked, disabled value input + disabled ON switch', async () => {
     const w = mountTable({ secretKeys: ['DATABASE_URL'] });
     await flush();

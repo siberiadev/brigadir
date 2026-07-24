@@ -43,6 +43,14 @@ const draft = reactive({ key: '', value: '', secret: false });
 
 const plainRows = computed(() => Object.entries(props.modelValue));
 
+// Keys already persisted when this editor opened. Plain vars added since — via
+// the add row OR a bulk ".env" Apply — are still "pending" and can be flipped to
+// secret; persisted plain vars are locked (their secret-ness is fixed on save).
+const persistedPlainKeys = new Set(Object.keys(props.modelValue));
+function isPending(key: string): boolean {
+  return !persistedPlainKeys.has(key);
+}
+
 function keyError(key: string): string | null {
   if (!key) return null;
   if (!ENV_KEY_REGEX.test(key)) return 'Invalid name (use A–Z, 0–9, _ and not starting with a digit).';
@@ -66,6 +74,12 @@ function removePlain(key: string) {
   const next = { ...props.modelValue };
   delete next[key];
   emit('update:modelValue', next);
+}
+/** Flip a still-pending plain var into a secret (persisted via the parent). */
+function makeSecret(key: string, value: string, on: boolean) {
+  if (!on || !isPending(key)) return;
+  emit('add-secret', key, value);
+  removePlain(key);
 }
 function add() {
   if (!canAdd.value) return;
@@ -93,7 +107,14 @@ function add() {
           :data-test="`env-plain-value-${key}`"
           @update:model-value="(v: string) => updatePlainValue(key, v)"
         />
-        <el-switch :model-value="false" disabled size="small" class="toggle" :data-test="`env-plain-secret-${key}`" />
+        <el-switch
+          :model-value="false"
+          :disabled="!secretsEnabled || !isPending(key)"
+          size="small"
+          class="toggle"
+          :data-test="`env-plain-secret-${key}`"
+          @change="(on: boolean) => makeSecret(key, value, on)"
+        />
         <el-button
           link
           size="small"
