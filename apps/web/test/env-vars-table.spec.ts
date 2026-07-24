@@ -3,9 +3,10 @@ import { mountWithProviders, flush } from './mount';
 import EnvVarsTable from '../src/components/EnvVarsTable/EnvVarsTable.vue';
 
 /**
- * Feature 031 (US3): the shared env editor. Non-secret rows edit in place;
- * secret rows are masked with no reveal; reserved/malformed keys are rejected
- * inline using the same rules as the server.
+ * Feature 031: the shared env editor. Uniform rows [key][value][secret][remove];
+ * saved vars have a disabled secret switch (a saved secret shows its value
+ * masked), and only the add row can choose/mask secret-ness. Reserved/malformed
+ * keys are rejected inline with the same rules as the server.
  */
 function mountTable(props: Record<string, unknown> = {}) {
   return mountWithProviders(EnvVarsTable, {
@@ -14,18 +15,28 @@ function mountTable(props: Record<string, unknown> = {}) {
 }
 
 describe('EnvVarsTable', () => {
-  it('renders non-secret rows with their values and secret rows masked', async () => {
-    const w = mountTable({ modelValue: { PORT: '3100' }, secretKeys: ['DATABASE_URL'] });
+  it('renders a non-secret row (editable value, disabled OFF switch)', async () => {
+    const w = mountTable({ modelValue: { PORT: '3100' } });
     await flush();
-    expect(w.find('[data-test="env-plain-PORT"]').exists()).toBe(true);
     const val = w.find('input[data-test="env-plain-value-PORT"]').element as HTMLInputElement;
     expect(val.value).toBe('3100');
-    // Secret row shows the name + a masked placeholder, never a value/input.
-    const secret = w.find('[data-test="env-secret-DATABASE_URL"]');
-    expect(secret.exists()).toBe(true);
-    expect(secret.find('input').exists()).toBe(false);
-    expect(secret.text()).toContain('••••');
-    expect(w.find('[data-test="env-secret-badge"]').exists()).toBe(true);
+    expect(val.disabled).toBe(false);
+    // The per-row secret switch exists but is disabled (secret-ness is fixed once saved).
+    const toggle = w.find('[data-test="env-plain-secret-PORT"]');
+    expect(toggle.exists()).toBe(true);
+    expect(toggle.classes()).toContain('is-disabled');
+    expect(toggle.classes()).not.toContain('is-checked');
+  });
+
+  it('renders a saved secret row: masked, disabled value input + disabled ON switch', async () => {
+    const w = mountTable({ secretKeys: ['DATABASE_URL'] });
+    await flush();
+    const val = w.find('input[data-test="env-secret-value-DATABASE_URL"]').element as HTMLInputElement;
+    expect(val.value).toBe('••••••••');
+    expect(val.disabled).toBe(true);
+    const toggle = w.find('[data-test="env-secret-toggle-DATABASE_URL"]');
+    expect(toggle.classes()).toContain('is-disabled');
+    expect(toggle.classes()).toContain('is-checked');
   });
 
   it('rejects a reserved key inline and disables Add', async () => {
@@ -52,38 +63,27 @@ describe('EnvVarsTable', () => {
     await w.find('input[data-test="env-add-value"]').setValue('test');
     await flush();
     await w.find('[data-test="env-add"]').trigger('click');
-    const emitted = w.emitted('update:modelValue');
-    expect(emitted?.[0]?.[0]).toEqual({ NODE_ENV: 'test' });
+    expect(w.emitted('update:modelValue')?.[0]?.[0]).toEqual({ NODE_ENV: 'test' });
   });
 
-  it('emits add-secret (not modelValue) when the secret switch is on', async () => {
+  it('masks the value input and emits add-secret when the add-row switch is on', async () => {
     const w = mountTable();
     await flush();
     await w.find('input[data-test="env-add-key"]').setValue('API_TOKEN');
     await w.find('input[data-test="env-add-value"]').setValue('tok');
     await w.find('[data-test="env-add-secret-flag"]').trigger('click'); // toggle the el-switch
     await flush();
+    // The value input becomes a password field once secret is on.
+    expect((w.find('input[data-test="env-add-value"]').element as HTMLInputElement).type).toBe('password');
     await w.find('[data-test="env-add"]').trigger('click');
     expect(w.emitted('add-secret')?.[0]).toEqual(['API_TOKEN', 'tok']);
     expect(w.emitted('update:modelValue')).toBeUndefined();
   });
 
-  it('"Make secret" promotes a plaintext row: emits add-secret and drops it from the model', async () => {
-    const w = mountTable({ modelValue: { PORT: '3100', KEEP: 'x' } });
-    await flush();
-    await w.find('[data-test="env-plain-make-secret-PORT"]').trigger('click');
-    // The parent seals it...
-    expect(w.emitted('add-secret')?.[0]).toEqual(['PORT', '3100']);
-    // ...and the plaintext model no longer carries it.
-    const last = w.emitted('update:modelValue')?.at(-1)?.[0];
-    expect(last).toEqual({ KEEP: 'x' });
-  });
-
-  it('hides the secret switch and "Make secret" when secrets are not enabled yet', async () => {
+  it('hides the add-row secret switch when secrets are not enabled yet', async () => {
     const w = mountTable({ modelValue: { PORT: '3100' }, secretsEnabled: false });
     await flush();
     expect(w.find('[data-test="env-add-secret-flag"]').exists()).toBe(false);
-    expect(w.find('[data-test="env-plain-make-secret-PORT"]').exists()).toBe(false);
   });
 
   it('marks rows that override a lower layer', async () => {
