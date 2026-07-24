@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
+import type { WorkspaceRepository } from '@brigadir/contracts';
 import { useWorkspace } from '../../composables/useWorkspaces';
-import EnvironmentForm from '../../components/EnvironmentForm/EnvironmentForm.vue';
+import WorkspaceEnvForm from '../../components/EnvironmentForm/WorkspaceEnvForm.vue';
+import RepositoryForm from '../../components/EnvironmentForm/RepositoryForm.vue';
 import FormDialog from '../../components/FormDialog.vue';
 
 /**
  * Workspace Settings → Environment panel (feature 031). Read-only view of the
- * workspace env defaults, the repository list, and per-repo env (values for
- * non-secret vars, "secret" tags for sealed ones — values are never shown). An
- * Edit modal (EnvironmentForm) manages everything; secret rows persist
- * immediately, non-secret rows + repos on Save.
+ * workspace env defaults + the repository list with per-repo env. The workspace
+ * defaults have ONE Edit modal (WorkspaceEnvForm). Repositories are managed one
+ * at a time: an "Add repository" button and a per-card Edit button, each opening
+ * RepositoryForm for a single repo (its fields + its env). Values for secret
+ * vars are never shown — only a "secret" tag.
  */
 const props = defineProps<{ id: string }>();
 
@@ -19,6 +22,8 @@ const workspace = computed(() => workspaceQuery.data.value);
 
 const wsEnvEntries = computed(() => Object.entries(workspace.value?.env ?? {}));
 const wsSecretKeys = computed(() => workspace.value?.env_secret_keys.workspace ?? []);
+const workspaceEnvKeys = computed(() => Object.keys(workspace.value?.env ?? {}));
+const repositories = computed(() => workspace.value?.repositories ?? []);
 function repoEnvEntries(repo: { env?: Record<string, string> }) {
   return Object.entries(repo.env ?? {});
 }
@@ -27,22 +32,42 @@ function repoSecretKeys(repo: { id?: string }): string[] {
   return id ? (workspace.value?.env_secret_keys.repos[id] ?? []) : [];
 }
 
-const showEdit = ref(false);
-const formRef = ref<InstanceType<typeof EnvironmentForm>>();
-function onSaved() {
-  showEdit.value = false;
-  ElMessage.success('Environment saved — effective on the next run.');
+// --- workspace defaults modal ---
+const showWsEdit = ref(false);
+const wsFormRef = ref<InstanceType<typeof WorkspaceEnvForm>>();
+function onWsSaved() {
+  showWsEdit.value = false;
+  ElMessage.success('Environment defaults saved — effective on the next run.');
 }
+
+// --- per-repository modal (edit one, or add a new one) ---
+const showRepoEdit = ref(false);
+const editingRepo = ref<WorkspaceRepository | null>(null);
+const repoFormRef = ref<InstanceType<typeof RepositoryForm>>();
+function openRepo(repo: WorkspaceRepository | null) {
+  editingRepo.value = repo;
+  showRepoEdit.value = true;
+}
+function onRepoSaved() {
+  showRepoEdit.value = false;
+  ElMessage.success('Repository saved — effective on the next run.');
+}
+function onRepoRemoved() {
+  showRepoEdit.value = false;
+  ElMessage.success('Repository removed.');
+}
+const repoDialogTitle = computed(() => (editingRepo.value ? 'Edit repository' : 'Add repository'));
 </script>
 
 <template>
   <div v-if="workspace" class="panel" data-test="settings-environment-panel">
-    <div class="block-head">
-      <h3>Environment</h3>
-      <el-button type="primary" link data-test="edit-environment" @click="showEdit = true">Edit</el-button>
-    </div>
+    <h3 class="panel-title">Environment</h3>
 
-    <h4 class="sub">Workspace defaults</h4>
+    <!-- Workspace-level defaults: one Edit modal -->
+    <div class="block-head">
+      <h4 class="sub">Workspace defaults</h4>
+      <el-button type="primary" link data-test="edit-environment" @click="showWsEdit = true">Edit</el-button>
+    </div>
     <div v-if="wsEnvEntries.length || wsSecretKeys.length" class="env-list" data-test="ws-env-readonly">
       <div v-for="[k, v] in wsEnvEntries" :key="`p-${k}`" class="env-line">
         <span class="env-key">{{ k }}</span><span class="env-val">{{ v }}</span>
@@ -55,16 +80,20 @@ function onSaved() {
     </div>
     <p v-else class="empty" data-test="ws-env-empty">No workspace-level variables.</p>
 
-    <h4 class="sub">Repositories (first = default)</h4>
-    <p v-if="!workspace.repositories.length" class="empty" data-test="config-repos-empty">
-      No repositories configured
-    </p>
+    <!-- Repositories: add + per-card edit -->
+    <div class="block-head repos-head">
+      <h4 class="sub">Repositories (first = default)</h4>
+      <el-button type="primary" data-test="add-repo" @click="openRepo(null)">Add repository</el-button>
+    </div>
+    <p v-if="!repositories.length" class="empty" data-test="config-repos-empty">No repositories configured</p>
     <div v-else class="repo-list">
-      <div v-for="(repo, i) in workspace.repositories" :key="i" class="repo-card" :data-test="`config-repo-${i}`">
+      <div v-for="(repo, i) in repositories" :key="repo.id ?? i" class="repo-card" :data-test="`config-repo-${i}`">
         <div class="repo-head">
           <span class="repo-name">{{ repo.name }}</span>
           <span class="repo-url">{{ repo.git_url }}</span>
           <el-tag v-if="i === 0" size="small" data-test="config-repo-default-tag">Default</el-tag>
+          <span class="spacer" />
+          <el-button type="primary" link :data-test="`edit-repo-${i}`" @click="openRepo(repo)">Edit</el-button>
         </div>
         <div
           v-if="repoEnvEntries(repo).length || repoSecretKeys(repo).length"
@@ -84,20 +113,56 @@ function onSaved() {
       </div>
     </div>
 
-    <FormDialog v-model="showEdit" title="Edit environment">
-      <EnvironmentForm
-        v-if="showEdit"
-        ref="formRef"
+    <!-- Edit: workspace defaults -->
+    <FormDialog v-model="showWsEdit" title="Edit environment defaults">
+      <WorkspaceEnvForm
+        v-if="showWsEdit"
+        ref="wsFormRef"
         :workspace-id="id"
-        :repositories="workspace.repositories"
         :env="workspace.env"
         :env-secret-keys="workspace.env_secret_keys"
-        @saved="onSaved"
+        @saved="onWsSaved"
       />
       <template #footer>
-        <el-button data-test="environment-cancel" @click="showEdit = false">Cancel</el-button>
-        <el-button type="primary" data-test="save-environment" :loading="formRef?.saving" @click="formRef?.submit()">
-          Save environment
+        <el-button data-test="environment-cancel" @click="showWsEdit = false">Cancel</el-button>
+        <el-button type="primary" data-test="save-environment" :loading="wsFormRef?.saving" @click="wsFormRef?.submit()">
+          Save defaults
+        </el-button>
+      </template>
+    </FormDialog>
+
+    <!-- Edit / add: one repository -->
+    <FormDialog v-model="showRepoEdit" :title="repoDialogTitle">
+      <RepositoryForm
+        v-if="showRepoEdit"
+        ref="repoFormRef"
+        :workspace-id="id"
+        :repositories="repositories"
+        :repo="editingRepo"
+        :env-secret-keys="workspace.env_secret_keys"
+        :workspace-env-keys="workspaceEnvKeys"
+        @saved="onRepoSaved"
+        @removed="onRepoRemoved"
+      />
+      <template #footer>
+        <el-button data-test="repo-cancel" @click="showRepoEdit = false">Cancel</el-button>
+        <el-button
+          v-if="repoFormRef?.isEdit"
+          type="danger"
+          plain
+          data-test="repo-remove"
+          @click="repoFormRef?.remove()"
+        >
+          Remove
+        </el-button>
+        <el-button
+          type="primary"
+          data-test="repo-save"
+          :loading="repoFormRef?.saving"
+          :disabled="!repoFormRef?.canSave"
+          @click="repoFormRef?.submit()"
+        >
+          Save repository
         </el-button>
       </template>
     </FormDialog>
@@ -106,19 +171,21 @@ function onSaved() {
 </template>
 
 <style scoped lang="scss">
+.panel-title {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+}
 .block-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
 }
-.block-head h3 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
+.repos-head {
+  margin-top: 20px;
 }
 .sub {
-  margin: 20px 0 8px;
+  margin: 0;
   font-size: 14px;
   font-weight: 600;
 }
@@ -126,6 +193,7 @@ function onSaved() {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  margin-top: 8px;
 }
 .env-line {
   display: flex;
@@ -153,6 +221,7 @@ function onSaved() {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  margin-top: 10px;
 }
 .repo-card {
   border: 1px solid var(--el-border-color-lighter);
@@ -170,6 +239,9 @@ function onSaved() {
 .repo-url {
   color: var(--el-text-color-secondary);
   font-size: 12px;
+}
+.spacer {
+  flex: 1;
 }
 .repo-env {
   margin-top: 8px;
