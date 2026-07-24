@@ -15,36 +15,76 @@ function mountTable(props: Record<string, unknown> = {}) {
 }
 
 describe('EnvVarsTable', () => {
-  it('renders a non-secret row (editable value, disabled OFF switch)', async () => {
+  it('renders a non-secret row (editable value, enabled OFF switch)', async () => {
     const w = mountTable({ modelValue: { PORT: '3100' } });
     await flush();
     const val = w.find('input[data-test="env-plain-value-PORT"]').element as HTMLInputElement;
     expect(val.value).toBe('3100');
     expect(val.disabled).toBe(false);
-    // The per-row secret switch exists but is disabled (secret-ness is fixed once saved).
+    // The per-row secret switch is live: a plain var can be promoted to secret.
     const toggle = w.find('[data-test="env-plain-secret-PORT"]');
     expect(toggle.exists()).toBe(true);
-    expect(toggle.classes()).toContain('is-disabled');
+    expect(toggle.classes()).not.toContain('is-disabled');
     expect(toggle.classes()).not.toContain('is-checked');
   });
 
-  it('keeps the secret switch live for a pending plain var (added after open, e.g. bulk Apply)', async () => {
-    // Opens with PORT already persisted; NEW_VAR arrives later (bulk Apply / add row).
-    const w = mountTable({ modelValue: { PORT: '3100' } });
+  it('promotes a saved plain var to secret on toggle — deferred, no eager write', async () => {
+    const w = mountTable({ modelValue: { API_KEY: 'plainval' } });
     await flush();
-    await w.setProps({ modelValue: { PORT: '3100', NEW_VAR: 'v' } });
+    const toggle = w.find('[data-test="env-plain-secret-API_KEY"]');
+    await toggle.trigger('click');
     await flush();
 
-    // Persisted var stays locked…
+    // Deferred: nothing sealed now, the key stays in modelValue; only the
+    // promote model changes (the parent seals it on Save).
+    expect(w.emitted('add-secret')).toBeUndefined();
+    expect(w.emitted('update:promoteKeys')?.at(-1)?.[0]).toEqual(['API_KEY']);
+
+    // The value masks + locks, and the switch is ON but still enabled (undo-able).
+    const val = w.find('input[data-test="env-plain-value-API_KEY"]').element as HTMLInputElement;
+    expect(val.value).toBe('••••••••');
+    expect(val.disabled).toBe(true);
+    expect(toggle.classes()).toContain('is-checked');
+    expect(toggle.classes()).not.toContain('is-disabled');
+
+    // Toggling back off clears the promotion and unmasks.
+    await toggle.trigger('click');
+    await flush();
+    expect(w.emitted('update:promoteKeys')?.at(-1)?.[0]).toEqual([]);
+    expect((w.find('input[data-test="env-plain-value-API_KEY"]').element as HTMLInputElement).value).toBe('plainval');
+  });
+
+  it('renders a promoted plain row distinct from a saved secret row', async () => {
+    const w = mountTable({ modelValue: { X: 'v' }, secretKeys: ['S'] });
+    await flush();
+    await w.find('[data-test="env-plain-secret-X"]').trigger('click');
+    await flush();
+    // Promoted plain: checked + ENABLED (can flip back before save).
+    const promoted = w.find('[data-test="env-plain-secret-X"]');
+    expect(promoted.classes()).toContain('is-checked');
+    expect(promoted.classes()).not.toContain('is-disabled');
+    // Saved secret: checked + DISABLED (write-only; remove via trash).
+    const saved = w.find('[data-test="env-secret-toggle-S"]');
+    expect(saved.classes()).toContain('is-checked');
+    expect(saved.classes()).toContain('is-disabled');
+  });
+
+  it('drops a promoted key from promoteKeys when it leaves the model (trash/bulk)', async () => {
+    const w = mountTable({ modelValue: { API_KEY: 'v' } });
+    await flush();
+    await w.find('[data-test="env-plain-secret-API_KEY"]').trigger('click');
+    await flush();
+    expect(w.emitted('update:promoteKeys')?.at(-1)?.[0]).toEqual(['API_KEY']);
+    // Simulate a trash-remove / bulk-Apply replacing the whole map.
+    await w.setProps({ modelValue: {} });
+    await flush();
+    expect(w.emitted('update:promoteKeys')?.at(-1)?.[0]).toEqual([]);
+  });
+
+  it('disables the per-row secret switch when secrets are not enabled', async () => {
+    const w = mountTable({ modelValue: { PORT: '3100' }, secretsEnabled: false });
+    await flush();
     expect(w.find('[data-test="env-plain-secret-PORT"]').classes()).toContain('is-disabled');
-    // …the freshly-added one is toggleable.
-    const pending = w.find('[data-test="env-plain-secret-NEW_VAR"]');
-    expect(pending.classes()).not.toContain('is-disabled');
-
-    await pending.trigger('click');
-    // Flipping it emits add-secret and drops it from the plain set.
-    expect(w.emitted('add-secret')?.[0]).toEqual(['NEW_VAR', 'v']);
-    expect(w.emitted('update:modelValue')?.at(-1)?.[0]).toEqual({ PORT: '3100' });
   });
 
   it('renders a saved secret row: masked, disabled value input + disabled ON switch', async () => {

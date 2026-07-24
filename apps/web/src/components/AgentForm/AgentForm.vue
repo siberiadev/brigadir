@@ -111,6 +111,14 @@ watch(
   { immediate: true },
 );
 const envSecrets = useUpdateEnvSecrets(props.workspaceId);
+// Plain keys the user flipped to secret in the table — sealed on Save (submit).
+const promoteKeys = ref<string[]>([]);
+/** Per-agent non-secret env, EXCLUDING keys promoted to secret on this save. */
+function behaviorEnv(): Record<string, string> {
+  const e = { ...form.env };
+  for (const k of promoteKeys.value) delete e[k];
+  return e;
+}
 function addAgentSecret(key: string, value: string) {
   if (!props.agent) return; // create first — no agent id yet
   void envSecrets
@@ -242,8 +250,9 @@ function buildRequest(): AgentWriteRequest {
       allowed_tools: form.allowed_tools,
       required_checks: form.required_checks,
       use_callback_channel: form.use_callback_channel,
-      // Feature 031: per-agent non-secret env override.
-      env: form.env,
+      // Feature 031: per-agent non-secret env override (promoted keys are
+      // excluded here and sealed as secrets right after this write — submit()).
+      env: behaviorEnv(),
       // NO model key: the executor profile's model is the single source of
       // truth; a legacy behavior.model on old rows is ignored by the runtime.
     },
@@ -261,6 +270,15 @@ async function submit() {
     const res = props.agent
       ? await update.mutateAsync({ id: props.agent.id, body })
       : await create.mutateAsync(body);
+    // Seal promoted plain vars right after the agent write dropped them from
+    // plaintext (edit only — a new agent has no id yet, so promoteKeys is empty).
+    // A failure here throws into the catch below and skips `saved`, keeping the
+    // modal open; form.env still holds the values, so retry is safe.
+    if (promoteKeys.value.length && props.agent) {
+      const set = Object.fromEntries(promoteKeys.value.map((k) => [k, form.env[k]]));
+      const sres = await envSecrets.mutateAsync({ scope: { agent_id: props.agent.id }, set });
+      agentSecretKeys.value = sres.env_secret_keys.agents[props.agent.id] ?? [];
+    }
     emit('saved', res.warnings ?? []);
   } catch (err) {
     if (err instanceof ApiError && err.issues.length) {
@@ -534,6 +552,7 @@ defineExpose({ submit, saving });
           </div>
           <EnvVarsTable
             v-model="form.env"
+            v-model:promote-keys="promoteKeys"
             :secret-keys="agentSecretKeys"
             :inherited-keys="inheritedEnvKeys"
             :secrets-enabled="isEdit"

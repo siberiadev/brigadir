@@ -39,6 +39,9 @@ const form = reactive({
 const repoEnv = ref<Record<string, string>>({ ...(props.repo?.env ?? {}) });
 const repoId = props.repo?.id;
 const secretKeys = ref<string[]>(repoId ? (props.envSecretKeys?.repos[repoId] ?? []) : []);
+// Plain keys the user flipped to secret in the table — sealed on Save (below).
+const promoteKeys = ref<string[]>([]);
+const envError = ref('');
 
 const updateSettings = useUpdateSettings(props.workspaceId);
 const envSecrets = useUpdateEnvSecrets(props.workspaceId);
@@ -74,9 +77,16 @@ function onBulkApply({ plainEnv, secretSet, secretDelete }: BulkEnvResult) {
   }
 }
 
+/** Plaintext env for this repo, EXCLUDING keys promoted to secret on this save. */
+function plaintextEnv(): Record<string, string> | undefined {
+  const src = { ...repoEnv.value };
+  for (const k of promoteKeys.value) delete src[k];
+  return Object.keys(src).length ? src : undefined;
+}
+
 /** The full repositories array with this repo replaced (by id) or appended. */
 function nextRepositories(): WorkspaceRepository[] {
-  const env = Object.keys(repoEnv.value).length ? repoEnv.value : undefined;
+  const env = plaintextEnv();
   const edited: WorkspaceRepository = {
     ...(props.repo ?? {}),
     name: form.name,
@@ -92,7 +102,21 @@ function nextRepositories(): WorkspaceRepository[] {
 
 async function submit() {
   if (!canSave.value) return;
+  envError.value = '';
+  // Settings PUT first (drops promoted keys from plaintext), then seal them —
+  // the only order the backend's "one home per key" guards accept. repoEnv is
+  // never mutated here, so a failed seal is retry-safe.
   await updateSettings.mutateAsync({ repositories: nextRepositories() });
+  if (promoteKeys.value.length && repoId) {
+    try {
+      const set = Object.fromEntries(promoteKeys.value.map((k) => [k, repoEnv.value[k]]));
+      const res = await envSecrets.mutateAsync({ scope: { repository_id: repoId }, set });
+      secretKeys.value = res.env_secret_keys.repos[repoId] ?? [];
+    } catch {
+      envError.value = 'Repository saved, but sealing secrets failed — retry.';
+      return; // keep the modal open; retry re-runs both calls safely
+    }
+  }
   emit('saved');
 }
 
@@ -121,29 +145,32 @@ defineExpose({ submit, saving, canSave, remove, isEdit });
       </el-form-item>
     </div>
 
-    <div class="env-head">
-      <h4 class="sub">Environment</h4>
-      <el-button size="small" data-test="repo-bulk-env" @click="showBulk = true">Add from .env</el-button>
-    </div>
-    <EnvVarsTable
-      v-model="repoEnv"
-      :secret-keys="secretKeys"
-      :inherited-keys="workspaceEnvKeys ?? []"
-      :secrets-enabled="!!repoId"
-      data-test="repo-form-env"
-      @add-secret="addSecret"
-      @remove-secret="removeSecret"
-    />
-    <p v-if="!repoId" class="env-hint" data-test="repo-form-new-hint">
-      Save the repository first to add secret variables.
-    </p>
+    <!-- Env is edit-only: a brand-new repo has no id yet, so secrets can't be
+         sealed. Create the repo first, then manage env via its Edit modal. -->
+    <template v-if="isEdit">
+      <div class="env-head">
+        <h4 class="sub">Environment</h4>
+        <el-button size="small" data-test="repo-bulk-env" @click="showBulk = true">Add from .env</el-button>
+      </div>
+      <EnvVarsTable
+        v-model="repoEnv"
+        v-model:promote-keys="promoteKeys"
+        :secret-keys="secretKeys"
+        :inherited-keys="workspaceEnvKeys ?? []"
+        :secrets-enabled="!!repoId"
+        data-test="repo-form-env"
+        @add-secret="addSecret"
+        @remove-secret="removeSecret"
+      />
+      <p v-if="envError" class="err" data-test="repo-env-error">{{ envError }}</p>
 
-    <BulkEnvEditor
-      v-model="showBulk"
-      :plain-env="repoEnv"
-      :secret-keys="secretKeys"
-      @apply="onBulkApply"
-    />
+      <BulkEnvEditor
+        v-model="showBulk"
+        :plain-env="repoEnv"
+        :secret-keys="secretKeys"
+        @apply="onBulkApply"
+      />
+    </template>
   </el-form>
 </template>
 
@@ -166,9 +193,9 @@ defineExpose({ submit, saving, canSave, remove, isEdit });
   font-size: 14px;
   font-weight: 600;
 }
-.env-hint {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  margin: 6px 0 0;
+.err {
+  color: var(--el-color-danger);
+  font-size: 13px;
+  margin: 8px 0 0;
 }
 </style>

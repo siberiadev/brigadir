@@ -93,6 +93,26 @@ describe('Settings panels — read-only blocks', () => {
     expect(wrapper.find('[data-test="config-repo-default-tag"]').exists()).toBe(true);
   });
 
+  it('Environment panel read-only list shows key | value | type with masked secrets, no tag', async () => {
+    const ws = {
+      ...sampleWorkspace,
+      env: { LOG_LEVEL: 'info' },
+      env_secret_keys: { workspace: ['API_TOKEN'], repos: {}, agents: {} },
+    };
+    const wrapper = await mountPanel(EnvironmentPanel, ws as never);
+    const list = wrapper.find('[data-test="ws-env-readonly"]');
+    expect(list.exists()).toBe(true);
+    const text = list.text();
+    expect(text).toContain('LOG_LEVEL');
+    expect(text).toContain('info');
+    expect(text).toContain('plain');
+    // Secret: masked value + a "secret" type label, and NO warning el-tag.
+    expect(text).toContain('API_TOKEN');
+    expect(text).toContain('••••••••');
+    expect(text).toContain('secret');
+    expect(list.find('.el-tag').exists()).toBe(false);
+  });
+
   it('Environment panel degrades an empty repo list to a placeholder (no phantom tag)', async () => {
     const wrapper = await mountPanel(EnvironmentPanel, nullableWorkspace);
     expect(wrapper.find('[data-test="config-repos-empty"]').text()).toContain('No repositories configured');
@@ -193,12 +213,15 @@ describe('Settings panels — Edit modals', () => {
     expect(bodyQ('repo-form-new-hint')).toBeNull(); // existing repo (has id) → secrets allowed
   });
 
-  it('Environment panel: Add repository opens an empty create form (secrets gated until first save)', async () => {
+  it('Environment panel: Add repository opens an empty create form with NO env editor', async () => {
     const wrapper = await mountPanel(EnvironmentPanel);
     await openModal(wrapper, 'add-repo');
     expect((bodyQ('repo-form-name') as HTMLInputElement).value).toBe('');
-    // No id yet → secret vars are gated with a hint, and no Remove button.
-    expect(bodyQ('repo-form-new-hint')).not.toBeNull();
+    // Env is edit-only now — creation collects only name/url/branch; no env
+    // table, no bulk button, no "save first" hint.
+    expect(bodyQ('repo-form-env')).toBeNull();
+    expect(bodyQ('repo-bulk-env')).toBeNull();
+    expect(bodyQ('repo-form-new-hint')).toBeNull();
     expect(bodyQ('repo-remove')).toBeNull();
   });
 
@@ -257,6 +280,113 @@ describe('Settings panels — Edit modals', () => {
     expect((bodyQ('env-plain-value-PORT') as HTMLInputElement).value).toBe('4000');
     // The repo modal stays open (only the nested bulk dialog dismissed).
     expect(bodyQ('repo-form-name')).not.toBeNull();
+  });
+
+  it('Environment panel: promoting a saved repo plain var seals it AFTER the settings PATCH', async () => {
+    const ws = {
+      ...sampleWorkspace,
+      repositories: [
+        { id: 'repo-api-1', name: 'api', git_url: 'git@github.com:acme/api.git', default_branch: 'main', env: { PORT: '3100', API_KEY: 'plainval' } },
+      ],
+      env_secret_keys: { workspace: [], repos: { 'repo-api-1': [] }, agents: {} },
+    };
+    const calls: string[] = [];
+    let settingsBody: { repositories?: { env?: Record<string, string> }[] } | undefined;
+    let secretBody: { scope?: unknown; set?: Record<string, string> } | undefined;
+    server.use(
+      http.put('/api/workspaces/:id/settings', async ({ request }) => {
+        calls.push('settings');
+        settingsBody = (await request.json()) as typeof settingsBody;
+        return HttpResponse.json(ws);
+      }),
+      http.put('/api/workspaces/:id/env-secrets', async ({ request }) => {
+        calls.push('secrets');
+        secretBody = (await request.json()) as typeof secretBody;
+        return HttpResponse.json({ ...ws, env_secret_keys: { workspace: [], repos: { 'repo-api-1': ['API_KEY'] }, agents: {} } });
+      }),
+    );
+
+    const wrapper = await mountPanel(EnvironmentPanel, ws as never);
+    await openModal(wrapper, 'edit-repo-0');
+    await clickBody('env-plain-secret-API_KEY'); // promote (deferred)
+    await clickBody('repo-save');
+    await flush();
+    await flush();
+
+    // Ordering: plaintext drop FIRST, then the seal (the only order the guards allow).
+    expect(calls).toEqual(['settings', 'secrets']);
+    // API_KEY is gone from the plaintext PATCH; PORT stays.
+    expect(settingsBody?.repositories?.[0].env).toEqual({ PORT: '3100' });
+    // ...and it is sealed with its value under the repo scope.
+    expect(secretBody?.scope).toEqual({ repository_id: 'repo-api-1' });
+    expect(secretBody?.set).toEqual({ API_KEY: 'plainval' });
+    expect(bodyQ('repo-form-name')).toBeNull(); // modal closed on success
+  });
+
+  it('Environment panel: promoting a workspace default seals it AFTER the settings PATCH', async () => {
+    const ws = {
+      ...sampleWorkspace,
+      env: { LOG_LEVEL: 'info', DB_PASS: 'plainpass' },
+      env_secret_keys: { workspace: [], repos: {}, agents: {} },
+    };
+    const calls: string[] = [];
+    let settingsBody: { env?: Record<string, string> } | undefined;
+    let secretBody: { scope?: unknown; set?: Record<string, string> } | undefined;
+    server.use(
+      http.put('/api/workspaces/:id/settings', async ({ request }) => {
+        calls.push('settings');
+        settingsBody = (await request.json()) as typeof settingsBody;
+        return HttpResponse.json(ws);
+      }),
+      http.put('/api/workspaces/:id/env-secrets', async ({ request }) => {
+        calls.push('secrets');
+        secretBody = (await request.json()) as typeof secretBody;
+        return HttpResponse.json({ ...ws, env_secret_keys: { workspace: ['DB_PASS'], repos: {}, agents: {} } });
+      }),
+    );
+
+    const wrapper = await mountPanel(EnvironmentPanel, ws as never);
+    await openModal(wrapper, 'edit-environment');
+    await clickBody('env-plain-secret-DB_PASS');
+    await clickBody('save-environment');
+    await flush();
+    await flush();
+
+    expect(calls).toEqual(['settings', 'secrets']);
+    expect(settingsBody?.env).toEqual({ LOG_LEVEL: 'info' });
+    expect(secretBody?.scope).toEqual('workspace');
+    expect(secretBody?.set).toEqual({ DB_PASS: 'plainpass' });
+  });
+
+  it('Environment panel: a failed seal keeps the repo modal open and is retry-safe', async () => {
+    const ws = {
+      ...sampleWorkspace,
+      repositories: [
+        { id: 'repo-api-1', name: 'api', git_url: 'git@github.com:acme/api.git', default_branch: 'main', env: { API_KEY: 'plainval' } },
+      ],
+      env_secret_keys: { workspace: [], repos: { 'repo-api-1': [] }, agents: {} },
+    };
+    let settingsCalls = 0;
+    server.use(
+      http.put('/api/workspaces/:id/settings', () => {
+        settingsCalls += 1;
+        return HttpResponse.json(ws);
+      }),
+      http.put('/api/workspaces/:id/env-secrets', () => HttpResponse.json({ message: 'boom' }, { status: 500 })),
+    );
+
+    const wrapper = await mountPanel(EnvironmentPanel, ws as never);
+    await openModal(wrapper, 'edit-repo-0');
+    await clickBody('env-plain-secret-API_KEY');
+    await clickBody('repo-save');
+    await flush();
+    await flush();
+
+    // Settings committed once; the seal failed → modal stays open with an error,
+    // so the user can retry (value is still local, plaintext already dropped).
+    expect(settingsCalls).toBe(1);
+    expect(bodyQ('repo-form-name')).not.toBeNull();
+    expect(bodyQ('repo-env-error')).not.toBeNull();
   });
 
   it('Agents panel renders the instructions-source block and opens its editor', async () => {
