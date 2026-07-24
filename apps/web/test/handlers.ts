@@ -39,7 +39,9 @@ export const sampleWorkspace: WorkspaceResponse = {
   board_type: 'kanban',
   expires_at: '2027-07-12T00:00:00.000Z',
   credential_status: 'ok',
-  repositories: [{ name: 'api', git_url: 'git@github.com:acme/api.git', default_branch: 'main' }],
+  repositories: [
+    { id: 'repo-api-1', name: 'api', git_url: 'git@github.com:acme/api.git', default_branch: 'main' },
+  ],
   // Feature 031: workspace env defaults + names-only secret view.
   env: {},
   env_secret_keys: { workspace: [], repos: {}, agents: {} },

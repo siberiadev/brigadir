@@ -172,14 +172,53 @@ describe('Settings panels — Edit modals', () => {
     expect(wrapper.find('[data-test="config-branch-prefix"]').text()).toBe(sampleWorkspace.branch_prefix);
   });
 
-  it('Environment panel opens the environment modal with the repo editor', async () => {
+  it('Environment panel: workspace-defaults Edit opens ONLY the workspace env table (no repos)', async () => {
     const wrapper = await mountPanel(EnvironmentPanel);
     await openModal(wrapper, 'edit-environment');
-    expect(bodyQ('repo-row-0')).not.toBeNull();
     expect(bodyQ('ws-env')).not.toBeNull();
+    // Repositories are NOT in this modal any more — they are per-card.
+    expect(bodyQ('repo-form-name')).toBeNull();
     await clickBody('environment-cancel');
     await flush();
-    expect(bodyQ('repo-row-0')).toBeNull();
+    expect(bodyQ('ws-env')).toBeNull();
+  });
+
+  it('Environment panel: each repo card has its own Edit → single-repo form seeded from that repo', async () => {
+    const wrapper = await mountPanel(EnvironmentPanel);
+    await openModal(wrapper, 'edit-repo-0');
+    // data-test forwards to the inner <input>; seeded from the first repo.
+    expect((bodyQ('repo-form-name') as HTMLInputElement).value).toBe(sampleWorkspace.repositories[0].name);
+    expect(bodyQ('repo-remove')).not.toBeNull();
+    expect(bodyQ('repo-form-new-hint')).toBeNull(); // existing repo (has id) → secrets allowed
+  });
+
+  it('Environment panel: Add repository opens an empty create form (secrets gated until first save)', async () => {
+    const wrapper = await mountPanel(EnvironmentPanel);
+    await openModal(wrapper, 'add-repo');
+    expect((bodyQ('repo-form-name') as HTMLInputElement).value).toBe('');
+    // No id yet → secret vars are gated with a hint, and no Remove button.
+    expect(bodyQ('repo-form-new-hint')).not.toBeNull();
+    expect(bodyQ('repo-remove')).toBeNull();
+  });
+
+  it('Environment panel: saving a repo edit PATCHes the FULL repositories array with that repo updated', async () => {
+    let sent: { repositories?: { name: string }[] } | undefined;
+    server.use(
+      http.put('/api/workspaces/:id/settings', async ({ request }) => {
+        sent = (await request.json()) as { repositories?: { name: string }[] };
+        return HttpResponse.json(sampleWorkspace);
+      }),
+    );
+    const wrapper = await mountPanel(EnvironmentPanel);
+    await openModal(wrapper, 'edit-repo-0');
+    await setBodyInput('repo-form-name', 'renamed-repo');
+    await clickBody('repo-save');
+    await flush();
+    await flush();
+    // The whole array is sent (settings PATCH replaces it), with only repo 0 renamed.
+    expect(sent?.repositories?.length).toBe(sampleWorkspace.repositories.length);
+    expect(sent?.repositories?.[0].name).toBe('renamed-repo');
+    expect(bodyQ('repo-form-name')).toBeNull(); // modal closed
   });
 
   it('Agents panel renders the instructions-source block and opens its editor', async () => {
