@@ -3,6 +3,8 @@ import { computed, ref } from 'vue';
 import type { EnvSecretKeys } from '@brigadir/contracts';
 import { useUpdateSettings, useUpdateEnvSecrets } from '../../composables/useWorkspaces';
 import EnvVarsTable from '../EnvVarsTable/EnvVarsTable.vue';
+import BulkEnvEditor from '../BulkEnvEditor/BulkEnvEditor.vue';
+import type { BulkEnvResult } from '../BulkEnvEditor/bulk-env';
 
 /**
  * Workspace-level environment defaults editor (feature 031 settings restructure).
@@ -41,14 +43,30 @@ async function submit() {
   emit('saved');
 }
 
+// --- bulk ".env" editor ---
+const showBulk = ref(false);
+function onBulkApply({ plainEnv, secretSet, secretDelete }: BulkEnvResult) {
+  wsEnv.value = plainEnv; // replace non-secret env (saved with the form)
+  const set = Object.keys(secretSet).length ? secretSet : undefined;
+  const del = secretDelete.length ? secretDelete : undefined;
+  if (set || del) {
+    void envSecrets
+      .mutateAsync({ scope: 'workspace', set, delete: del })
+      .then((res) => (secretKeys.value = res.env_secret_keys.workspace));
+  }
+}
+
 defineExpose({ submit, saving });
 </script>
 
 <template>
   <el-form label-position="top" class="workspace-env-form">
-    <p class="env-hint" data-test="env-defaults-hint">
-      Injected into every repo-mounted run. Applies to new runs, not runs already in progress.
-    </p>
+    <div class="env-head">
+      <p class="env-hint" data-test="env-defaults-hint">
+        Injected into every repo-mounted run. Applies to new runs, not runs already in progress.
+      </p>
+      <el-button size="small" data-test="ws-bulk-env" @click="showBulk = true">Add from .env</el-button>
+    </div>
     <EnvVarsTable
       v-model="wsEnv"
       :secret-keys="secretKeys"
@@ -56,12 +74,21 @@ defineExpose({ submit, saving });
       @add-secret="addSecret"
       @remove-secret="removeSecret"
     />
+
+    <BulkEnvEditor v-model="showBulk" :plain-env="wsEnv" :secret-keys="secretKeys" @apply="onBulkApply" />
   </el-form>
 </template>
 
 <style scoped lang="scss">
 .workspace-env-form {
   max-width: 640px;
+}
+.env-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
 }
 .env-hint {
   font-size: 12px;

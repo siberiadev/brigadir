@@ -7,6 +7,7 @@ import { server } from './server';
 import { mountWithProviders, flush } from './mount';
 import { sampleWorkspace, nullableWorkspace } from './handlers';
 import { routes } from '../src/router';
+import { SECRET_MASK } from '../src/components/BulkEnvEditor/bulk-env';
 import GeneralPanel from '../src/views/workspace-settings/GeneralPanel.vue';
 import JiraPanel from '../src/views/workspace-settings/JiraPanel.vue';
 import EnvironmentPanel from '../src/views/workspace-settings/EnvironmentPanel.vue';
@@ -219,6 +220,43 @@ describe('Settings panels — Edit modals', () => {
     expect(sent?.repositories?.length).toBe(sampleWorkspace.repositories.length);
     expect(sent?.repositories?.[0].name).toBe('renamed-repo');
     expect(bodyQ('repo-form-name')).toBeNull(); // modal closed
+  });
+
+  it('Environment panel: "Add from .env" seeds masked secrets and re-seals a changed one on apply', async () => {
+    const ws = {
+      ...sampleWorkspace,
+      repositories: [
+        { id: 'repo-api-1', name: 'api', git_url: 'git@github.com:acme/api.git', default_branch: 'main', env: { PORT: '3100' } },
+      ],
+      env_secret_keys: { workspace: [], repos: { 'repo-api-1': ['API_TOKEN'] }, agents: {} },
+    };
+    let secretBody: { scope?: unknown; set?: Record<string, string>; delete?: string[] } | undefined;
+    server.use(
+      http.put('/api/workspaces/:id/env-secrets', async ({ request }) => {
+        secretBody = (await request.json()) as typeof secretBody;
+        return HttpResponse.json({ ...ws });
+      }),
+    );
+
+    const wrapper = await mountPanel(EnvironmentPanel, ws as never);
+    await openModal(wrapper, 'edit-repo-0');
+    await clickBody('repo-bulk-env'); // button lives inside the teleported repo modal
+    // Seeded: plaintext value + masked secret.
+    expect((bodyQ('bulk-env-textarea') as HTMLTextAreaElement).value).toBe(`PORT=3100\nAPI_TOKEN=${SECRET_MASK}`);
+
+    // Change the plaintext and rotate the secret (mask replaced with a value).
+    await setBodyInput('bulk-env-textarea', 'PORT=4000\nAPI_TOKEN=rotated');
+    await clickBody('bulk-env-apply');
+    await flush();
+    await flush();
+
+    // The changed secret was persisted via the env-secrets endpoint...
+    expect(secretBody?.scope).toEqual({ repository_id: 'repo-api-1' });
+    expect(secretBody?.set).toEqual({ API_TOKEN: 'rotated' });
+    // ...and the plaintext change landed in the inline table.
+    expect((bodyQ('env-plain-value-PORT') as HTMLInputElement).value).toBe('4000');
+    // The repo modal stays open (only the nested bulk dialog dismissed).
+    expect(bodyQ('repo-form-name')).not.toBeNull();
   });
 
   it('Agents panel renders the instructions-source block and opens its editor', async () => {
