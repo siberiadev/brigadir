@@ -536,6 +536,7 @@ defineExpose({ submit, saving });
             v-model="form.env"
             :secret-keys="agentSecretKeys"
             :inherited-keys="inheritedEnvKeys"
+            :secrets-enabled="isEdit"
             data-test="agent-env"
             @add-secret="addAgentSecret"
             @remove-secret="removeAgentSecret"

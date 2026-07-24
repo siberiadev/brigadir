@@ -12,14 +12,23 @@ import { ENV_KEY_REGEX, isReservedEnvKey, envByteLength, ENV_VALUE_MAX_BYTES } f
  * Key validation (format + reserved) uses the SAME dep-free rules as the server
  * so an invalid/reserved key is caught inline before any request.
  */
-const props = defineProps<{
-  /** Non-secret env for this scope (v-model). */
-  modelValue: Record<string, string>;
-  /** Names of secrets stored for this scope (values never leave the server). */
-  secretKeys: string[];
-  /** Optional: keys resolved from a LOWER layer, for "overrides" badges (US4). */
-  inheritedKeys?: string[];
-}>();
+const props = withDefaults(
+  defineProps<{
+    /** Non-secret env for this scope (v-model). */
+    modelValue: Record<string, string>;
+    /** Names of secrets stored for this scope (values never leave the server). */
+    secretKeys: string[];
+    /** Optional: keys resolved from a LOWER layer, for "overrides" badges (US4). */
+    inheritedKeys?: string[];
+    /**
+     * Whether this scope can hold secrets yet. False for a brand-new repo/agent
+     * that has no id (secrets persist by id) — hides the secret toggle and the
+     * per-row "Make secret" action so nothing silently no-ops.
+     */
+    secretsEnabled?: boolean;
+  }>(),
+  { secretsEnabled: true },
+);
 const emit = defineEmits<{
   'update:modelValue': [Record<string, string>];
   'add-secret': [key: string, value: string];
@@ -56,6 +65,12 @@ function removePlain(key: string) {
   delete next[key];
   emit('update:modelValue', next);
 }
+/** Convert an existing non-secret row into a secret (seal via the parent). */
+function makeSecret(key: string) {
+  const value = props.modelValue[key];
+  removePlain(key); // drop from the plaintext model...
+  emit('add-secret', key, value); // ...and let the parent seal it (env-secrets)
+}
 function add() {
   if (!canAdd.value) return;
   if (draft.secret) emit('add-secret', draft.key, draft.value);
@@ -84,6 +99,15 @@ function add() {
           />
         </td>
         <td class="actions">
+          <el-button
+            v-if="secretsEnabled"
+            link
+            size="small"
+            :data-test="`env-plain-make-secret-${key}`"
+            @click="makeSecret(key)"
+          >
+            Make secret
+          </el-button>
           <el-button link size="small" :data-test="`env-plain-remove-${key}`" @click="removePlain(key)">
             Remove
           </el-button>
@@ -122,7 +146,10 @@ function add() {
         :type="draft.secret ? 'password' : 'text'"
         data-test="env-add-value"
       />
-      <el-checkbox v-model="draft.secret" data-test="env-add-secret-flag">secret</el-checkbox>
+      <label v-if="secretsEnabled" class="secret-toggle">
+        <el-switch v-model="draft.secret" size="small" data-test="env-add-secret-flag" />
+        <span>secret</span>
+      </label>
       <el-button size="small" :disabled="!canAdd" data-test="env-add" @click="add">Add</el-button>
     </div>
     <p v-if="draftError" class="err" data-test="env-add-error">{{ draftError }}</p>
@@ -169,6 +196,12 @@ function add() {
 }
 .add-value {
   flex: 1;
+}
+.secret-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
 }
 .err {
   color: var(--el-color-danger);

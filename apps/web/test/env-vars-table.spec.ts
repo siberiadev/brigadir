@@ -56,16 +56,34 @@ describe('EnvVarsTable', () => {
     expect(emitted?.[0]?.[0]).toEqual({ NODE_ENV: 'test' });
   });
 
-  it('emits add-secret (not modelValue) when the secret flag is set', async () => {
+  it('emits add-secret (not modelValue) when the secret switch is on', async () => {
     const w = mountTable();
     await flush();
     await w.find('input[data-test="env-add-key"]').setValue('API_TOKEN');
     await w.find('input[data-test="env-add-value"]').setValue('tok');
-    await w.find('[data-test="env-add-secret-flag"] input').setValue(true);
+    await w.find('[data-test="env-add-secret-flag"]').trigger('click'); // toggle the el-switch
     await flush();
     await w.find('[data-test="env-add"]').trigger('click');
     expect(w.emitted('add-secret')?.[0]).toEqual(['API_TOKEN', 'tok']);
     expect(w.emitted('update:modelValue')).toBeUndefined();
+  });
+
+  it('"Make secret" promotes a plaintext row: emits add-secret and drops it from the model', async () => {
+    const w = mountTable({ modelValue: { PORT: '3100', KEEP: 'x' } });
+    await flush();
+    await w.find('[data-test="env-plain-make-secret-PORT"]').trigger('click');
+    // The parent seals it...
+    expect(w.emitted('add-secret')?.[0]).toEqual(['PORT', '3100']);
+    // ...and the plaintext model no longer carries it.
+    const last = w.emitted('update:modelValue')?.at(-1)?.[0];
+    expect(last).toEqual({ KEEP: 'x' });
+  });
+
+  it('hides the secret switch and "Make secret" when secrets are not enabled yet', async () => {
+    const w = mountTable({ modelValue: { PORT: '3100' }, secretsEnabled: false });
+    await flush();
+    expect(w.find('[data-test="env-add-secret-flag"]').exists()).toBe(false);
+    expect(w.find('[data-test="env-plain-make-secret-PORT"]').exists()).toBe(false);
   });
 
   it('marks rows that override a lower layer', async () => {
