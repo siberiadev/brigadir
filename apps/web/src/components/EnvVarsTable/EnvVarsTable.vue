@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive } from 'vue';
+import { computed, reactive, watch } from 'vue';
 import { Trash2 } from 'lucide-vue-next';
 import { ENV_KEY_REGEX, isReservedEnvKey, envByteLength, ENV_VALUE_MAX_BYTES } from '@brigadir/contracts/env';
 
@@ -7,12 +7,15 @@ import { ENV_KEY_REGEX, isReservedEnvKey, envByteLength, ENV_VALUE_MAX_BYTES } f
  * Feature 031: the shared env-variable editor for one scope (workspace, a
  * repository, or an agent). Every row is a uniform [key][value][secret][remove].
  *
- * Already-saved vars have a DISABLED secret switch — secret-ness is decided when
- * a var is added, not after. A saved secret shows its value as `••••••••` (the
- * value is write-only and never leaves the server). The add row's switch is
- * live: toggling it masks/unmasks the value being typed and marks it secret.
- * Non-secret values edit in place (v-model, saved with the form); secret adds/
- * removes are persisted by the parent through the env-secrets endpoint.
+ * A saved PLAIN var can be promoted to a secret: flipping its switch marks the
+ * key in `promoteKeys` (v-model:promote-keys) and masks its value, but nothing
+ * is sealed until the parent form Saves — on save the form drops the key from
+ * plaintext and seals it (settings PUT first, then env-secrets). A promoted row
+ * keeps its switch ENABLED (flip back before save); a SAVED secret shows the
+ * same `••••••••` mask but its switch is DISABLED (the value is write-only and
+ * never leaves the server; remove it with the trash icon). The add row's switch
+ * is live for NEW vars: toggling it masks the value being typed and adds it
+ * eagerly as a secret via the parent's env-secrets endpoint.
  */
 const MASK = '••••••••';
 
@@ -43,13 +46,34 @@ const draft = reactive({ key: '', value: '', secret: false });
 
 const plainRows = computed(() => Object.entries(props.modelValue));
 
-// Keys already persisted when this editor opened. Plain vars added since — via
-// the add row OR a bulk ".env" Apply — are still "pending" and can be flipped to
-// secret; persisted plain vars are locked (their secret-ness is fixed on save).
-const persistedPlainKeys = new Set(Object.keys(props.modelValue));
-function isPending(key: string): boolean {
-  return !persistedPlainKeys.has(key);
+/**
+ * Plain keys the user flipped to secret this session — sealed on form Save, not
+ * now. The key stays in `modelValue` (so its value is available to seal); the
+ * parent excludes it from plaintext and seals it on submit.
+ */
+const promoteKeys = defineModel<string[]>('promoteKeys', { default: () => [] });
+function isPromoted(key: string): boolean {
+  return promoteKeys.value.includes(key);
 }
+function setPromoted(key: string, on: boolean) {
+  if (!props.secretsEnabled) return;
+  if (on) {
+    if (!isPromoted(key)) promoteKeys.value = [...promoteKeys.value, key];
+  } else {
+    promoteKeys.value = promoteKeys.value.filter((k) => k !== key);
+  }
+}
+// Keep promoteKeys consistent with the plain map: a promoted key removed via the
+// trash icon or dropped by a bulk ".env" Apply must leave promoteKeys too, else
+// submit would seal an undefined value.
+watch(
+  () => Object.keys(props.modelValue),
+  (keys) => {
+    const present = new Set(keys);
+    const pruned = promoteKeys.value.filter((k) => present.has(k));
+    if (pruned.length !== promoteKeys.value.length) promoteKeys.value = pruned;
+  },
+);
 
 function keyError(key: string): string | null {
   if (!key) return null;
@@ -75,12 +99,6 @@ function removePlain(key: string) {
   delete next[key];
   emit('update:modelValue', next);
 }
-/** Flip a still-pending plain var into a secret (persisted via the parent). */
-function makeSecret(key: string, value: string, on: boolean) {
-  if (!on || !isPending(key)) return;
-  emit('add-secret', key, value);
-  removePlain(key);
-}
 function add() {
   if (!canAdd.value) return;
   if (draft.secret) emit('add-secret', draft.key, draft.value);
@@ -101,19 +119,20 @@ function add() {
           <el-tag v-if="overrides(key)" size="small" type="info" data-test="env-override-badge">overrides</el-tag>
         </div>
         <el-input
-          :model-value="value"
+          :model-value="isPromoted(key) ? MASK : value"
+          :disabled="isPromoted(key)"
           size="small"
           class="mono val"
           :data-test="`env-plain-value-${key}`"
           @update:model-value="(v: string) => updatePlainValue(key, v)"
         />
         <el-switch
-          :model-value="false"
-          :disabled="!secretsEnabled || !isPending(key)"
+          :model-value="isPromoted(key)"
+          :disabled="!secretsEnabled"
           size="small"
           class="toggle"
           :data-test="`env-plain-secret-${key}`"
-          @change="(on: boolean) => makeSecret(key, value, on)"
+          @change="(on: boolean) => setPromoted(key, on)"
         />
         <el-button
           link

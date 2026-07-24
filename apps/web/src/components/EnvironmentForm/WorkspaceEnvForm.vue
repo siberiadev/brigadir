@@ -22,6 +22,9 @@ const emit = defineEmits<{ saved: [] }>();
 
 const wsEnv = ref<Record<string, string>>({ ...(props.env ?? {}) });
 const secretKeys = ref<string[]>(props.envSecretKeys?.workspace ?? []);
+// Plain keys the user flipped to secret in the table — sealed on Save (below).
+const promoteKeys = ref<string[]>([]);
+const envError = ref('');
 
 const updateSettings = useUpdateSettings(props.workspaceId);
 const envSecrets = useUpdateEnvSecrets(props.workspaceId);
@@ -39,7 +42,23 @@ function removeSecret(key: string) {
 }
 
 async function submit() {
-  await updateSettings.mutateAsync({ env: wsEnv.value });
+  envError.value = '';
+  // Drop promoted keys from plaintext FIRST (settings PUT), then seal them — the
+  // only order the backend's "one home per key" guards accept. Never mutate
+  // wsEnv here, so a failed seal is retry-safe (the value is still local).
+  const plain = { ...wsEnv.value };
+  for (const k of promoteKeys.value) delete plain[k];
+  await updateSettings.mutateAsync({ env: plain });
+  if (promoteKeys.value.length) {
+    try {
+      const set = Object.fromEntries(promoteKeys.value.map((k) => [k, wsEnv.value[k]]));
+      const res = await envSecrets.mutateAsync({ scope: 'workspace', set });
+      secretKeys.value = res.env_secret_keys.workspace;
+    } catch {
+      envError.value = 'Defaults saved, but sealing secrets failed — retry.';
+      return; // keep the modal open; retry re-runs both calls safely
+    }
+  }
   emit('saved');
 }
 
@@ -69,11 +88,13 @@ defineExpose({ submit, saving });
     </div>
     <EnvVarsTable
       v-model="wsEnv"
+      v-model:promote-keys="promoteKeys"
       :secret-keys="secretKeys"
       data-test="ws-env"
       @add-secret="addSecret"
       @remove-secret="removeSecret"
     />
+    <p v-if="envError" class="err" data-test="ws-env-error">{{ envError }}</p>
 
     <BulkEnvEditor v-model="showBulk" :plain-env="wsEnv" :secret-keys="secretKeys" @apply="onBulkApply" />
   </el-form>
@@ -94,5 +115,10 @@ defineExpose({ submit, saving });
   font-size: 12px;
   color: var(--el-text-color-secondary);
   margin: 2px 0 8px;
+}
+.err {
+  color: var(--el-color-danger);
+  font-size: 13px;
+  margin: 8px 0 0;
 }
 </style>

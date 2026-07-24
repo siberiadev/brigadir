@@ -5,6 +5,7 @@ import type { WorkspaceRepository } from '@brigadir/contracts';
 import { useWorkspace } from '../../composables/useWorkspaces';
 import WorkspaceEnvForm from '../../components/EnvironmentForm/WorkspaceEnvForm.vue';
 import RepositoryForm from '../../components/EnvironmentForm/RepositoryForm.vue';
+import EnvVarsReadonly from '../../components/EnvVarsReadonly/EnvVarsReadonly.vue';
 import FormDialog from '../../components/FormDialog.vue';
 
 /**
@@ -12,8 +13,9 @@ import FormDialog from '../../components/FormDialog.vue';
  * workspace env defaults + the repository list with per-repo env. The workspace
  * defaults have ONE Edit modal (WorkspaceEnvForm). Repositories are managed one
  * at a time: an "Add repository" button and a per-card Edit button, each opening
- * RepositoryForm for a single repo (its fields + its env). Values for secret
- * vars are never shown — only a "secret" tag.
+ * RepositoryForm for a single repo (its fields + its env). Repos render as a
+ * single-open accordion; each body shows a read-only key | value | type list
+ * (EnvVarsReadonly). Secret values never leave the server, so they show masked.
  */
 const props = defineProps<{ id: string }>();
 
@@ -44,6 +46,8 @@ function onWsSaved() {
 const showRepoEdit = ref(false);
 const editingRepo = ref<WorkspaceRepository | null>(null);
 const repoFormRef = ref<InstanceType<typeof RepositoryForm>>();
+// Single-open accordion: the name of the currently-expanded repo card ('' = none).
+const openRepoName = ref('');
 function openRepo(repo: WorkspaceRepository | null) {
   editingRepo.value = repo;
   showRepoEdit.value = true;
@@ -68,15 +72,8 @@ const repoDialogTitle = computed(() => (editingRepo.value ? 'Edit repository' : 
       <h4 class="sub">Workspace defaults</h4>
       <el-button type="primary" link data-test="edit-environment" @click="showWsEdit = true">Edit</el-button>
     </div>
-    <div v-if="wsEnvEntries.length || wsSecretKeys.length" class="env-list" data-test="ws-env-readonly">
-      <div v-for="[k, v] in wsEnvEntries" :key="`p-${k}`" class="env-line">
-        <span class="env-key">{{ k }}</span><span class="env-val">{{ v }}</span>
-      </div>
-      <div v-for="k in wsSecretKeys" :key="`s-${k}`" class="env-line">
-        <span class="env-key">{{ k }}</span>
-        <span class="env-val masked">••••</span>
-        <el-tag size="small" type="warning">secret</el-tag>
-      </div>
+    <div v-if="wsEnvEntries.length || wsSecretKeys.length" data-test="ws-env-readonly">
+      <EnvVarsReadonly :plain="workspace.env ?? {}" :secret-keys="wsSecretKeys" />
     </div>
     <p v-else class="empty" data-test="ws-env-empty">No workspace-level variables.</p>
 
@@ -86,32 +83,31 @@ const repoDialogTitle = computed(() => (editingRepo.value ? 'Edit repository' : 
       <el-button type="primary" data-test="add-repo" @click="openRepo(null)">Add repository</el-button>
     </div>
     <p v-if="!repositories.length" class="empty" data-test="config-repos-empty">No repositories configured</p>
-    <div v-else class="repo-list">
-      <div v-for="(repo, i) in repositories" :key="repo.id ?? i" class="repo-card" :data-test="`config-repo-${i}`">
-        <div class="repo-head">
-          <span class="repo-name">{{ repo.name }}</span>
-          <span class="repo-url">{{ repo.git_url }}</span>
-          <el-tag v-if="i === 0" size="small" data-test="config-repo-default-tag">Default</el-tag>
-          <span class="spacer" />
-          <el-button type="primary" link :data-test="`edit-repo-${i}`" @click="openRepo(repo)">Edit</el-button>
-        </div>
-        <div
+    <el-collapse v-else v-model="openRepoName" accordion class="repo-collapse">
+      <el-collapse-item
+        v-for="(repo, i) in repositories"
+        :key="repo.id ?? i"
+        :name="repo.id ?? String(i)"
+        :data-test="`config-repo-${i}`"
+      >
+        <template #title>
+          <span class="repo-head">
+            <span class="repo-name">{{ repo.name }}</span>
+            <span class="repo-url">{{ repo.git_url }}</span>
+            <el-tag v-if="i === 0" size="small" data-test="config-repo-default-tag">Default</el-tag>
+            <span class="spacer" />
+            <el-button type="primary" link :data-test="`edit-repo-${i}`" @click.stop="openRepo(repo)">Edit</el-button>
+          </span>
+        </template>
+        <EnvVarsReadonly
           v-if="repoEnvEntries(repo).length || repoSecretKeys(repo).length"
-          class="env-list repo-env"
+          :plain="repo.env ?? {}"
+          :secret-keys="repoSecretKeys(repo)"
           :data-test="`repo-env-readonly-${i}`"
-        >
-          <div v-for="[k, v] in repoEnvEntries(repo)" :key="`p-${k}`" class="env-line">
-            <span class="env-key">{{ k }}</span><span class="env-val">{{ v }}</span>
-          </div>
-          <div v-for="k in repoSecretKeys(repo)" :key="`s-${k}`" class="env-line">
-            <span class="env-key">{{ k }}</span>
-            <span class="env-val masked">••••</span>
-            <el-tag size="small" type="warning">secret</el-tag>
-          </div>
-        </div>
-        <p v-else class="empty repo-env">No variables.</p>
-      </div>
-    </div>
+        />
+        <p v-else class="empty">No variables.</p>
+      </el-collapse-item>
+    </el-collapse>
 
     <!-- Edit: workspace defaults -->
     <FormDialog v-model="showWsEdit" title="Edit environment defaults">
@@ -189,49 +185,26 @@ const repoDialogTitle = computed(() => (editingRepo.value ? 'Edit repository' : 
   font-size: 14px;
   font-weight: 600;
 }
-.env-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+[data-test='ws-env-readonly'] {
   margin-top: 8px;
-}
-.env-line {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  font-size: 13px;
-}
-.env-key {
-  font-family: var(--brigadir-font-mono, monospace);
-  min-width: 30%;
-}
-.env-val {
-  color: var(--el-text-color-secondary);
-  font-family: var(--brigadir-font-mono, monospace);
-}
-.masked {
-  color: var(--el-text-color-placeholder);
 }
 .empty {
   color: var(--el-text-color-secondary);
   font-size: 13px;
   margin: 4px 0;
 }
-.repo-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+.repo-collapse {
   margin-top: 10px;
+  --el-collapse-header-height: 44px;
 }
-.repo-card {
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
-  padding: 10px 12px;
-}
+// The title slot holds the whole repo-head row; let it fill the header width so
+// the Edit button sits flush right (before the chevron).
 .repo-head {
   display: flex;
   gap: 8px;
   align-items: center;
+  width: 100%;
+  padding-right: 8px;
 }
 .repo-name {
   font-weight: 600;
@@ -242,10 +215,5 @@ const repoDialogTitle = computed(() => (editingRepo.value ? 'Edit repository' : 
 }
 .spacer {
   flex: 1;
-}
-.repo-env {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--el-border-color-lighter);
 }
 </style>
