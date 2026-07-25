@@ -5,6 +5,7 @@ import type { HumanQueueItem } from '@brigadir/contracts';
 import { relativeAge } from '../../utils/date';
 import { pluralize } from '../../utils/pluralize';
 import { badgeState, badgeTooltip, kindIcon } from './kindTag';
+import TicketKeyLink from '../TicketKeyLink.vue';
 
 /**
  * Compact row for the needs-human queue: a square icon badge in the left
@@ -46,17 +47,15 @@ const state = computed(() => badgeState(props.item));
         <ChevronRight class="chevron" :size="14" />
       </div>
       <div class="line-meta">
-        <!-- feature 011: ticketless setup tasks get a label, no link. -->
-        <a
+        <!-- feature 011: ticketless setup tasks get a label, no link.
+             Key → internal history page; the icon next to it → Jira. -->
+        <TicketKeyLink
           v-if="item.ticket"
-          :href="item.ticket.jira_url"
-          target="_blank"
-          rel="noopener"
+          :workspace-id="item.workspace.id"
+          :ticket-key="item.ticket.key"
+          :jira-url="item.ticket.jira_url"
           data-test="task-ticket"
-          @click.stop
-        >
-          {{ item.ticket.key }}
-        </a>
+        />
         <span v-else data-test="task-setup-label">Workspace setup</span>
         <span v-if="item.agent">· {{ item.agent.name }}</span>
         <span data-test="task-age">· {{ relativeAge(item.created_at) }} ago</span>

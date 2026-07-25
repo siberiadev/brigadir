@@ -12,6 +12,7 @@ import { usePagination } from '../composables/usePagination';
 import { useNow } from '../composables/useNow';
 import ListPagination from '../components/ListPagination.vue';
 import RunStatusTag from '../components/RunStatusTag.vue';
+import TicketKeyLink from '../components/TicketKeyLink.vue';
 import { formatDuration } from '../utils/date';
 import { formatCostUsd } from '../utils/currency';
 import { costIsIndicative, indicativeCostTip } from '../utils/executorCost';
@@ -224,10 +225,14 @@ async function stopAllRuns() {
       </el-table-column>
       <el-table-column label="Ticket">
         <template #default="{ row }">
-          <!-- feature 011: ticketless workspace-setup runs get a label, no link. -->
-          <a v-if="row.ticket" :href="row.ticket.jira_url" target="_blank" rel="noopener" @click.stop>
-            {{ row.ticket.key }}
-          </a>
+          <!-- feature 011: ticketless workspace-setup runs get a label, no link.
+               Key → internal history page; the icon next to it → Jira. -->
+          <TicketKeyLink
+            v-if="row.ticket"
+            :workspace-id="props.id"
+            :ticket-key="row.ticket.key"
+            :jira-url="row.ticket.jira_url"
+          />
           <span v-else class="setup-label" data-test="setup-label">Workspace setup</span>
         </template>
       </el-table-column>

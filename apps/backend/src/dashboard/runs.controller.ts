@@ -18,7 +18,7 @@ import {
 } from '@brigadir/contracts';
 import { DashboardTokenGuard } from './dashboard-token.guard';
 import { conflictError, notFoundError, validationError, zodIssuePath } from './dashboard.errors';
-import { parsePagination } from './dashboard.helpers';
+import { deepLink, durationMs, parsePagination } from './dashboard.helpers';
 
 const PERIOD_HOURS: Record<string, number> = { '24h': 24, '7d': 24 * 7, '30d': 24 * 30 };
 
@@ -469,16 +469,4 @@ export class RunsController {
       .limit(1);
     return ws?.siteUrl ?? '';
   }
-}
-
-/** duration = finished−started (ms); running → now−started; null when not started. */
-function durationMs(startedAt: Date | null, finishedAt: Date | null): number | null {
-  if (!startedAt) return null;
-  const end = finishedAt ?? new Date();
-  return end.getTime() - startedAt.getTime();
-}
-
-/** Jira deep link built from stored fields — no live Jira call (FR-034). */
-function deepLink(siteUrl: string, jiraKey: string): string {
-  return `${siteUrl.replace(/\/+$/, '')}/browse/${jiraKey}`;
 }

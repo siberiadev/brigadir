@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { HumanQueueItem } from '@brigadir/contracts';
 import MarkdownText from '../MarkdownText.vue';
+import TicketKeyLink from '../TicketKeyLink.vue';
 import { relativeAge } from '../../utils/date';
 import { kindTagType } from './kindTag';
 
@@ -30,10 +31,15 @@ const visible = defineModel<boolean>({ required: true });
         </div>
         <h3 class="drawer-title">{{ item.title }}</h3>
         <div class="meta">
-          <!-- feature 011: ticketless setup tasks get a label, no link. -->
-          <a v-if="item.ticket" :href="item.ticket.jira_url" target="_blank" rel="noopener" data-test="drawer-ticket">
-            {{ item.ticket.key }}
-          </a>
+          <!-- feature 011: ticketless setup tasks get a label, no link.
+               Key → internal history page; the icon next to it → Jira. -->
+          <TicketKeyLink
+            v-if="item.ticket"
+            :workspace-id="item.workspace.id"
+            :ticket-key="item.ticket.key"
+            :jira-url="item.ticket.jira_url"
+            data-test="drawer-ticket"
+          />
           <span v-else data-test="drawer-setup-label">Workspace setup</span>
           <span v-if="item.agent">· {{ item.agent.name }}</span>
           <span>· {{ item.workspace.name }}</span>

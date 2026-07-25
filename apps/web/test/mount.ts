@@ -34,6 +34,14 @@ export function mountWithProviders(component: Component, options: MountOptions =
   });
 
   const routes: RouteRecordRaw[] = options.routes ?? [
+    // Named stub so `router-link :to="{ name: 'ticket-history', ... }"` (the
+    // ticket-key links across Runs / RunCard / HumanQueue / Waiting) resolves
+    // under the default harness; navigation tests pass the real routes instead.
+    {
+      path: '/workspaces/:id/tickets/:key',
+      name: 'ticket-history',
+      component: { template: '<div />' },
+    },
     { path: '/:pathMatch(.*)*', component: { template: '<div />' } },
   ];
   const history = createMemoryHistory();

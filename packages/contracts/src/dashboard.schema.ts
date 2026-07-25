@@ -225,6 +225,9 @@ export const WaitingTicketSchema = z
   .object({
     ticket_id: z.string().uuid(),
     jira_key: z.string(),
+    // Precomputed deep link (server-built, deepLink helper) — the key itself
+    // links to the internal ticket-history page, the icon next to it to Jira.
+    jira_url: z.string(),
     summary: z.string().nullable(),
     priority_id: z.number().int().nullable(),
     priority_name: z.string().nullable(),

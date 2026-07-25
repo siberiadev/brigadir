@@ -2,7 +2,14 @@ import { Body, Controller, Get, HttpCode, Inject, Param, Post, Put, Query, Res, 
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { RunTriggerService } from '@brigadir/runs';
 import { SetupApplyService } from '@brigadir/pipeline';
-import type { ErrorIssue, TriggerEvent } from '@brigadir/contracts';
+import type {
+  AgentReport,
+  ErrorIssue,
+  RunStatus,
+  TicketHistoryHumanTask,
+  TicketHistoryResponse,
+  TriggerEvent,
+} from '@brigadir/contracts';
 import {
   DRIZZLE,
   type BrigadirDb,
@@ -49,7 +56,7 @@ import { openEnvSecrets, sealEnvSecrets, envSecretKeys, type EnvSecretsDocument 
 import { SecretBoxError } from '@brigadir/jira';
 import { DashboardTokenGuard } from './dashboard-token.guard';
 import { conflictError, fieldError, notFoundError, statusesUnavailable, validationError, zodIssuePath } from './dashboard.errors';
-import { extractBoardId, deriveCredentialStatus, parsePagination } from './dashboard.helpers';
+import { deepLink, durationMs, extractBoardId, deriveCredentialStatus, parsePagination } from './dashboard.helpers';
 
 /** Minimal response shape — avoids an `@types/express` dependency (same as agents.controller). */
 interface DashboardHttpResponse {
@@ -400,7 +407,7 @@ export class WorkspacesController {
     @Query('page_size') pageSizeRaw?: string,
   ): Promise<WaitingListResponse> {
     const [wsRow] = await this.db
-      .select({ id: schema.workspaces.id })
+      .select({ id: schema.workspaces.id, siteUrl: schema.workspaces.jiraSiteUrl })
       .from(schema.workspaces)
       .where(eq(schema.workspaces.id, id))
       .limit(1);
@@ -436,6 +443,7 @@ export class WorkspacesController {
     const items: WaitingTicket[] = rows.map((r) => ({
       ticket_id: r.ticketId,
       jira_key: r.jiraKey,
+      jira_url: deepLink(wsRow.siteUrl, r.jiraKey),
       summary: r.summary,
       priority_id: r.priorityId,
       priority_name: r.priorityName,
@@ -443,6 +451,178 @@ export class WorkspacesController {
       blocked_state: r.blockedState as WaitingTicket['blocked_state'],
     }));
     return { items, page, page_size: pageSize, total };
+  }
+
+  /**
+   * История тикета — все прогоны одного тикета хронологически, с причинными
+   * ссылками trigger_event (failing/deciding run), fail-чеками и routing-вердиктом
+   * оркестратора. Адресация по (workspace, jira_key): UUID тикета клиенту не
+   * отдаётся, а jira_key уникален только внутри workspace. Без пагинации —
+   * прогонов на тикет единицы; порядок детерминирован (created_at, id).
+   * Циклы доработки группирует клиентский презентер — сервер отдаёт плоско.
+   */
+  @Get(':id/tickets/:key/history')
+  async ticketHistory(
+    @Param('id') id: string,
+    @Param('key') key: string,
+  ): Promise<TicketHistoryResponse> {
+    const [ticket] = await this.db
+      .select({
+        ticketId: schema.tickets.id,
+        jiraKey: schema.tickets.jiraKey,
+        summary: schema.tickets.summary,
+        lastSeenStatus: schema.tickets.lastSeenStatus,
+        priorityName: schema.tickets.priorityName,
+        blockedState: schema.tickets.blockedState,
+        workspaceName: schema.workspaces.name,
+        siteUrl: schema.workspaces.jiraSiteUrl,
+      })
+      .from(schema.tickets)
+      .innerJoin(schema.workspaces, eq(schema.tickets.workspaceId, schema.workspaces.id))
+      .where(and(eq(schema.tickets.workspaceId, id), eq(schema.tickets.jiraKey, key)))
+      .limit(1);
+    if (!ticket) throw notFoundError('ticket_not_found', 'Ticket not found in this workspace.');
+
+    const runRows = await this.db
+      .select({
+        runId: schema.runs.id,
+        agentId: schema.runs.agentId,
+        agentName: schema.agents.name,
+        agentKey: schema.agents.key,
+        agentRole: schema.agents.role,
+        agentIsOrchestrator: schema.agents.isOrchestrator,
+        executorType: schema.runs.executorType,
+        status: schema.runs.status,
+        outcome: schema.runs.outcome,
+        attempt: schema.runs.attempt,
+        createdAt: schema.runs.createdAt,
+        startedAt: schema.runs.startedAt,
+        finishedAt: schema.runs.finishedAt,
+        costUsd: schema.runs.costUsd,
+        triggerEvent: schema.runs.triggerEvent,
+        report: schema.runs.report,
+      })
+      .from(schema.runs)
+      .innerJoin(schema.agents, eq(schema.runs.agentId, schema.agents.id))
+      .where(eq(schema.runs.ticketId, ticket.ticketId))
+      .orderBy(schema.runs.createdAt, schema.runs.id);
+
+    const runIds = runRows.map((r) => r.runId);
+
+    // Батч-выборки детей по собранным run id (паттерн run card: отдельные
+    // запросы вместо одного широкого join'а).
+    const failedChecks = runIds.length
+      ? await this.db
+          .select({
+            runId: schema.runChecks.runId,
+            name: schema.runChecks.name,
+            reason: schema.runChecks.reason,
+          })
+          .from(schema.runChecks)
+          .where(and(inArray(schema.runChecks.runId, runIds), eq(schema.runChecks.status, 'fail')))
+          .orderBy(schema.runChecks.position)
+      : [];
+
+    const humanTaskRows = runIds.length
+      ? await this.db
+          .select({
+            id: schema.humanTasks.id,
+            runId: schema.humanTasks.runId,
+            kind: schema.humanTasks.kind,
+            title: schema.humanTasks.title,
+            status: schema.humanTasks.status,
+          })
+          .from(schema.humanTasks)
+          .where(inArray(schema.humanTasks.runId, runIds))
+          .orderBy(schema.humanTasks.createdAt)
+      : [];
+
+    const checksByRun = new Map<string, { name: string; reason: string | null }[]>();
+    for (const c of failedChecks) {
+      const list = checksByRun.get(c.runId) ?? [];
+      list.push({ name: c.name, reason: c.reason ?? null });
+      checksByRun.set(c.runId, list);
+    }
+    const tasksByRun = new Map<string, TicketHistoryHumanTask[]>();
+    for (const t of humanTaskRows) {
+      if (!t.runId) continue;
+      const list = tasksByRun.get(t.runId) ?? [];
+      list.push({
+        id: t.id,
+        kind: t.kind as TicketHistoryHumanTask['kind'],
+        title: t.title,
+        status: t.status as TicketHistoryHumanTask['status'],
+      });
+      tasksByRun.set(t.runId, list);
+    }
+
+    // Суммирование numeric — в SQL (как runs/cost), не во float.
+    const [agg] = await this.db
+      .select({ total: sql<string | null>`coalesce(sum(${schema.runs.costUsd}), 0)::text` })
+      .from(schema.runs)
+      .where(eq(schema.runs.ticketId, ticket.ticketId));
+
+    const runs = runRows.map((r) => {
+      const trigger = (r.triggerEvent ?? {}) as TriggerEvent;
+      const report = (r.report ?? null) as AgentReport | null;
+      return {
+        run_id: r.runId,
+        agent: {
+          id: r.agentId,
+          name: r.agentName,
+          key: r.agentKey,
+          role: r.agentRole ?? null,
+          is_orchestrator: r.agentIsOrchestrator,
+        },
+        executor_type: r.executorType,
+        status: r.status as RunStatus,
+        outcome: r.outcome ?? null,
+        attempt: r.attempt,
+        created_at: r.createdAt.toISOString(),
+        started_at: r.startedAt ? r.startedAt.toISOString() : null,
+        finished_at: r.finishedAt ? r.finishedAt.toISOString() : null,
+        duration_ms: durationMs(r.startedAt, r.finishedAt),
+        cost_usd: r.costUsd ?? null,
+        trigger: {
+          source: trigger.source ?? null,
+          failing_run_id: trigger.failing_run_id ?? null,
+          deciding_run_id: trigger.deciding_run_id ?? null,
+          target_agent: trigger.target_agent ?? null,
+        },
+        summary: report?.summary ?? null,
+        routing: report?.routing
+          ? { target_agent: report.routing.target_agent, task: report.routing.task }
+          : null,
+        failed_checks: checksByRun.get(r.runId) ?? [],
+        human_tasks: tasksByRun.get(r.runId) ?? [],
+      };
+    });
+
+    const finishedTimes = runRows
+      .map((r) => r.finishedAt)
+      .filter((d): d is Date => d !== null)
+      .map((d) => d.getTime());
+
+    return {
+      ticket: {
+        key: ticket.jiraKey,
+        summary: ticket.summary ?? null,
+        jira_url: deepLink(ticket.siteUrl, ticket.jiraKey),
+        last_seen_status: ticket.lastSeenStatus ?? null,
+        priority_name: ticket.priorityName ?? null,
+        blocked_state: ticket.blockedState ?? null,
+      },
+      workspace: { id, name: ticket.workspaceName },
+      runs,
+      aggregates: {
+        runs_total: runs.length,
+        rework_cycles: runs.filter((r) => r.trigger.source === 'rework').length,
+        total_cost_usd: runs.length > 0 ? (agg?.total ?? '0') : null,
+        first_run_at: runRows.length > 0 ? runRows[0].createdAt.toISOString() : null,
+        last_finished_at:
+          finishedTimes.length > 0 ? new Date(Math.max(...finishedTimes)).toISOString() : null,
+      },
+    };
   }
 
   /**
