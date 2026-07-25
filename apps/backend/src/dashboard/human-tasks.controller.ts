@@ -11,7 +11,7 @@ import {
   type HumanTaskClosedStatus,
 } from '@brigadir/contracts';
 import { DashboardTokenGuard } from './dashboard-token.guard';
-import { parsePagination } from './dashboard.helpers';
+import { deepLink, parsePagination } from './dashboard.helpers';
 
 /**
  * Dashboard human-queue surface (feature 006, US1). The queue is GLOBAL across
@@ -121,7 +121,7 @@ export class HumanTasksController {
           ticket:
             r.ticketKey === null
               ? null
-              : { key: r.ticketKey, jira_url: `${r.siteUrl.replace(/\/+$/, '')}/browse/${r.ticketKey}` },
+              : { key: r.ticketKey, jira_url: deepLink(r.siteUrl, r.ticketKey) },
           agent:
             r.agentId && r.agentName
               ? { id: r.agentId, name: r.agentName, key: r.agentKey!, role: r.agentRole ?? null }

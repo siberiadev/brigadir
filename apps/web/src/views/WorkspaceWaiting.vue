@@ -4,6 +4,12 @@ import type { BlockedState } from '@brigadir/contracts';
 import { useWaitingTickets } from '../composables/useWaitingTickets';
 import { usePagination } from '../composables/usePagination';
 import ListPagination from '../components/ListPagination.vue';
+import TicketKeyLink from '../components/TicketKeyLink.vue';
+import {
+  blockedStateTag as stateTag,
+  blockedStateLabel as stateLabel,
+  blockedStateHint as stateHint,
+} from '../utils/blockedState';
 
 /**
  * Feature 022 (US3): blocked-waiting tickets of the workspace — "waiting on
@@ -17,33 +23,17 @@ const query = useWaitingTickets(props.id, params);
 const total = computed(() => query.data.value?.total ?? 0);
 bindTotal(total);
 const items = computed(() => query.data.value?.items ?? []);
-
-// cycle is the strongest "will never self-resolve" signal → danger; dead-end /
-// out-of-scope need a human → warning; plain waiting is informational.
-const stateTag: Record<BlockedState, 'info' | 'warning' | 'danger'> = {
-  waiting: 'info',
-  cycle: 'danger',
-  dead_end: 'warning',
-  out_of_scope: 'warning',
-};
-const stateLabel: Record<BlockedState, string> = {
-  waiting: 'Waiting',
-  cycle: 'Cycle',
-  dead_end: 'Dead end',
-  out_of_scope: 'Out of scope',
-};
-const stateHint: Record<BlockedState, string> = {
-  waiting: 'Blocked by open tickets; starts automatically once they are done.',
-  cycle: 'These tickets block each other — break the cycle on the board.',
-  dead_end: 'A blocker is closed outside the Done category and will never complete.',
-  out_of_scope: 'A blocker is outside this board scope — see the Human queue task.',
-};
 </script>
 
 <template>
   <section>
     <el-table v-loading="query.isLoading.value" :data="items">
-      <el-table-column label="Ticket" prop="jira_key" width="120" />
+      <el-table-column label="Ticket" width="130">
+        <template #default="{ row }">
+          <!-- Key → internal history page; the icon next to it → Jira. -->
+          <TicketKeyLink :workspace-id="props.id" :ticket-key="row.jira_key" :jira-url="row.jira_url" />
+        </template>
+      </el-table-column>
       <el-table-column label="Summary" prop="summary" min-width="220" show-overflow-tooltip />
       <el-table-column label="Priority" width="110">
         <template #default="{ row }">

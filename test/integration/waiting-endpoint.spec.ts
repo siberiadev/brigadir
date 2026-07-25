@@ -101,6 +101,7 @@ describe('waiting-tickets endpoint (feature 022, US3)', () => {
     expect(body.page).toBe(1);
     expect(body.items.map((i) => i.jira_key)).toEqual(['BRIG-10', 'BRIG-20', 'BRIG-30']);
     expect(body.items[0].blocked_by).toEqual(['BRIG-1', 'BRIG-2']);
+    expect(body.items[0].jira_url).toContain('/browse/BRIG-10');
     expect(body.items[1].blocked_state).toBe('dead_end');
     expect(body.items[2].priority_id).toBeNull();
 

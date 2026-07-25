@@ -112,6 +112,16 @@ export const routes: RouteRecordRaw[] = [
     ],
   },
   {
+    // Ticket history — a top-level detail page like the run card (NOT a
+    // workspace tab child: it outranks the workspace shell's `:catchAll`
+    // wildcard by static-segment specificity). The `key` param is mapped to
+    // the `ticketKey` prop because `key` is a reserved Vue prop name.
+    path: '/workspaces/:id/tickets/:key',
+    name: 'ticket-history',
+    component: () => import('../views/TicketHistory.vue'),
+    props: (to) => ({ id: to.params.id, ticketKey: to.params.key }),
+  },
+  {
     path: '/runs/:id',
     name: 'run-card',
     component: () => import('../views/RunCard.vue'),

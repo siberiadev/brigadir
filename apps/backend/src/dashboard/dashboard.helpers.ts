@@ -33,6 +33,18 @@ export function extractBoardId(board: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
+/** Jira deep link built from stored fields — no live Jira call (FR-034). */
+export function deepLink(siteUrl: string, jiraKey: string): string {
+  return `${siteUrl.replace(/\/+$/, '')}/browse/${jiraKey}`;
+}
+
+/** duration = finished−started (ms); running → now−started; null when not started. */
+export function durationMs(startedAt: Date | null, finishedAt: Date | null): number | null {
+  if (!startedAt) return null;
+  const end = finishedAt ?? new Date();
+  return end.getTime() - startedAt.getTime();
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Derive the expiry badge state from `jira_credential_expires_at` (FR-021). */

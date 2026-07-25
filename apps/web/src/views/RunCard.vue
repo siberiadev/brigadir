@@ -7,6 +7,7 @@ import { useRunCard, useCancelRun, useRetryRun } from '../composables/useRunCard
 import { useNow } from '../composables/useNow';
 import BackLink from '../components/BackLink.vue';
 import RunStatusTag from '../components/RunStatusTag.vue';
+import TicketKeyLink from '../components/TicketKeyLink.vue';
 import RunTimeline from '../components/RunTimeline/RunTimeline.vue';
 import { presentEvents } from '../components/RunTimeline/presenter';
 import { ApiError } from '../api/client';
@@ -170,7 +171,12 @@ const liveDuration = computed(() => {
       <h2 class="title" data-test="ticket-key">
         <!-- feature 011: ticketless workspace-setup runs get a label, no link. -->
         <template v-if="card.ticket">
-          <a :href="card.ticket.jira_url" target="_blank" rel="noopener">{{ card.ticket.key }}</a>
+          <!-- Key → internal history page; the icon next to it → Jira. -->
+          <TicketKeyLink
+            :workspace-id="run.workspace_id"
+            :ticket-key="card.ticket.key"
+            :jira-url="card.ticket.jira_url"
+          />
           <span class="summary">{{ card.ticket.summary ?? '(no summary)' }}</span>
         </template>
         <template v-else>
