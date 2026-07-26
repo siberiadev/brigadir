@@ -67,6 +67,8 @@ describe('dashboard schemas (T119)', () => {
       scope_jql: 'labels = ai',
       enabled: true,
       ticket_scoping: false,
+      // Feature 032: unset ⇒ null (dependents wait for the done category).
+      dependency_release_status: null,
       // Feature 030 additive fields (agent role-template source).
       agent_instructions: null,
       has_agent_instructions_token: false,
@@ -107,6 +109,22 @@ describe('dashboard schemas (T119)', () => {
     expect(WorkspaceSettingsRequestSchema.safeParse({ ticket_scopingg: true }).success).toBe(false);
     // Non-boolean rejected.
     expect(WorkspaceSettingsRequestSchema.safeParse({ ticket_scoping: 'yes' }).success).toBe(false);
+  });
+
+  it('dependency_release_status (feature 032): tri-state on the PUT, nullable string on the response', () => {
+    // Absent ⇒ unchanged; a string sets it; null clears it.
+    expect(WorkspaceSettingsRequestSchema.safeParse({}).success).toBe(true);
+    const set = WorkspaceSettingsRequestSchema.safeParse({ dependency_release_status: 'In Review' });
+    expect(set.success).toBe(true);
+    if (set.success) expect(set.data.dependency_release_status).toBe('In Review');
+    expect(
+      WorkspaceSettingsRequestSchema.safeParse({ dependency_release_status: null }).success,
+    ).toBe(true);
+    // Non-string rejected; the value is NOT validated against any status list
+    // (FR-004: an unknown name degrades to the done rule, it is not refused).
+    expect(
+      WorkspaceSettingsRequestSchema.safeParse({ dependency_release_status: 7 }).success,
+    ).toBe(false);
   });
 
   it('the Workspace/Verify response schemas never expose credentials', () => {

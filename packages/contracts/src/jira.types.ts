@@ -155,6 +155,13 @@ export const WorkspaceSettingsSchema = z
     // Jira Components (narrowing + the fail-closed gate). ABSENT ⇒ OFF —
     // byte-identical legacy behavior. No DDL — jsonb value only.
     ticket_scoping: z.boolean().optional(),
+    // Feature 032: the blocker status at which "is blocked by" dependents may
+    // start (Jira status NAME, matched trimmed + case-insensitively). A link is
+    // satisfied when the blocker carries this status OR its category is `done`.
+    // ABSENT ⇒ byte-identical legacy behavior (done-category only). Not
+    // validated against the board workflow — an unknown name degrades to the
+    // done rule rather than refusing the save. No DDL — jsonb value only.
+    dependency_release_status: z.string().trim().min(1).optional(),
     // Feature 030: per-workspace override of the agent role-template source.
     // Non-secret (url/ref/subdir only); the optional token is sealed in the
     // workspaces.agent_instructions_token bytea column, NEVER in this blob.

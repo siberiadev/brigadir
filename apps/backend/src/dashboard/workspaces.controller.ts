@@ -20,6 +20,7 @@ import {
   normalizeRepositoryIds,
   seedOrchestratorAgent,
   setWorkspaceInstructionSource,
+  setDependencyReleaseStatus,
   setWorkspaceInstructionToken,
   getGlobalInstructionSource,
 } from '@brigadir/database';
@@ -447,6 +448,11 @@ export class WorkspacesController {
       summary: r.summary,
       priority_id: r.priorityId,
       priority_name: r.priorityName,
+      // Feature 032: this is now EVERY observed "is blocked by" link, not only
+      // the open ones. Safe here because the list is selected by
+      // `blocked_state is not null` (above) — `blocked_state` is the sole
+      // waiting signal, so a released ticket that retains its links for branch
+      // inheritance never appears in this list.
       blocked_by: (r.blockedBy as string[] | null) ?? [],
       blocked_state: r.blockedState as WaitingTicket['blocked_state'],
     }));
@@ -647,7 +653,15 @@ export class WorkspacesController {
     // feature 030: the template-source override lives in settings and its token
     // in a sealed column — strip both from the plain settings patch (a token
     // must NEVER land in the jsonb blob).
-    const { agent_instructions, agent_instructions_token, ...settingsPatch } = parsed.data;
+    // feature 032: `dependency_release_status` is tri-state on the wire (absent
+    // = unchanged, null/blank = clear the key, string = set) — a shape the
+    // shallow merge cannot express, so it is applied by its own accessor below.
+    const {
+      agent_instructions,
+      agent_instructions_token,
+      dependency_release_status,
+      ...settingsPatch
+    } = parsed.data;
 
     // Feature 031: one home per key — a non-secret env value must not collide
     // with a stored secret of the same name in the same scope. Checked against
@@ -686,6 +700,12 @@ export class WorkspacesController {
           .set({ envSecrets: sealEnvSecrets(doc), updatedAt: sql`now()` })
           .where(eq(schema.workspaces.id, id));
       }
+    }
+    if (dependency_release_status !== undefined) {
+      // No existence check against the board workflow — an unknown status name
+      // degrades to the done-category rule; the dashboard warns, the API does
+      // not refuse (feature 032, FR-004). Blockers may live in another project.
+      await setDependencyReleaseStatus(this.db, id, dependency_release_status);
     }
     if (agent_instructions !== undefined) {
       await setWorkspaceInstructionSource(this.db, id, agent_instructions); // null clears
@@ -924,6 +944,8 @@ export class WorkspacesController {
       enabled: settings.enabled !== false,
       // Feature 020 (D2b): absent ⇒ OFF — scoping is strictly opt-in.
       ticket_scoping: settings.ticket_scoping === true,
+      // Feature 032: absent ⇒ null — dependents release on the done category only.
+      dependency_release_status: settings.dependency_release_status ?? null,
       // Feature 030: the workspace override (non-secret), whether a sealed token
       // is stored (never the token), and which level is effective by config.
       agent_instructions: settings.agent_instructions ?? null,

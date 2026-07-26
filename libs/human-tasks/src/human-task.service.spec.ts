@@ -139,3 +139,84 @@ describe('HumanTaskService.createFromRequest (T101)', () => {
     expect(jira.transitionTo).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Feature 032 (T023): title-keyed dedup for the inheritance diagnostics. The
+ * feature-022 guard ("any open run-less task on this ticket") is too coarse
+ * here — one dependent can legitimately need a lost-branch notice for `api`
+ * AND an unmounted-repo notice for `web` at the same time.
+ */
+describe('HumanTaskService.createTicketBlockedKeyed (feature 032)', () => {
+  function keyedDb(openTitles: string[]) {
+    const inserted: { title: string }[] = [];
+    const db = {
+      select: () => ({
+        from: () => ({
+          where: (cond: unknown) => ({
+            limit: async () => {
+              // The stub cannot read the drizzle condition, so the title being
+              // probed is passed through this closure by the caller below.
+              void cond;
+              return probe.hit ? [{ id: 'ht-1' }] : [];
+            },
+          }),
+        }),
+      }),
+      insert: () => ({
+        values: async (v: { title: string }) => {
+          inserted.push(v);
+          openTitles.push(v.title);
+        },
+      }),
+    };
+    const probe = { hit: false };
+    const service = new HumanTaskService(db as never, {} as never);
+    const create = async (title: string, details?: string) => {
+      probe.hit = openTitles.includes(title);
+      return service.createTicketBlockedKeyed('ws-1', 't-1', { title, details });
+    };
+    return { create, inserted };
+  }
+
+  it('creates one task per distinct title', async () => {
+    const h = keyedDb([]);
+    expect(await h.create('[blocker_branch_lost] T: no usable branch from B for api')).toEqual({
+      created: true,
+    });
+    expect(await h.create('[blocker_repo_unmounted] T: blocker B has work in unmounted web')).toEqual(
+      { created: true },
+    );
+    expect(h.inserted).toHaveLength(2);
+  });
+
+  it('deduplicates an identical title — a repeated run adds no second row', async () => {
+    const h = keyedDb([]);
+    const title = '[blocker_branch_lost] T: no usable branch from B for api';
+    expect(await h.create(title)).toEqual({ created: true });
+    expect(await h.create(title)).toEqual({ created: false });
+    expect(h.inserted).toHaveLength(1);
+  });
+
+  it('a different repository in the title is a different task', async () => {
+    const h = keyedDb([]);
+    await h.create('[blocker_branch_lost] T: no usable branch from B for api');
+    expect(await h.create('[blocker_branch_lost] T: no usable branch from B for web')).toEqual({
+      created: true,
+    });
+    expect(h.inserted).toHaveLength(2);
+  });
+
+  it('writes a non-blocking, run-less `blocker` task (kind stays the contract enum value)', async () => {
+    const h = keyedDb([]);
+    await h.create('[blocker_branch_lost] T: no usable branch from B for api', '**details**');
+    expect(h.inserted[0]).toMatchObject({
+      workspaceId: 'ws-1',
+      ticketId: 't-1',
+      runId: null,
+      kind: 'blocker',
+      blocking: false,
+      status: 'open',
+      details: '**details**',
+    });
+  });
+});

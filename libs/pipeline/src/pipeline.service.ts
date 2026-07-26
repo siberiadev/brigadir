@@ -1,12 +1,21 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { and, eq, sql } from 'drizzle-orm';
-import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
+import { DRIZZLE, type BrigadirDb, schema, getDependencyReleaseStatus } from '@brigadir/database';
 import { JiraClientFactory, buildRunComment, NoTransitionPath } from '@brigadir/jira';
 import { RunTriggerService } from '@brigadir/runs';
 import { HumanTaskService } from '@brigadir/human-tasks';
 import type { AgentReport, JiraBoardType, JiraIssue, TriggerEvent } from '@brigadir/contracts';
-import { evaluateDependencyGate, blockingKeys } from './dependency-gate';
-import { buildAgentTriggerEvent, DependencyReleaseService } from './dependency-release.service';
+import {
+  evaluateDependencyGate,
+  blockingKeys,
+  allBlockedByKeys,
+  earlyReleaseBlockers,
+} from './dependency-gate';
+import {
+  buildAgentTriggerEvent,
+  DependencyReleaseService,
+  recordEarlyRelease,
+} from './dependency-release.service';
 import { getReworkBudget } from './rework-budget';
 
 /** Where a status change came from (internal to the pipeline; distinct from the persisted trigger source). */
@@ -88,13 +97,20 @@ export class PipelineService {
       return;
     }
 
-    if (evaluateDependencyGate(issue) === 'blocked') {
+    // Feature 032 (FR-003): the SAME threshold the release pass uses — read once
+    // per event. `undefined` ⇒ no option passed ⇒ pre-032 behaviour (FR-016).
+    const releaseStatus = await getDependencyReleaseStatus(this.db, ticket.workspaceId);
+    const gateOpts = { releaseStatus };
+
+    if (evaluateDependencyGate(issue, gateOpts) === 'blocked') {
       // Feature 022 (FR-001): persist the waiting state instead of dropping the
       // event — the release pass keeps it current and the dashboard reads it.
-      const blockers = blockingKeys(issue);
+      // Feature 032: `blocked_by` records EVERY observed link (an observation,
+      // not a waiting flag); the log still names only what actually gates.
+      const blockers = blockingKeys(issue, gateOpts);
       await this.db
         .update(schema.tickets)
-        .set({ blockedBy: blockers, blockedState: 'waiting' })
+        .set({ blockedBy: allBlockedByKeys(issue), blockedState: 'waiting' })
         .where(eq(schema.tickets.id, ticketId));
       this.logger.log(
         `${ticket.jiraKey} entered "${toStatus}" but is blocked by [${blockers.join(', ')}] — waiting (${agents.length} agent(s))`,
@@ -102,7 +118,16 @@ export class PipelineService {
       return;
     }
 
-    await this.clearWaitingState(ticketId);
+    // FR-015: which blockers cleared only by the configured status name.
+    const early = earlyReleaseBlockers(issue, gateOpts);
+    // Feature 032: the observation is written even on the clear path, so a
+    // ticket that never waited still carries its chain for inheritance. This
+    // subsumes clearWaitingState's guarded write here — the row is being
+    // touched regardless, so there is nothing left to guard against.
+    await this.db
+      .update(schema.tickets)
+      .set({ blockedBy: allBlockedByKeys(issue), blockedState: null })
+      .where(eq(schema.tickets.id, ticketId));
     for (const agent of agents) {
       const triggerEvent = buildAgentTriggerEvent(source, agent.behavior);
       const result = await this.runTrigger.trigger({ ticketId, agentId: agent.id, triggerEvent });
@@ -112,6 +137,9 @@ export class PipelineService {
         );
       } else {
         this.logger.log(`${ticket.jiraKey} → agent "${agent.name}": run ${result.runId} enqueued`);
+        if (early.length > 0 && releaseStatus) {
+          await recordEarlyRelease(this.db, result.runId, releaseStatus, early);
+        }
       }
     }
   }
@@ -152,11 +180,16 @@ export class PipelineService {
     }
   }
 
-  /** Feature 022: drop the waiting cache for a ticket that is no longer blocked-waiting. */
+  /**
+   * Feature 022: drop the waiting cache for a ticket that is no longer
+   * blocked-waiting. Feature 032 narrowed it to `blocked_state` ONLY:
+   * `blocked_by` is now an observation that must survive (data-model.md §2) —
+   * the dependent's prepare step reads it long after the ticket stopped waiting.
+   */
   private async clearWaitingState(ticketId: string): Promise<void> {
     await this.db
       .update(schema.tickets)
-      .set({ blockedBy: null, blockedState: null })
+      .set({ blockedState: null })
       .where(and(eq(schema.tickets.id, ticketId), sql`${schema.tickets.blockedState} is not null`));
   }
 

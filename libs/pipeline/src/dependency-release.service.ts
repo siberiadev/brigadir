@@ -1,11 +1,22 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { and, eq, sql } from 'drizzle-orm';
-import { DRIZZLE, type BrigadirDb, schema, getScopeJql } from '@brigadir/database';
+import {
+  DRIZZLE,
+  type BrigadirDb,
+  schema,
+  getScopeJql,
+  getDependencyReleaseStatus,
+} from '@brigadir/database';
 import { type JiraClient, POLL_FIELDS, buildScopeJql, parseJiraPriority } from '@brigadir/jira';
 import { RunTriggerService } from '@brigadir/runs';
 import { HumanTaskService } from '@brigadir/human-tasks';
 import type { BlockedState, JiraBoardType, JiraIssue, TriggerEvent } from '@brigadir/contracts';
-import { evaluateDependencyGate, blockingKeys } from './dependency-gate';
+import {
+  evaluateDependencyGate,
+  blockingKeys,
+  allBlockedByKeys,
+  earlyReleaseBlockers,
+} from './dependency-gate';
 import type { StatusChangeSource } from './pipeline.service';
 
 /**
@@ -104,6 +115,11 @@ export class DependencyReleaseService {
       .where(
         and(
           eq(schema.tickets.workspaceId, workspaceId),
+          // Feature 032 widened `blocked_by` from "open blockers while waiting"
+          // to "every observed link", so this containment now also matches
+          // tickets already released by this blocker. Still correct: the
+          // NOT-EXISTS clause below drops every (ticket, agent) pair that
+          // already has an active or succeeded run, which is exactly those.
           ...(blockedByKey
             ? [sql`${schema.tickets.blockedBy} @> ${JSON.stringify([blockedByKey])}::jsonb`]
             : []),
@@ -120,6 +136,10 @@ export class DependencyReleaseService {
   private async process(ws: ReleaseScope, jira: JiraClient, candidates: CandidateRow[]): Promise<void> {
     if (candidates.length === 0) return;
 
+    // Feature 032 (FR-003): ONE read per pass, threaded into every gate call
+    // below. `undefined` ⇒ no option is passed at all ⇒ pre-032 behaviour.
+    const releaseStatus = await getDependencyReleaseStatus(this.db, ws.id);
+    const gateOpts = { releaseStatus };
     const scope = await this.loadScopeFilter(ws, jira);
     const keys = [...new Set(candidates.map((c) => c.ticketKey))];
     const keyList = keys.join(', ');
@@ -160,29 +180,77 @@ export class DependencyReleaseService {
       const issue = byKey.get(c.ticketKey);
       if (!issue) continue;
 
-      if (evaluateDependencyGate(issue) !== 'clear') {
-        waiting.set(c.ticketKey, { ticketId: c.ticketId, issue, blockers: blockingKeys(issue) });
+      if (evaluateDependencyGate(issue, gateOpts) !== 'clear') {
+        waiting.set(c.ticketKey, {
+          ticketId: c.ticketId,
+          issue,
+          blockers: blockingKeys(issue, gateOpts),
+        });
         continue;
       }
 
+      // FR-015: computed BEFORE the trigger — the annotation describes the
+      // gate evaluation that released this run, not a later re-read.
+      const early = earlyReleaseBlockers(issue, gateOpts);
       const res = await this.runTrigger.trigger({
         ticketId: c.ticketId,
         agentId: c.agentId,
         triggerEvent: buildAgentTriggerEvent('poller', c.behavior),
       });
-      // Released: the ticket is no longer waiting (FR-001 clear rule).
+      // Released: the ticket is no longer waiting (FR-001 clear rule). Feature
+      // 032: `blocked_by` is an OBSERVATION, not a waiting flag — it survives
+      // release so branch inheritance can still see the chain at prepare time.
+      // `blocked_state` alone signals waiting (data-model.md §2).
       await this.db
         .update(schema.tickets)
-        .set({ blockedBy: null, blockedState: null, ...parseJiraPriority(issue) })
+        .set({
+          blockedBy: allBlockedByKeys(issue),
+          blockedState: null,
+          ...parseJiraPriority(issue),
+        })
         .where(eq(schema.tickets.id, c.ticketId));
       if (!res.deduplicated) {
         this.logger.log(
           `dependency re-eval: ${c.ticketKey} now clear for "${c.agentKey}" → run ${res.runId}`,
         );
+        if (early.length > 0 && releaseStatus) {
+          await recordEarlyRelease(this.db, res.runId, releaseStatus, early);
+        }
       }
     }
 
+    // `waiting[].blockers` already holds the OPEN blockers under the configured
+    // threshold, so classification needs no separate gate option.
     await this.classifyWaiting(ws, jira, waiting, scope);
+    this.warnOnUnmatchedReleaseStatus(ws, releaseStatus, waiting, byKey);
+  }
+
+  /**
+   * Feature 032 (FR-004), operator diagnostic: a configured release status that
+   * NO blocker observed in this pass actually carries is almost always a typo or
+   * a renamed workflow step — the gate silently degrades to the done-category
+   * rule, which looks exactly like "the feature does nothing". One warn per
+   * pass (never per ticket), and only when something is actually still waiting.
+   */
+  private warnOnUnmatchedReleaseStatus(
+    ws: ReleaseScope,
+    releaseStatus: string | undefined,
+    waiting: Map<string, unknown>,
+    byKey: Map<string, JiraIssue>,
+  ): void {
+    if (!releaseStatus || waiting.size === 0) return;
+    const wanted = releaseStatus.trim().toLowerCase();
+    const seen = [...byKey.values()].flatMap((issue) =>
+      (issue.fields.issuelinks ?? [])
+        .filter((l) => l.inwardIssue !== undefined && l.type.inward.toLowerCase() === 'is blocked by')
+        .map((l) => l.inwardIssue!.fields.status.name),
+    );
+    if (seen.some((name) => name.trim().toLowerCase() === wanted)) return;
+    this.logger.warn(
+      `workspace ${ws.id}: dependency_release_status "${releaseStatus}" matched no blocker in this pass ` +
+        `(${waiting.size} ticket(s) still waiting) — check the status name against the board workflow; ` +
+        'the done-category rule still applies',
+    );
   }
 
   /** Fetch scope_jql + active sprint ids once per pass, shared by process() and classifyWaiting(). */
@@ -263,9 +331,16 @@ export class DependencyReleaseService {
       else if (w.blockers.some((b) => !inScopeBlockers.has(b))) state = 'out_of_scope';
       else if (w.blockers.some((b) => deadEndBlockers.has(b))) state = 'dead_end';
 
+      // Feature 032 (data-model.md §2): the persisted `blocked_by` is the FULL
+      // observed link set; the classification above still reasons over the OPEN
+      // subset (`w.blockers`), which is what "waiting on" means.
       await this.db
         .update(schema.tickets)
-        .set({ blockedBy: w.blockers, blockedState: state, ...parseJiraPriority(w.issue) })
+        .set({
+          blockedBy: allBlockedByKeys(w.issue),
+          blockedState: state,
+          ...parseJiraPriority(w.issue),
+        })
         .where(eq(schema.tickets.id, w.ticketId));
 
       if (state === 'cycle') {
@@ -290,6 +365,36 @@ export class DependencyReleaseService {
       }
     }
   }
+}
+
+/**
+ * Feature 032 (FR-015): annotate a run that started EARLY — i.e. at least one
+ * of its blockers was released by the configured status name while its category
+ * was still not `done`. Written on the dependent's brand-new run so the timeline
+ * answers "why did this start before its blocker was done?" without logs. No
+ * event at all for a plain done-category release, so today's timelines stay
+ * clean. Non-fatal by design: the run is already enqueued, and a failed
+ * annotation must never undo that.
+ */
+export async function recordEarlyRelease(
+  db: Pick<BrigadirDb, 'insert'>,
+  runId: string,
+  matchedStatus: string,
+  blockers: { key: string; status: string }[],
+): Promise<void> {
+  await db.insert(schema.runEvents).values({
+    runId,
+    type: 'log',
+    payload: {
+      source: 'dependency-release',
+      early: true,
+      matched_status: matchedStatus,
+      blockers,
+      message:
+        `Released early: blocker(s) [${blockers.map((b) => b.key).join(', ')}] reached ` +
+        `"${matchedStatus}" without being done.`,
+    },
+  });
 }
 
 /**

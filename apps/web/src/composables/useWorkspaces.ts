@@ -144,3 +144,20 @@ export function useSetTicketScoping() {
     },
   });
 }
+
+/**
+ * Feature 032: the blocker status at which "is blocked by" dependents may start.
+ * `null` clears the setting (back to the done-category rule). Same
+ * settings-endpoint pattern as the two toggles above.
+ */
+export function useSetDependencyReleaseStatus() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ workspaceId, status }: { workspaceId: string; status: string | null }) =>
+      api.updateSettings(workspaceId, { dependency_release_status: status }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: workspacesKey });
+      qc.invalidateQueries({ queryKey: workspaceKey(vars.workspaceId) });
+    },
+  });
+}

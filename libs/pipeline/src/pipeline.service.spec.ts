@@ -209,3 +209,134 @@ describe('PipelineService.processOrchestratorDecision — budget bypass (answer-
     expect(marker?.payload).toMatchObject({ orchestrator_decision: 'override_budget' });
   });
 });
+
+/**
+ * Feature 032 (T010): the status-change path reads the SAME workspace setting
+ * as the release pass and threads it into the gate (FR-003), writes the full
+ * observed link set into `blocked_by`, and annotates an early release.
+ */
+describe('PipelineService.onStatusChanged — configurable release status (feature 032)', () => {
+  const dependentIssue = (blockerStatus: string, category: 'new' | 'indeterminate' | 'done') => ({
+    key: 'DEP-1',
+    id: '1',
+    fields: {
+      summary: 'dependent',
+      status: { name: 'Ready for Dev', statusCategory: { key: 'new' as const } },
+      updated: '2026-07-26T00:00:00.000Z',
+      issuelinks: [
+        {
+          type: { name: 'Blocks', inward: 'is blocked by', outward: 'blocks' },
+          inwardIssue: {
+            key: 'BLK-1',
+            fields: { status: { name: blockerStatus, statusCategory: { key: category } } },
+          },
+        },
+        {
+          type: { name: 'Blocks', inward: 'is blocked by', outward: 'blocks' },
+          inwardIssue: {
+            key: 'BLK-2',
+            fields: { status: { name: 'Done', statusCategory: { key: 'done' as const } } },
+          },
+        },
+      ],
+    },
+  });
+
+  function harness(settings: Record<string, unknown>) {
+    const updates: Record<string, unknown>[] = [];
+    const events: { runId?: string; payload?: Record<string, unknown> }[] = [];
+    const agentsRow = [{ id: 'agent-1', name: 'Developer', behavior: {} }];
+
+    const thenable = (rows: unknown[]) => {
+      const c = {
+        from: () => c,
+        where: () => c,
+        limit: () => Promise.resolve(rows),
+        then: (resolve: (r: unknown[]) => unknown) => Promise.resolve(resolve(rows)),
+      };
+      return c;
+    };
+
+    const db = {
+      select: (cols?: Record<string, unknown>) => {
+        const keys = Object.keys(cols ?? {});
+        if (keys.length === 1 && keys[0] === 'settings') return thenable([{ settings }]);
+        if (keys.includes('workspaceId') && keys.includes('jiraKey')) {
+          return thenable([{ workspaceId: 'ws-1', jiraKey: 'DEP-1' }]);
+        }
+        return thenable(agentsRow);
+      },
+      update: () => ({
+        set: (values: Record<string, unknown>) => {
+          updates.push(values);
+          return { where: () => Promise.resolve() };
+        },
+      }),
+      insert: () => ({
+        values: (row: { runId?: string; payload?: Record<string, unknown> }) => {
+          events.push(row);
+          return Promise.resolve();
+        },
+      }),
+    };
+
+    const trigger = vi.fn().mockResolvedValue({ deduplicated: false, runId: 'run-new' });
+    const service = new PipelineService(
+      db as never,
+      {} as unknown as JiraClientFactory,
+      { trigger } as unknown as RunTriggerService,
+      {} as unknown as HumanTaskService,
+      {} as never,
+    );
+    return { service, trigger, updates, events };
+  }
+
+  it('triggers when the blocker carries the configured status (not done)', async () => {
+    const h = harness({ dependency_release_status: 'In Review' });
+    await h.service.onStatusChanged({
+      ticketId: 't-1',
+      issue: dependentIssue('In Review', 'indeterminate') as never,
+      fromStatus: 'Backlog',
+      toStatus: 'Ready for Dev',
+      source: 'poller',
+    });
+    expect(h.trigger).toHaveBeenCalledTimes(1);
+    // blocked_by is the FULL observed set, including the already-done blocker.
+    expect(h.updates.at(-1)).toMatchObject({ blockedBy: ['BLK-1', 'BLK-2'], blockedState: null });
+    expect(h.events.at(-1)?.payload).toMatchObject({
+      source: 'dependency-release',
+      early: true,
+      matched_status: 'In Review',
+    });
+  });
+
+  it('stays waiting for the same issue when no status is configured', async () => {
+    const h = harness({});
+    await h.service.onStatusChanged({
+      ticketId: 't-1',
+      issue: dependentIssue('In Review', 'indeterminate') as never,
+      fromStatus: 'Backlog',
+      toStatus: 'Ready for Dev',
+      source: 'poller',
+    });
+    expect(h.trigger).not.toHaveBeenCalled();
+    // Waiting persists the full observed set too; only the OPEN one is logged.
+    expect(h.updates.at(-1)).toMatchObject({
+      blockedBy: ['BLK-1', 'BLK-2'],
+      blockedState: 'waiting',
+    });
+  });
+
+  it('does not annotate a plain done-category release', async () => {
+    const h = harness({ dependency_release_status: 'In Review' });
+    await h.service.onStatusChanged({
+      ticketId: 't-1',
+      issue: dependentIssue('Done', 'done') as never,
+      fromStatus: 'Backlog',
+      toStatus: 'Ready for Dev',
+      source: 'poller',
+    });
+    expect(h.trigger).toHaveBeenCalledTimes(1);
+    expect(h.events).toEqual([]);
+  });
+});

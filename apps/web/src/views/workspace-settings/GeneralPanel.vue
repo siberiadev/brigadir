@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
-import { useWorkspace, useSetTicketScoping } from '../../composables/useWorkspaces';
+import {
+  useWorkspace,
+  useSetTicketScoping,
+  useSetDependencyReleaseStatus,
+} from '../../composables/useWorkspaces';
+import { useStatuses } from '../../composables/useStatuses';
 import GeneralForm from '../../components/GeneralForm/GeneralForm.vue';
 import FormDialog from '../../components/FormDialog.vue';
 
@@ -38,6 +43,44 @@ function onTicketScopingChange(value: string | number | boolean) {
     },
   );
 }
+
+/**
+ * Feature 032: the blocker status at which dependents may start. Free text is
+ * allowed on purpose (`allow-create`) — a blocker may live in another project
+ * whose statuses this board never reports — so an unrecognized value is a
+ * non-blocking warning, never a validation failure: the gate simply degrades to
+ * the done-category rule.
+ */
+const statusesQuery = useStatuses(props.id);
+const observedStatusNames = computed(
+  () => statusesQuery.data.value?.statuses.map((s) => s.name) ?? [],
+);
+const releaseStatus = computed(() => workspace.value?.dependency_release_status ?? null);
+const releaseStatusUnobserved = computed(
+  () =>
+    !!releaseStatus.value &&
+    observedStatusNames.value.length > 0 &&
+    !observedStatusNames.value.some(
+      (n) => n.trim().toLowerCase() === releaseStatus.value!.trim().toLowerCase(),
+    ),
+);
+
+const setReleaseStatus = useSetDependencyReleaseStatus();
+function onReleaseStatusChange(value: string | null) {
+  const next = value && value.trim().length > 0 ? value.trim() : null;
+  setReleaseStatus.mutate(
+    { workspaceId: props.id, status: next },
+    {
+      onSuccess: () =>
+        ElMessage.success(
+          next
+            ? `Dependents will start once their blocker reaches "${next}".`
+            : 'Dependency release status cleared — dependents wait for Done.',
+        ),
+      onError: () => ElMessage.error('Failed to update the dependency release status.'),
+    },
+  );
+}
 </script>
 
 <template>
@@ -65,6 +108,36 @@ function onTicketScopingChange(value: string | number | boolean) {
             Narrow each run's repositories to the ticket's Jira Components; unresolvable tickets go
             to the human queue.
           </span>
+        </div>
+      </el-descriptions-item>
+      <el-descriptions-item label="Dependency release status">
+        <div class="release-status">
+          <el-select
+            :model-value="releaseStatus"
+            class="release-status-select"
+            placeholder="Done only (default)"
+            filterable
+            allow-create
+            clearable
+            default-first-option
+            :loading="setReleaseStatus.isPending.value"
+            data-test="config-dependency-release-status"
+            @change="onReleaseStatusChange"
+          >
+            <el-option v-for="name in observedStatusNames" :key="name" :label="name" :value="name" />
+          </el-select>
+          <span class="ticket-scoping-hint">
+            A ticket blocked by another may start once its blocker reaches this status, instead of
+            waiting for Done. Leave empty to keep waiting for Done.
+          </span>
+          <el-alert
+            v-if="releaseStatusUnobserved"
+            type="warning"
+            :closable="false"
+            show-icon
+            data-test="release-status-unobserved"
+            title="Status not observed on this board — the done-category rule still applies."
+          />
         </div>
       </el-descriptions-item>
     </el-descriptions>
@@ -109,5 +182,14 @@ function onTicketScopingChange(value: string | number | boolean) {
 .ticket-scoping-hint {
   color: var(--el-text-color-secondary);
   font-size: 12px;
+}
+.release-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+.release-status-select {
+  width: 260px;
 }
 </style>

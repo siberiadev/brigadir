@@ -1,6 +1,6 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { and, eq, isNull } from 'drizzle-orm';
-import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
+import { DRIZZLE, type BrigadirDb, schema, createKeyedTicketTask } from '@brigadir/database';
 import { JiraClientFactory, buildHumanTaskComment } from '@brigadir/jira';
 import type { HumanTaskKind, AnswerOption } from '@brigadir/contracts';
 
@@ -98,6 +98,36 @@ export class HumanTaskService {
       status: 'open',
     });
     return { created: true };
+  }
+
+  /**
+   * Feature 032 (research R5): a run-less ticket task whose dedup key is the
+   * TITLE, not merely "this ticket has some open task".
+   *
+   * Feature 022's {@link createTicketBlocked} dedups on any open run-less task
+   * for the ticket, which is right for its single condition but far too coarse
+   * here: one dependent can legitimately need three different notices at once
+   * (a lost branch in `api`, a conflict in `web`, an unmounted repo), and the
+   * coarse guard would show only the first. The three feature-032 kinds are
+   * therefore composed as deterministic machine-prefixed titles
+   * (`[blocker_branch_lost] …`) carrying the whole dedup tuple — workspace,
+   * ticket, blocker, repository, kind — so title equality IS the tuple.
+   *
+   * The kind column stays `blocker`: `HumanTaskKind` is an agent-facing
+   * contract enum, and widening it for an internal diagnostic taxonomy would
+   * let agents emit system-reserved kinds (plan.md Complexity Tracking).
+   *
+   * A RESOLVED task does not suppress a new one — if the condition still holds
+   * on a later run, it genuinely still needs attention.
+   */
+  async createTicketBlockedKeyed(
+    workspaceId: string,
+    ticketId: string,
+    input: { title: string; details?: string },
+  ): Promise<{ created: boolean }> {
+    // Delegated so the executor — which raises these mid-prepare, where it has
+    // DRIZZLE but not this service — shares the identical guard.
+    return createKeyedTicketTask(this.db, { workspaceId, ticketId, ...input });
   }
 
   async createFromRequest(runId: string, input: CreateHumanTaskInput): Promise<CreateHumanTaskResult> {

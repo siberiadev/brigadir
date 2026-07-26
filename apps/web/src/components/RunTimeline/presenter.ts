@@ -287,6 +287,11 @@ function presentLog(payload: unknown): Presented {
   if (rec.source === 'repo-scoping' && message) {
     return { title: 'Repository scoping', body: message, percent: null };
   }
+  // Feature 032: where each repository started, and whether a dependent was
+  // released early. Both are kv/markdown bodies with decision chips — never a
+  // JSON dump of the payload (feature-026 rules).
+  if (rec.source === 'start-ref') return presentStartRef(rec, message);
+  if (rec.source === 'dependency-release') return presentEarlyRelease(rec, message);
   const parts: string[] = [];
   const model = asString(rec.model);
   if (model) parts.push(model);
@@ -304,6 +309,101 @@ function presentLog(payload: unknown): Presented {
     title: 'Session started',
     body: parts.length ? parts.join(' · ') : null,
     percent: null,
+  };
+}
+
+/** Human labels + chip tone for each start-ref decision (feature 023/024/032). */
+const START_REF_DECISIONS: Record<string, { label: string; tone?: TimelineTag['tone'] }> = {
+  report_confirmed: { label: 'continues own branch' },
+  default_branch: { label: 'default branch' },
+  inherited_from_blocker: { label: 'inherited from blocker', tone: 'info' },
+  merged_blockers: { label: 'merged blockers', tone: 'info' },
+  blocker_branch_merged: { label: 'blocker merged' },
+  blocker_no_artifact: { label: 'blocker branch missing', tone: 'warning' },
+  blocker_artifacts_unmounted: { label: 'repository not mounted', tone: 'warning' },
+};
+
+/**
+ * Feature 032: the per-repository start decision. The composed `message` is the
+ * body (a sentence a person can read); the machine facts — SHA, branch,
+ * blockers — go in the kv list. The decision itself is a chip, so scanning a
+ * timeline for "which repo did NOT get its blocker's work" is a glance.
+ */
+function presentStartRef(rec: Record<string, unknown>, message: string | null): Presented {
+  const decision = asString(rec.decision) ?? '';
+  const known = START_REF_DECISIONS[decision];
+  const repo = asString(rec.repo);
+  const tags: TimelineTag[] = [];
+  if (known) tags.push({ label: known.label, tone: known.tone });
+  else if (decision) tags.push({ label: decision });
+
+  const kv: { key: string; value: string }[] = [];
+  const continueBranch = asString(rec.continueBranch);
+  if (continueBranch) kv.push({ key: 'branch', value: continueBranch });
+  const merged = Array.isArray(rec.mergedBranches) ? rec.mergedBranches.map(String) : [];
+  if (merged.length > 0) kv.push({ key: 'merged', value: merged.join(', ') });
+  const blockers = Array.isArray(rec.blockers) ? rec.blockers : [];
+  if (blockers.length > 0) {
+    kv.push({
+      key: 'blockers',
+      value: blockers
+        .map((b) => {
+          const br = asRecord(b);
+          if (!br) return stringifyPretty(b);
+          const branch = asString(br.branch);
+          return branch ? `${String(br.key)} (${branch})` : String(br.key);
+        })
+        .join(', '),
+    });
+  }
+  const startSha = asString(rec.startSha);
+  if (startSha) kv.push({ key: 'start commit', value: startSha.slice(0, 12) });
+  const unmatched = Array.isArray(rec.unmatchedReportedRepos)
+    ? rec.unmatchedReportedRepos.map(String)
+    : [];
+  if (unmatched.length > 0) kv.push({ key: 'unmatched reports', value: unmatched.join(', ') });
+
+  return {
+    title: repo ? `Start point · ${repo}` : 'Start point',
+    body: message,
+    percent: null,
+    bodyFormat: message ? 'markdown' : kv.length > 0 ? 'kv' : null,
+    // The kv list rides along with the sentence: both are useful, and neither
+    // is a raw payload dump.
+    kv: kv.length > 0 ? kv : null,
+    tags,
+  };
+}
+
+/**
+ * Feature 032 (FR-015): this run started before its blocker was done, because
+ * the blocker reached the workspace's configured release status.
+ */
+function presentEarlyRelease(rec: Record<string, unknown>, message: string | null): Presented {
+  const matched = asString(rec.matched_status);
+  const blockers = Array.isArray(rec.blockers) ? rec.blockers : [];
+  const kv: { key: string; value: string }[] = [];
+  if (matched) kv.push({ key: 'released at status', value: matched });
+  if (blockers.length > 0) {
+    kv.push({
+      key: 'blockers',
+      value: blockers
+        .map((b) => {
+          const br = asRecord(b);
+          if (!br) return stringifyPretty(b);
+          const status = asString(br.status);
+          return status ? `${String(br.key)} (${status})` : String(br.key);
+        })
+        .join(', '),
+    });
+  }
+  return {
+    title: 'Released early',
+    body: message,
+    percent: null,
+    bodyFormat: message ? 'markdown' : 'kv',
+    kv: kv.length > 0 ? kv : null,
+    tags: [{ label: 'early release', tone: 'info' }],
   };
 }
 

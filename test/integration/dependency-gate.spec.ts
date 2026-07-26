@@ -241,7 +241,11 @@ describe('dependency gate (T057 trigger-side, T066 reconcile-side)', () => {
     await reconcile.reEvaluateDependencies(ws, jira);
     expect(await runCount(agentId)).toBe(1);
     expect((await waitingRow()).blockedState).toBeNull();
-    expect((await waitingRow()).blockedBy).toBeNull();
+    // Feature 032 (data-model.md §2): `blocked_by` is an OBSERVATION and
+    // survives the release — `blocked_state` alone signals waiting. Before 032
+    // this column was nulled here, which is exactly what made the dependent's
+    // prepare step unable to find its blocker's branch.
+    expect((await waitingRow()).blockedBy).toEqual([blockerKey]);
 
     // Pass 3: an active/succeeded run now exists → zero additional.
     await reconcile.reEvaluateDependencies(ws, jira);
@@ -249,5 +253,140 @@ describe('dependency gate (T057 trigger-side, T066 reconcile-side)', () => {
 
     // The run completes cleanly (blocked ticket now transitions on success).
     await waitFor(() => mock.transitionsFor(key).includes('Code Review'));
+  });
+
+  // ---- Feature 032 (T011): the configurable release threshold ----
+
+  /** Set / clear `settings.dependency_release_status` for this workspace. */
+  async function setReleaseStatus(value: string | null): Promise<void> {
+    const [row] = await db.db
+      .select({ settings: schema.workspaces.settings })
+      .from(schema.workspaces)
+      .where(eq(schema.workspaces.id, workspaceId));
+    const settings = { ...((row.settings as Record<string, unknown>) ?? {}) };
+    if (value === null) delete settings.dependency_release_status;
+    else settings.dependency_release_status = value;
+    await db.db
+      .update(schema.workspaces)
+      .set({ settings })
+      .where(eq(schema.workspaces.id, workspaceId));
+  }
+
+  /** A trigger-status ticket + its blocker, wired both in the mock and the cache. */
+  async function seedChain(
+    status: string,
+    blockerStatus: string,
+  ): Promise<{ key: string; blockerKey: string }> {
+    const key = `BRIG-${++counter}`;
+    const blockerKey = `BRIG-${900 + counter}`;
+    mock.seedIssue(key, { status, updated: '2026-01-01T00:00:00.000Z' });
+    mock.seedIssue(blockerKey, { status: blockerStatus });
+    mock.addBlockedByLink(key, blockerKey);
+    await db.db
+      .insert(schema.tickets)
+      .values({ workspaceId, jiraKey: key, jiraId: '10000', summary: key, lastSeenStatus: status });
+    return { key, blockerKey };
+  }
+
+  async function earlyReleaseEvents(agentId: string): Promise<Record<string, unknown>[]> {
+    const rows = await db.db
+      .select({ payload: schema.runEvents.payload, runId: schema.runEvents.runId })
+      .from(schema.runEvents)
+      .innerJoin(schema.runs, eq(schema.runs.id, schema.runEvents.runId))
+      .where(eq(schema.runs.agentId, agentId));
+    return rows
+      .map((r) => r.payload as Record<string, unknown>)
+      .filter((p) => p?.source === 'dependency-release');
+  }
+
+  it('releases a dependent once its blocker reaches the configured status (not done)', async () => {
+    const status = 'Ready D';
+    const agentId = await seedAgent('gate-configured', status);
+    const { key, blockerKey } = await seedChain(status, 'In Progress');
+    mock.setCategory('In Review', 'indeterminate');
+    await setReleaseStatus('In Review');
+
+    // Blocker below the threshold → nothing fires.
+    await reconcile.reEvaluateDependencies(ws, jira);
+    expect(await runCount(agentId)).toBe(0);
+
+    mock.moveBlocker(blockerKey, 'In Review', 'indeterminate');
+    await reconcile.reEvaluateDependencies(ws, jira);
+    expect(await runCount(agentId)).toBe(1);
+
+    // FR-015: the run carries the early-release annotation naming the status.
+    const events = await earlyReleaseEvents(agentId);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ early: true, matched_status: 'In Review' });
+    expect(events[0].blockers).toEqual([{ key: blockerKey, status: 'In Review' }]);
+
+    await waitFor(() => mock.transitionsFor(key).includes('Code Review'));
+    await setReleaseStatus(null);
+  });
+
+  it('the SAME fixture keeps waiting when the setting is unset (FR-016 regression)', async () => {
+    const status = 'Ready E';
+    const agentId = await seedAgent('gate-unset', status);
+    const { blockerKey } = await seedChain(status, 'In Progress');
+    mock.setCategory('In Review', 'indeterminate');
+    await setReleaseStatus(null);
+
+    mock.moveBlocker(blockerKey, 'In Review', 'indeterminate');
+    await reconcile.reEvaluateDependencies(ws, jira);
+    expect(await runCount(agentId)).toBe(0);
+  });
+
+  it('matches the configured status case-insensitively', async () => {
+    const status = 'Ready F';
+    const agentId = await seedAgent('gate-ci', status);
+    const { blockerKey } = await seedChain(status, 'In Progress');
+    mock.setCategory('IN REVIEW', 'indeterminate');
+    await setReleaseStatus('in review');
+
+    mock.moveBlocker(blockerKey, 'IN REVIEW', 'indeterminate');
+    await reconcile.reEvaluateDependencies(ws, jira);
+    expect(await runCount(agentId)).toBe(1);
+    await setReleaseStatus(null);
+  });
+
+  it('releases a blocker that jumps straight to Done, never observed in the configured status', async () => {
+    const status = 'Ready G';
+    const agentId = await seedAgent('gate-skip', status);
+    const { blockerKey } = await seedChain(status, 'In Progress');
+    await setReleaseStatus('In Review');
+
+    mock.moveBlocker(blockerKey, 'Done', 'done');
+    await reconcile.reEvaluateDependencies(ws, jira);
+    expect(await runCount(agentId)).toBe(1);
+    // Done-category release ⇒ no early-release annotation (today's clean shape).
+    expect(await earlyReleaseEvents(agentId)).toEqual([]);
+    await setReleaseStatus(null);
+  });
+
+  it('stays blocked while ANY blocker is below the threshold', async () => {
+    const status = 'Ready H';
+    const agentId = await seedAgent('gate-two-blockers', status);
+    const key = `BRIG-${++counter}`;
+    const first = `BRIG-${800 + counter}`;
+    const second = `BRIG-${850 + counter}`;
+    mock.seedIssue(key, { status, updated: '2026-01-01T00:00:00.000Z' });
+    mock.seedIssue(first, { status: 'In Progress' });
+    mock.seedIssue(second, { status: 'In Progress' });
+    mock.addBlockedByLink(key, first);
+    mock.addBlockedByLink(key, second);
+    await db.db
+      .insert(schema.tickets)
+      .values({ workspaceId, jiraKey: key, jiraId: '10000', summary: key, lastSeenStatus: status });
+    mock.setCategory('In Review', 'indeterminate');
+    await setReleaseStatus('In Review');
+
+    mock.moveBlocker(first, 'In Review', 'indeterminate');
+    await reconcile.reEvaluateDependencies(ws, jira);
+    expect(await runCount(agentId)).toBe(0);
+
+    mock.moveBlocker(second, 'In Review', 'indeterminate');
+    await reconcile.reEvaluateDependencies(ws, jira);
+    expect(await runCount(agentId)).toBe(1);
+    await setReleaseStatus(null);
   });
 });

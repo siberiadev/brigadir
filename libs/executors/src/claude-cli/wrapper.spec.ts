@@ -225,3 +225,139 @@ describe('buildWrapperText (T103, D6)', () => {
     });
   });
 });
+
+/**
+ * Feature 032 (T022/T047): per-repository provenance lines + the
+ * `## Linked tickets` block. Both state FACTS (D7) — the agent is never told to
+ * merge or chase a blocker — and both are absent, byte-identically, when the
+ * run inherited nothing (FR-016).
+ */
+describe('buildWrapperText — blocker provenance (feature 032)', () => {
+  const base = { name: 'product', absPath: '/wt/product', defaultBranch: 'main' };
+
+  it('labels an inherited repository as a DEPENDENCY and names the blocker', () => {
+    const text = buildWrapperText(ctx, '/tmp/wt', {
+      useCallbackChannel: true,
+      repos: [
+        {
+          ...base,
+          continueBranch: 'run/ST3-101',
+          provenance: 'inherited_blocker',
+          blockerKey: 'ST3-101',
+        },
+      ],
+    });
+    expect(text).toContain(
+      '- product: /wt/product (DEPENDENCY — branch run/ST3-101 from ST3-101, not yet in main;',
+    );
+    expect(text).toContain('do not modify it unless the task says so');
+  });
+
+  it('states the merged start point and the PR base for a diamond', () => {
+    const text = buildWrapperText(ctx, '/tmp/wt', {
+      useCallbackChannel: true,
+      repos: [
+        {
+          ...base,
+          continueBranch: 'run/A',
+          provenance: 'merged_blockers',
+          mergedFrom: [
+            { key: 'ST3-1', branch: 'run/A' },
+            { key: 'ST3-2', branch: 'run/B' },
+          ],
+        },
+      ],
+    });
+    expect(text).toContain('continues run/A from ST3-1 merged with run/B from ST3-2');
+    expect(text).toContain('already in your start point');
+    expect(text).toContain('open your PR against run/A, not main');
+  });
+
+  it('keeps the default and continue-own lines byte-identical to feature 023', () => {
+    const legacy = buildWrapperText(ctx, '/tmp/wt', {
+      useCallbackChannel: true,
+      repos: [base, { ...base, name: 'infra', absPath: '/wt/infra', continueBranch: 'run/OWN' }],
+    });
+    expect(legacy).toContain('- product: /wt/product (no prior branch; at main)');
+    expect(legacy).toContain('- infra: /wt/infra (continue branch run/OWN, based on main)');
+    // An explicit provenance produces the same text as the inferred one.
+    const explicit = buildWrapperText(ctx, '/tmp/wt', {
+      useCallbackChannel: true,
+      repos: [
+        { ...base, provenance: 'default' },
+        {
+          ...base,
+          name: 'infra',
+          absPath: '/wt/infra',
+          continueBranch: 'run/OWN',
+          provenance: 'continue_own',
+        },
+      ],
+    });
+    expect(explicit).toBe(legacy);
+  });
+
+  it('renders the Linked tickets block on both channels', () => {
+    const opts = {
+      repos: [base],
+      linkedTickets: [
+        { key: 'ST3-101', status: 'In Review', branch: 'run/ST3-101', prUrl: 'https://x/pr/1' },
+      ],
+    };
+    for (const useCallbackChannel of [true, false]) {
+      const text = buildWrapperText(ctx, '/tmp/wt', { ...opts, useCallbackChannel });
+      expect(text).toContain('## Linked tickets');
+      expect(text).toContain('- ST3-101 [In Review] branch: run/ST3-101 PR: https://x/pr/1');
+    }
+  });
+
+  it('sorts blockers by key and omits absent branch/PR fields', () => {
+    const text = buildWrapperText(ctx, '/tmp/wt', {
+      useCallbackChannel: true,
+      repos: [base],
+      linkedTickets: [
+        { key: 'ST3-9', status: 'Done' },
+        { key: 'ST3-2', status: 'In Review', branch: 'run/B' },
+      ],
+    });
+    const lines = text.split('\n').filter((l) => l.startsWith('- ST3-'));
+    expect(lines).toEqual(['- ST3-2 [In Review] branch: run/B', '- ST3-9 [Done]']);
+  });
+
+  it('caps the block at 10 entries and says how many were omitted', () => {
+    const many = Array.from({ length: 14 }, (_, i) => ({
+      key: `ST3-${String(i + 10).padStart(3, '0')}`,
+      status: 'In Review',
+    }));
+    const text = buildWrapperText(ctx, '/tmp/wt', {
+      useCallbackChannel: true,
+      repos: [base],
+      linkedTickets: many,
+    });
+    expect(text.split('\n').filter((l) => l.startsWith('- ST3-'))).toHaveLength(10);
+    expect(text).toContain('(+4 more blocker(s) not listed)');
+  });
+
+  it('truncates an over-long line rather than letting a report blow up the prompt', () => {
+    const text = buildWrapperText(ctx, '/tmp/wt', {
+      useCallbackChannel: true,
+      repos: [base],
+      linkedTickets: [{ key: 'ST3-1', status: 'In Review', branch: 'b'.repeat(400) }],
+    });
+    const line = text.split('\n').find((l) => l.startsWith('- ST3-1'))!;
+    expect(line.length).toBeLessThanOrEqual(200);
+    expect(line.endsWith('…')).toBe(true);
+  });
+
+  it('renders byte-identically to feature 020 when there is no blocker data', () => {
+    const without = buildWrapperText(ctx, '/tmp/wt', { useCallbackChannel: true, repos: [base] });
+    const withEmpty = buildWrapperText(ctx, '/tmp/wt', {
+      useCallbackChannel: true,
+      repos: [base],
+      linkedTickets: [],
+    });
+    expect(withEmpty).toBe(without);
+    expect(without).not.toContain('## Linked tickets');
+    expect(without).not.toContain('DEPENDENCY');
+  });
+});

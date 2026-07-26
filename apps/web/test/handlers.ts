@@ -53,6 +53,8 @@ export const sampleWorkspace: WorkspaceResponse = {
   enabled: true,
   // Feature 020 (D2b): ticket repository scoping — OFF by default.
   ticket_scoping: false,
+  // Feature 032: unset ⇒ dependents wait for the done category (legacy rule).
+  dependency_release_status: null,
   // Feature 030: no template-source override → built-in defaults are effective.
   agent_instructions: null,
   has_agent_instructions_token: false,

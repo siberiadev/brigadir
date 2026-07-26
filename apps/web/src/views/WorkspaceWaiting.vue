@@ -41,7 +41,12 @@ const items = computed(() => query.data.value?.items ?? []);
           <span v-else class="muted">—</span>
         </template>
       </el-table-column>
-      <el-table-column label="Waiting on" min-width="160">
+      <!--
+        Feature 032: `blocked_by` is now every observed "is blocked by" link,
+        not only the still-open ones ("Blocked by", not "Waiting on") — the
+        waiting classification is the `State` column next to it.
+      -->
+      <el-table-column label="Blocked by" min-width="160">
         <template #default="{ row }">
           <el-tag
             v-for="key in row.blocked_by"

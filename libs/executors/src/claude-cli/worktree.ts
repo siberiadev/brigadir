@@ -31,6 +31,13 @@ export interface RepoStart {
    * origin. Absent ⇒ this repo starts from its default branch.
    */
   continueBranch?: string;
+  /**
+   * Feature 032: additional blocker branches merged into the start point, in
+   * merge order. Present only for a diamond (two or more blockers with work in
+   * the same repository); `startSha` is resolved AFTER the last of them, so the
+   * feature-024 completion gate's baseline includes the merged work.
+   */
+  mergedBranches?: string[];
 }
 
 /** One prepared per-repo worktree inside a run's parent workspace dir. */
@@ -80,6 +87,25 @@ async function remoteBranchExists(cacheDir: string, branch: string): Promise<boo
   } catch {
     return false;
   }
+}
+
+/**
+ * Feature 032: the same probe, exported for the executor's missing-branch
+ * matrix, which must decide BEFORE any worktree is added whether a blocker's
+ * reported branch is still on origin. Unlike a branch the ticket's OWN prior
+ * work named — where a miss is a loud crash — a missing blocker branch is a
+ * routine outcome (the blocker's PR merged and the branch was deleted), so this
+ * answers with a boolean instead of throwing. An unusable branch NAME answers
+ * `false` for the same reason: garbage in a blocker's report must not take the
+ * dependent's run down with it.
+ */
+export async function branchExistsOnOrigin(cacheDir: string, branch: string): Promise<boolean> {
+  try {
+    await assertSafeBranchName(branch);
+  } catch {
+    return false;
+  }
+  return remoteBranchExists(cacheDir, branch);
 }
 
 /**
@@ -198,6 +224,7 @@ async function addRepoWorktree(
   cacheDir: string,
   worktreeDir: string,
   continueBranch: string | undefined,
+  mergeBranches: string[] = [],
 ): Promise<RepoStart> {
   let startRef = `origin/${repo.defaultBranch}`;
   let matchedContinue: string | undefined;
@@ -218,10 +245,99 @@ async function addRepoWorktree(
     if (err instanceof WorktreePrepareError) throw err;
     throw new WorktreePrepareError(`cannot create worktree at "${startRef}": ${(err as Error).message}`);
   }
+
+  // Feature 032: a diamond — two or more blockers left work in THIS repository.
+  // The system merges them into the start point itself rather than picking one
+  // arbitrarily (silent loss) or refusing to start (the chain stalls). Merging
+  // is the system's job, not the agent's (Principle III's spirit: the agent is
+  // told the merge already happened, and is never asked to perform it).
+  const merged = await mergeIntoWorktree(repo, cacheDir, worktreeDir, startRef, mergeBranches);
+
   // Feature 024: pin the concrete commit the worktree started at — the gate's
-  // baseline. Resolved in the worktree itself (== startRef, but as a SHA).
+  // baseline. Resolved AFTER any merge, so the merged work is part of the
+  // baseline by construction and the completion gate stays unchanged.
   const startSha = (await git(['rev-parse', 'HEAD'], worktreeDir)).trim();
-  return { startRef, startSha, continueBranch: matchedContinue };
+  return {
+    startRef,
+    startSha,
+    continueBranch: matchedContinue,
+    ...(merged.length > 0 ? { mergedBranches: merged } : {}),
+  };
+}
+
+/**
+ * Merge extra blocker branches into an already-detached worktree, sequentially
+ * and in the given (deterministic) order.
+ *
+ * `--no-ff` on purpose: a merge commit exists even when the merge could
+ * fast-forward, so "this run started from a combination of N branches" is
+ * visible in `git log` rather than being indistinguishable from a plain
+ * checkout. Commit identity is passed with `-c` — the system never writes a
+ * global git config. A conflict is NOT resolved automatically: the merge is
+ * aborted and the run fails loudly with the branches named, because a
+ * machine-picked resolution of two agents' work is exactly the kind of silent
+ * wrongness this codebase refuses.
+ */
+async function mergeIntoWorktree(
+  repo: WorktreeRepo,
+  cacheDir: string,
+  worktreeDir: string,
+  startRef: string,
+  mergeBranches: string[],
+): Promise<string[]> {
+  const merged: string[] = [];
+  for (const branch of mergeBranches) {
+    await assertSafeBranchName(branch);
+    if (!(await remoteBranchExists(cacheDir, branch))) {
+      throw new WorktreePrepareError(
+        `blocker branch "${branch}" is not on origin — cannot merge it into the start point`,
+      );
+    }
+    try {
+      await git(
+        [
+          '-c',
+          'user.name=brigadir',
+          '-c',
+          'user.email=brigadir@local',
+          'merge',
+          '--no-ff',
+          '-m',
+          `brigadir: merge blocker branch ${branch} into ${startRef}`,
+          `origin/${branch}`,
+        ],
+        worktreeDir,
+      );
+    } catch (err) {
+      // Best-effort: leave no half-merged index behind for the unwind to trip on.
+      await execFileAsync('git', ['merge', '--abort'], { cwd: worktreeDir }).catch(() => {});
+      throw new BlockerMergeConflictError(repo.name, startRef, mergeBranches, (err as Error).message);
+    }
+    merged.push(branch);
+  }
+  return merged;
+}
+
+/**
+ * Feature 032: two blockers' branches for one repository do not merge cleanly.
+ * A distinct subclass so the executor can recognize exactly this case and raise
+ * the `[blocker_merge_conflict]` human task; everything else about it behaves
+ * like any other prepare failure (all-or-nothing unwind, run marked crashed).
+ */
+export class BlockerMergeConflictError extends WorktreePrepareError {
+  constructor(
+    readonly repoName: string,
+    readonly startRef: string,
+    readonly mergeBranches: string[],
+    detail: string,
+  ) {
+    super(
+      `repo "${repoName}": blocker branches conflict — "${startRef}" + merge of [${mergeBranches
+        .map((b) => `"${b}"`)
+        .join(', ')}]: ${detail}`,
+    );
+    this.name = 'BlockerMergeConflictError';
+  }
 }
 
 /**
@@ -240,12 +356,35 @@ async function addRepoWorktree(
  * worktrees already created and removes the parent dir (spec FR-008/SC-006),
  * then rethrows naming the failing repo.
  */
+export async function ensureCaches(
+  repos: WorktreeRepo[],
+  repoCacheRoot: string,
+): Promise<Record<string, string>> {
+  await mkdir(repoCacheRoot, { recursive: true });
+  const caches: Record<string, string> = {};
+  for (const repo of repos) {
+    caches[repo.name] = await ensureCache(repo, repoCacheRoot);
+  }
+  return caches;
+}
+
 export async function prepareAll(
   repos: WorktreeRepo[],
   runId: string,
   worktreeRoot: string,
   repoCacheRoot: string,
-  opts: { continueBranches?: Record<string, string> } = {},
+  opts: {
+    continueBranches?: Record<string, string>;
+    /** Feature 032: extra blocker branches to merge into each repo's start point. */
+    mergeBranches?: Record<string, string[]>;
+    /**
+     * Feature 032: caches already ensured by {@link ensureCaches}. The executor
+     * needs them BEFORE this call — the missing-branch matrix probes origin to
+     * decide what to inherit — and re-fetching per repo here would be wasted
+     * work. Absent ⇒ this function ensures them itself (pre-032 behaviour).
+     */
+    caches?: Record<string, string>;
+  } = {},
 ): Promise<MultiPrepareResult> {
   if (repos.length === 0) {
     throw new WorktreePrepareError('no repositories to prepare for this run');
@@ -257,13 +396,14 @@ export async function prepareAll(
   const prepared: RepoWorktree[] = [];
   for (const repo of repos) {
     try {
-      const cacheDir = await ensureCache(repo, repoCacheRoot);
+      const cacheDir = opts.caches?.[repo.name] ?? (await ensureCache(repo, repoCacheRoot));
       const worktreeDir = join(parentDir, repo.name);
       const start = await addRepoWorktree(
         repo,
         cacheDir,
         worktreeDir,
         opts.continueBranches?.[repo.name],
+        opts.mergeBranches?.[repo.name] ?? [],
       );
       prepared.push({ repo, worktreeDir, cacheDir, start });
     } catch (err) {
@@ -274,6 +414,10 @@ export async function prepareAll(
         await git(['worktree', 'remove', '--force', p.worktreeDir], p.cacheDir).catch(() => {});
       }
       await rm(parentDir, { recursive: true, force: true });
+      // Feature 032: the merge-conflict error already names its repo and its
+      // branches, and the executor matches on its TYPE to raise the right human
+      // task — re-wrapping would erase both.
+      if (err instanceof BlockerMergeConflictError) throw err;
       const message = err instanceof Error ? err.message : String(err);
       throw new WorktreePrepareError(`repo "${repo.name}": ${message}`);
     }

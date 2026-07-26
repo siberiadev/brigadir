@@ -102,6 +102,24 @@ export interface WrapperRepoInfo {
    * own branch (feature 024 dropped the system-suggested name).
    */
   continueBranch?: string;
+  /**
+   * Feature 032: where this repository's start point came from. Absent ⇒
+   * `default` / `continue_own` as implied by `continueBranch`, so pre-032
+   * callers render byte-identically (FR-016).
+   */
+  provenance?: 'default' | 'continue_own' | 'inherited_blocker' | 'merged_blockers';
+  /** The blocker whose branch this repository starts from (`inherited_blocker`). */
+  blockerKey?: string;
+  /** Every blocker branch folded into the start point, in merge order. */
+  mergedFrom?: { key: string; branch: string }[];
+}
+
+/** One direct blocker of this ticket, as listed in the wrapper (feature 032). */
+export interface LinkedTicketEntry {
+  key: string;
+  status: string;
+  branch?: string;
+  prUrl?: string;
 }
 
 export interface WrapperOptions {
@@ -123,6 +141,46 @@ export interface WrapperOptions {
    * runs) ⇒ the section renders byte-identical to feature 019.
    */
   onDemandRepos?: { name: string; url: string }[];
+  /**
+   * Feature 032: this ticket's DIRECT blockers and what they left behind.
+   * Non-empty ⇒ the wrapper renders the `## Linked tickets` block. Facts only
+   * (D7) — the agent is told what exists, never instructed to merge or chase
+   * anything. Rendered for BOTH channels: workspace facts are not a channel
+   * protocol. Absent/empty ⇒ byte-identical to feature 020 (FR-016).
+   */
+  linkedTickets?: LinkedTicketEntry[];
+}
+
+/** Cap on the `## Linked tickets` block — a prompt is a budget, not a dump. */
+const LINKED_TICKETS_MAX = 10;
+const LINKED_TICKET_LINE_MAX = 200;
+
+/**
+ * The `## Linked tickets` block (feature 032): this ticket's direct blockers,
+ * nearest first (direct blockers only — the transitive closure is not the
+ * agent's problem), sorted by key for determinism, capped so a fan-in of 40
+ * cannot crowd out the actual task.
+ */
+function linkedTicketsSection(entries: LinkedTicketEntry[]): string[] {
+  const sorted = [...entries].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  const shown = sorted.slice(0, LINKED_TICKETS_MAX);
+  const lines = shown.map((e) => {
+    const parts = [`- ${e.key} [${e.status}]`];
+    if (e.branch) parts.push(`branch: ${e.branch}`);
+    if (e.prUrl) parts.push(`PR: ${e.prUrl}`);
+    const line = parts.join(' ');
+    return line.length > LINKED_TICKET_LINE_MAX ? `${line.slice(0, LINKED_TICKET_LINE_MAX - 1)}…` : line;
+  });
+  return [
+    '## Linked tickets',
+    'This ticket is blocked by the ticket(s) below. Where a branch is named, your worktree for ' +
+      'that repository already starts from it — the work is present, not something you need to ' +
+      'fetch or merge:',
+    ...lines,
+    ...(sorted.length > shown.length
+      ? [`(+${sorted.length - shown.length} more blocker(s) not listed)`]
+      : []),
+  ];
 }
 
 /**
@@ -133,6 +191,41 @@ export interface WrapperOptions {
  * Deliberately NOT a behavior→wrapper compiler (research D9 — that stays
  * cut per the constitution's scope discipline).
  */
+/**
+ * One repository's line in the `## Repositories` list.
+ *
+ * The two feature-032 variants state FACTS about the start point and the PR
+ * base (D7) — they never tell the agent to merge or to chase a blocker. The
+ * "do not modify unless the task says so" clause on an inherited repo is the
+ * load-bearing part: a dependent's agent looking at unfamiliar code in a repo
+ * it merely READS would otherwise be tempted to "fix" its blocker's work.
+ */
+function repoLine(r: WrapperRepoInfo): string {
+  const provenance =
+    r.provenance ?? (r.continueBranch ? 'continue_own' : 'default');
+  switch (provenance) {
+    case 'inherited_blocker':
+      return (
+        `- ${r.name}: ${r.absPath} (DEPENDENCY — branch ${r.continueBranch} from ${r.blockerKey}, ` +
+        `not yet in ${r.defaultBranch}; read it and build against it, do not modify it unless the ` +
+        'task says so)'
+      );
+    case 'merged_blockers': {
+      const from = (r.mergedFrom ?? [])
+        .map((m) => `${m.branch} from ${m.key}`)
+        .join(' merged with ');
+      return (
+        `- ${r.name}: ${r.absPath} (continues ${from} — already in your start point; open your PR ` +
+        `against ${r.continueBranch}, not ${r.defaultBranch})`
+      );
+    }
+    case 'continue_own':
+      return `- ${r.name}: ${r.absPath} (continue branch ${r.continueBranch}, based on ${r.defaultBranch})`;
+    default:
+      return `- ${r.name}: ${r.absPath} (no prior branch; at ${r.defaultBranch})`;
+  }
+}
+
 function repositoriesSection(
   repos: WrapperRepoInfo[],
   useCallbackChannel: boolean,
@@ -157,11 +250,7 @@ function repositoriesSection(
     'Your workspace directory contains one sub-directory per repository. Each is checked out ' +
       'in DETACHED HEAD at the commit this run must start from — creating and pushing branches ' +
       'is your job, not the system\'s:',
-    ...repos.map((r) =>
-      r.continueBranch
-        ? `- ${r.name}: ${r.absPath} (continue branch ${r.continueBranch}, based on ${r.defaultBranch})`
-        : `- ${r.name}: ${r.absPath} (no prior branch; at ${r.defaultBranch})`,
-    ),
+    ...repos.map((r) => repoLine(r)),
     'Rules for working across repositories:',
     '- Decide from the ticket which of these repositories actually need changes; leave the ' +
       'others completely untouched.',
@@ -204,6 +293,10 @@ export function buildWrapperText(ctx: RunContext, worktreeDir: string, options: 
     '',
     ...(options.repos && options.repos.length > 0
       ? [...repositoriesSection(options.repos, options.useCallbackChannel, options.onDemandRepos), '']
+      : []),
+    // Feature 032: what this ticket is chained to. Facts, both channels.
+    ...(options.linkedTickets && options.linkedTickets.length > 0
+      ? [...linkedTicketsSection(options.linkedTickets), '']
       : []),
     '## How to report your result',
     ...(options.useCallbackChannel ? callbackToolsSection() : structuredOutputSection()),

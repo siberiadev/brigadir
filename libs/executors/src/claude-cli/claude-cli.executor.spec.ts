@@ -13,12 +13,16 @@ vi.mock('./worktree', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./worktree')>()),
   prepareAll: vi.fn(),
   cleanupAll: vi.fn(),
+  // feature 032: the executor now ensures repo caches BEFORE prepare (their
+  // `fetch --prune` is what makes the blocker-branch probes truthful), so this
+  // git-touching function is faked here too.
+  ensureCaches: vi.fn(),
 }));
 vi.mock('./process-group', () => ({
   spawnGroup: vi.fn(),
 }));
 
-import { prepareAll, cleanupAll } from './worktree';
+import { prepareAll, cleanupAll, ensureCaches } from './worktree';
 import { spawnGroup } from './process-group';
 import { ClaudeCliExecutor } from './claude-cli.executor';
 import { DEFAULT_REPO_RUN_ALLOWED_TOOLS } from './claude-cli.config';
@@ -26,6 +30,7 @@ import { buildChildEnv } from './env-allowlist';
 
 const prepareMock = prepareAll as unknown as ReturnType<typeof vi.fn>;
 const cleanupMock = cleanupAll as unknown as ReturnType<typeof vi.fn>;
+const ensureCachesMock = ensureCaches as unknown as ReturnType<typeof vi.fn>;
 const spawnGroupMock = spawnGroup as unknown as ReturnType<typeof vi.fn>;
 
 /** Fake MultiPrepareResult for a single-repo workspace rooted at `parentDir`. */
@@ -192,6 +197,7 @@ describe('ClaudeCliExecutor.run (T082)', () => {
     worktreeDir = await mkdtemp(join(tmpdir(), 'brigadir-executor-test-'));
     prepareMock.mockReset().mockResolvedValue(fakeWorkspace(worktreeDir));
     cleanupMock.mockReset().mockResolvedValue(undefined);
+    ensureCachesMock.mockReset().mockResolvedValue({});
     spawnGroupMock.mockReset();
   });
 
@@ -579,6 +585,7 @@ describe('ClaudeCliExecutor — default allowed tools (ST3-768)', () => {
     worktreeDir = await mkdtemp(join(tmpdir(), 'brigadir-tools-test-'));
     prepareMock.mockReset().mockResolvedValue(fakeWorkspace(worktreeDir));
     cleanupMock.mockReset().mockResolvedValue(undefined);
+    ensureCachesMock.mockReset().mockResolvedValue({});
     spawnGroupMock.mockReset();
   });
 
@@ -774,6 +781,7 @@ describe('ClaudeCliExecutor — workspace-setup environment (feature 015)', () =
     // continue, so the worktree is detached at the repo's default branch.
     prepareMock.mockReset().mockResolvedValue(fakeWorkspace(worktreeDir, 'api'));
     cleanupMock.mockReset().mockResolvedValue(undefined);
+    ensureCachesMock.mockReset().mockResolvedValue({});
     spawnGroupMock.mockReset();
   });
   afterEach(async () => {
@@ -932,6 +940,7 @@ describe('ClaudeCliExecutor ticket scoping (feature 020)', () => {
     worktreeDir = await mkdtemp(join(tmpdir(), 'brigadir-executor-scope-'));
     prepareMock.mockReset().mockResolvedValue(fakeWorkspace(worktreeDir));
     cleanupMock.mockReset().mockResolvedValue(undefined);
+    ensureCachesMock.mockReset().mockResolvedValue({});
     spawnGroupMock.mockReset();
   });
 
@@ -1060,6 +1069,7 @@ describe('ClaudeCliExecutor operator env (feature 031)', () => {
     worktreeDir = await mkdtemp(join(tmpdir(), 'brigadir-executor-env-'));
     prepareMock.mockReset().mockResolvedValue(fakeWorkspace(worktreeDir));
     cleanupMock.mockReset().mockResolvedValue(undefined);
+    ensureCachesMock.mockReset().mockResolvedValue({});
     spawnGroupMock.mockReset();
   });
 

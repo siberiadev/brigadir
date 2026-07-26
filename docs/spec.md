@@ -105,10 +105,27 @@ onStatusChanged(ticket, from, to, source):
 
 dependencyGate(ticket):  # решение 2026-07-11: модель «временной команды» (backend+frontend фича)
   links = issue.fields.issuelinks WHERE type = "is blocked by"
-  return all(linked.status in done-category for linked in links)
+  # feature 032: порог релиза настраивается на воркспейс —
+  # workspaces.settings.dependency_release_status (имя Jira-статуса).
+  # Связь удовлетворена, если статус блокера СОВПАДАЕТ с настройкой
+  # (trim + case-insensitive) ИЛИ его категория = done. Ветка "ИЛИ done"
+  # безусловна: блокер, перепрыгнувший настроенный статус, всё равно
+  # отпускает зависимых.
+  return all(
+    linked.status.category in done-category
+    or (release_status and linked.status.name ~= release_status)
+    for linked in links
+  )
+  # Настройка НЕ валидируется против воркфлоу доски: неизвестное имя просто
+  # никогда не совпадёт, и остаётся ровно правило done-категории (деградируем,
+  # а не отказываем — блокер может жить в другом проекте). Дашборд показывает
+  # предупреждение, релиз-пасс — один warn за проход.
+  # Настройка не задана -> поведение байт-в-байт как до feature 032.
   # false -> прогон не стартует; тикет помечается waiting_dependencies.
   # Закрытие блокера НЕ обновляет updated заблокированного тикета -> reconcile-проход
   # перепроверяет все тикеты в триггер-статусах, пропущенные из-за зависимостей.
+  # Прогон, отпущенный ТОЛЬКО по совпадению имени статуса, получает событие
+  # run_events `source: 'dependency-release', early: true` (feature 032).
 
 onRunFinished(run, report | processFailure):
   if report.outcome == success:

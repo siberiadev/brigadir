@@ -1,4 +1,4 @@
-import { and, desc, eq, ne } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne } from 'drizzle-orm';
 import { type BrigadirDb, schema } from '@brigadir/database';
 import {
   normalizeReportArtifacts,
@@ -121,31 +121,197 @@ export function matchReportedBranches(
 ): BranchMatch {
   const continueBranches: Record<string, string> = {};
   const unmatched: string[] = [];
-  const byExact = new Map(repos.map((r) => [r.name, r.name]));
-  const byLower = new Map(repos.map((r) => [r.name.toLowerCase(), r.name]));
 
-  for (const entry of entries) {
-    const branch = entry.branch;
-    if (branch === undefined || branch.length === 0) continue;
-
-    let name: string | undefined;
-    if (entry.repo === undefined) {
-      // Flat v1 form carries no repo name. It is single-repo by definition, so
-      // it is attributable only when exactly one repo is mounted; guessing
-      // across two would risk basing a stage on the wrong repository.
-      if (repos.length === 1) name = repos[0].name;
-    } else {
-      name = byExact.get(entry.repo) ?? byLower.get(entry.repo.toLowerCase());
-    }
-
-    if (name === undefined) {
+  for (const { entry, branch, repoName } of resolveEntries(entries, repos)) {
+    if (repoName === undefined) {
       unmatched.push(entry.repo ?? branch);
       continue;
     }
     // First entry wins, deterministically — a duplicated repo name in one
     // report is agent error, not a reason to pick unpredictably.
-    if (continueBranches[name] === undefined) continueBranches[name] = branch;
+    if (continueBranches[repoName] === undefined) continueBranches[repoName] = branch;
   }
 
   return { continueBranches, unmatched };
+}
+
+/**
+ * The ONE implementation of "which mounted repo does this artifact entry name?"
+ * — shared by the ticket's own prior work and (feature 032) by blocker work, so
+ * the two can never drift into different matching rules. Entries without a
+ * branch are dropped here, as they always were.
+ */
+function resolveEntries(
+  entries: NormalizedRepoArtifact[],
+  repos: WorktreeRepo[],
+): { entry: NormalizedRepoArtifact; branch: string; repoName: string | undefined }[] {
+  const byExact = new Map(repos.map((r) => [r.name, r.name]));
+  const byLower = new Map(repos.map((r) => [r.name.toLowerCase(), r.name]));
+  const out: { entry: NormalizedRepoArtifact; branch: string; repoName: string | undefined }[] = [];
+
+  for (const entry of entries) {
+    const branch = entry.branch;
+    if (branch === undefined || branch.length === 0) continue;
+
+    let repoName: string | undefined;
+    if (entry.repo === undefined) {
+      // Flat v1 form carries no repo name. It is single-repo by definition, so
+      // it is attributable only when exactly one repo is mounted; guessing
+      // across two would risk basing a stage on the wrong repository.
+      if (repos.length === 1) repoName = repos[0].name;
+    } else {
+      repoName = byExact.get(entry.repo) ?? byLower.get(entry.repo.toLowerCase());
+    }
+    out.push({ entry, branch, repoName });
+  }
+  return out;
+}
+
+// --- Feature 032: inheriting a blocker's unmerged work ---
+
+/** One blocker ticket's latest usable reported work. */
+export interface BlockerWork {
+  /** The blocker's Jira key. */
+  key: string;
+  /** The blocker run whose report supplied the branches. */
+  runId: string;
+  entries: NormalizedRepoArtifact[];
+}
+
+/** A blocker key that contributed nothing — kept for the missing-branch matrix. */
+export interface BlockerMiss {
+  key: string;
+  /** `no_ticket`: never observed here (other project / not yet polled). */
+  reason: 'no_ticket' | 'no_artifacts';
+}
+
+/**
+ * The work each observed blocker left behind (feature 032, FR-006).
+ *
+ * Same shape and window as {@link getPriorWork}'s level 2 — the latest
+ * `succeeded` run that actually reported a branch — applied to the BLOCKER
+ * tickets instead of this one. Keys are returned in the order given; the caller
+ * sorts. A key with no ticket row or no usable report is not an error here: the
+ * caller decides whether it is quiet (blocker already done) or a human task
+ * (blocker still open), which is the whole asymmetry of FR-008.
+ */
+export async function getBlockerWork(
+  db: BrigadirDb,
+  opts: { workspaceId: string; blockedByKeys: string[]; currentTicketId: string },
+): Promise<{ found: BlockerWork[]; missing: BlockerMiss[] }> {
+  const keys = [...new Set(opts.blockedByKeys)].filter((k) => k.length > 0);
+  if (keys.length === 0) return { found: [], missing: [] };
+
+  const tickets = await db
+    .select({ id: schema.tickets.id, jiraKey: schema.tickets.jiraKey })
+    .from(schema.tickets)
+    .where(
+      and(
+        eq(schema.tickets.workspaceId, opts.workspaceId),
+        inArray(schema.tickets.jiraKey, keys),
+        ne(schema.tickets.id, opts.currentTicketId),
+      ),
+    );
+  const ticketIdByKey = new Map(tickets.map((t) => [t.jiraKey, t.id]));
+
+  const found: BlockerWork[] = [];
+  const missing: BlockerMiss[] = [];
+  for (const key of keys) {
+    const ticketId = ticketIdByKey.get(key);
+    if (ticketId === undefined) {
+      missing.push({ key, reason: 'no_ticket' });
+      continue;
+    }
+    const rows = await db
+      .select({ id: schema.runs.id, report: schema.runs.report })
+      .from(schema.runs)
+      .where(and(eq(schema.runs.ticketId, ticketId), eq(schema.runs.status, 'succeeded')))
+      .orderBy(desc(schema.runs.createdAt))
+      .limit(SCAN_WINDOW);
+    const hit = rows
+      .map((row) => ({ runId: row.id, entries: branchEntries(row.report) }))
+      .find((r) => r.entries.length > 0);
+    if (hit) found.push({ key, ...hit });
+    else missing.push({ key, reason: 'no_artifacts' });
+  }
+  return { found, missing };
+}
+
+/** Where ONE mounted repository starts, and what it inherited (data-model.md §3). */
+export interface RepoStartPlan {
+  source: 'own' | 'blocker' | 'default';
+  /** Absent ⇔ `source === 'default'`. */
+  startBranch?: string;
+  /** Extra blocker branches merged INTO `startBranch`; only for `source: 'blocker'`. */
+  mergeBranches: string[];
+  /** Provenance for the timeline events and the wrapper. */
+  blockers: { key: string; runId: string; branch: string }[];
+}
+
+export interface StartPlan {
+  /** Keyed by `WorktreeRepo.name`; every mounted repo has an entry. */
+  repos: Record<string, RepoStartPlan>;
+  /** Blocker artifacts naming repositories this run does not mount (FR-010). */
+  unmounted: { key: string; runId: string; repo: string; branch: string }[];
+  /** Unmatched entries from the ticket's OWN prior work — observability only. */
+  unmatched: string[];
+}
+
+/**
+ * Layered per-repository start resolution (feature 032, contracts §2).
+ *
+ * Per mounted repository the FIRST source that names a branch wins and no
+ * merging happens across levels:
+ *
+ *  1/2. the ticket's own prior work (`own`, produced by {@link getPriorWork} +
+ *       {@link matchReportedBranches}) — unchanged feature-023 behaviour;
+ *  3.   the blockers' work, in the order given (the caller sorts by key, so the
+ *       result is deterministic): the first blocker to name a repo sets its
+ *       start branch, later blockers naming the SAME repo are queued as merges;
+ *  4.   nothing — the repo starts from its default branch.
+ *
+ * Own work outranks a blocker per REPOSITORY, not per run: a dependent that
+ * already has its own branch in `api` still inherits `web` from its blocker.
+ */
+export function buildStartPlan(opts: {
+  repos: WorktreeRepo[];
+  own: BranchMatch;
+  blockerWork: BlockerWork[];
+}): StartPlan {
+  const plan: Record<string, RepoStartPlan> = {};
+  for (const repo of opts.repos) {
+    const ownBranch = opts.own.continueBranches[repo.name];
+    plan[repo.name] = ownBranch
+      ? { source: 'own', startBranch: ownBranch, mergeBranches: [], blockers: [] }
+      : { source: 'default', mergeBranches: [], blockers: [] };
+  }
+
+  const unmounted: StartPlan['unmounted'] = [];
+  for (const blocker of opts.blockerWork) {
+    for (const { entry, branch, repoName } of resolveEntries(blocker.entries, opts.repos)) {
+      if (repoName === undefined) {
+        // FR-010: the blocker changed a repository this run does not mount.
+        // Silently ignoring it is exactly the failure this feature exists to
+        // prevent, so it is surfaced instead of being dropped.
+        unmounted.push({ key: blocker.key, runId: blocker.runId, repo: entry.repo ?? branch, branch });
+        continue;
+      }
+      const target = plan[repoName];
+      if (target.source === 'own') continue; // own work wins for this repo
+      if (target.source === 'default') {
+        target.source = 'blocker';
+        target.startBranch = branch;
+        target.blockers = [{ key: blocker.key, runId: blocker.runId, branch }];
+        continue;
+      }
+      // A second blocker naming the same repo: merged into the start point in
+      // this (deterministic) order — never silently ignored, never "last wins".
+      if (target.startBranch === branch) continue;
+      if (target.mergeBranches.includes(branch)) continue;
+      target.mergeBranches.push(branch);
+      target.blockers.push({ key: blocker.key, runId: blocker.runId, branch });
+    }
+  }
+
+  return { repos: plan, unmounted, unmatched: opts.own.unmatched };
 }
