@@ -34,9 +34,12 @@ Feature suites (see contracts/*.md §test contract for the full matrices):
 ## 3. Manual end-to-end walk (dev stack)
 
 1. `docker compose up --build` (postgres, redis, backend, worker); dashboard on the usual port.
-2. Workspace settings → set **Dependency release status** to `In Review`.
-   - Type a nonsense status → warning chip appears ("not observed on this board"), save still
-     allowed; clear it back to `In Review`.
+2. Workspace settings → General → **Edit** → set **Dependency release status** to `In Review` →
+   Save. (Read-only in the descriptions block; edited only in the modal, per the Settings-tab
+   convention.)
+   - Type a nonsense status → warning chip appears in the modal ("not observed on this board"),
+     save still allowed; clear it back to `In Review`.
+   - Clear the field entirely → the setting is removed (back to the done-category rule).
 3. On the Jira board create A ← blocked-by — B (B "is blocked by" A), both with Components /
    statuses matching one agent's trigger flow.
 4. Move A into the agent's trigger status; let its run finish (agent pushes `run/A`, reports it).
