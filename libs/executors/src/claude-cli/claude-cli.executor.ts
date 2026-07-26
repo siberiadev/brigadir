@@ -10,6 +10,7 @@ import {
   schema,
   getBrigadirAgentTemplate,
   ensureSetupExecutor,
+  createKeyedTicketTask,
   SETUP_EXECUTOR_NAME,
 } from '@brigadir/database';
 import { AGENTS_CONFIG } from '@brigadir/app-config';
@@ -44,6 +45,9 @@ import { ClaudeStreamParser, type TerminalResult } from './stream-parser';
 import {
   prepareAll,
   cleanupAll,
+  ensureCaches,
+  branchExistsOnOrigin,
+  BlockerMergeConflictError,
   type WorktreeRepo,
   type MultiPrepareResult,
 } from './worktree';
@@ -53,18 +57,50 @@ import {
   RepositoryScopeUndeterminableError,
   type NarrowResult,
 } from './scope-ticket';
-import { buildWrapperText } from './wrapper';
+import { buildWrapperText, type LinkedTicketEntry } from './wrapper';
 import { writeMcpConfig, resolveMcpConfigRoot, type WrittenMcpConfig } from './mcp-config';
 import { resolveMcpServerEntryPath } from './mcp-server-path';
 import { buildFeatureContextSection } from './feature-context';
 import {
   getPriorWork,
   matchReportedBranches,
+  getBlockerWork,
+  buildStartPlan,
   type PriorWork,
   type BranchMatch,
+  type StartPlan,
 } from './prior-work';
+import {
+  blockerBranchLostTask,
+  blockerMergeConflictTask,
+  blockerRepoUnmountedTask,
+  type BlockerTask,
+} from './blocker-tasks';
 
 const STDERR_TAIL_BYTES = 16 * 1024;
+
+/** A blocker branch that dropped out of the plan, and the blocker's live status. */
+interface DroppedBlocker {
+  key: string;
+  /** Null when the blocker produced nothing at all (no ticket row / no report). */
+  repo: string | null;
+  branch: string | null;
+  /** `"<name>|<category>"` from the live fetch; undefined if Jira did not return the key. */
+  status: string | undefined;
+}
+
+/** What a run inherited from its blockers (feature 032), consumed by prepare + wrapper. */
+interface InheritanceResult {
+  /** Own continue-branches merged with the blocker-sourced start branches. */
+  continueBranches: Record<string, string>;
+  /** Extra blocker branches to merge, per repo (diamonds only). */
+  mergeBranches: Record<string, string[]>;
+  plan: StartPlan;
+  dropped: DroppedBlocker[];
+  unmountedReported: StartPlan['unmounted'];
+  /** The `## Linked tickets` view-model for the wrapper. */
+  linkedTickets: LinkedTicketEntry[];
+}
 
 /**
  * DI token for the harness's provider preset (feature 025). The bare class
@@ -159,6 +195,32 @@ class StderrTail {
   }
 }
 
+/**
+ * Feature 032: the `## Linked tickets` view-model — one entry per DIRECT
+ * blocker, in key order, from data prepare already has (the batched status
+ * fetch and the blockers' reports). No extra Jira call.
+ *
+ * A blocker with no usable report still gets a line: "this ticket is chained to
+ * that one" is useful context on its own, and the missing branch is already
+ * being surfaced through the timeline and the human queue.
+ */
+function buildLinkedTickets(
+  keys: string[],
+  found: { key: string; entries: { branch?: string; pr_url?: string }[] }[],
+  statuses: Map<string, string>,
+): LinkedTicketEntry[] {
+  const workByKey = new Map(found.map((f) => [f.key, f]));
+  return [...keys].sort().map((key) => {
+    const entry = workByKey.get(key)?.entries.find((e) => e.branch);
+    return {
+      key,
+      status: (statuses.get(key) ?? '').split('|')[0] || 'unknown',
+      ...(entry?.branch ? { branch: entry.branch } : {}),
+      ...(entry?.pr_url ? { prUrl: entry.pr_url } : {}),
+    };
+  });
+}
+
 /** Was this outcome one a human should be able to inspect the worktree for? */
 function runFailed(result: ExecutorResult): boolean {
   if (result.exitStatus !== 'completed') return true;
@@ -227,6 +289,10 @@ export class ClaudeCliExecutor implements AgentExecutor {
     // no-repo runs. `workspace` stays null exactly for the scratch case.
     let workspaceDir: string;
     let workspace: MultiPrepareResult | null = null;
+    // Feature 032: what this run inherited from its blockers. Declared out here
+    // so the wrapper (below) and the merge-conflict handler (in the catch) can
+    // both see it. Null for no-repo, ticketless, and blocker-free runs.
+    let inherit: InheritanceResult | null = null;
     if (noRepo) {
       // feature 010 (FR-018, Constitution V): a no-repository run (the
       // orchestrator's triage) runs from a scratch temp dir — no clone, no
@@ -256,7 +322,6 @@ export class ClaudeCliExecutor implements AgentExecutor {
         // work exists, and silently starting from the default branch is the
         // false-success mode this feature exists to prevent. Setup runs are
         // ticketless — there is no chain to continue.
-        let continueBranches: Record<string, string> = {};
         let prior: PriorWork | undefined;
         let matched: BranchMatch = { continueBranches: {}, unmatched: [] };
         if (ctx.ticket && ticketId) {
@@ -268,23 +333,56 @@ export class ClaudeCliExecutor implements AgentExecutor {
           matched = prior
             ? matchReportedBranches(prior.entries, repos)
             : { continueBranches: {}, unmatched: [] };
-          continueBranches = matched.continueBranches;
         }
+
+        // Feature 032: caches are ensured FIRST (their `fetch --prune` is what
+        // makes the origin probes below truthful), then the blockers' work is
+        // resolved against them, and only then are worktrees added.
+        const caches = await ensureCaches(repos, runtimeConfig.repoCacheRoot);
+        inherit = await this.resolveInheritance({
+          ctx,
+          ticketId,
+          workspaceId,
+          repos,
+          caches,
+          own: matched,
+        });
+
         workspace = await prepareAll(
           repos,
           ctx.runId,
           runtimeConfig.worktreeRoot,
           runtimeConfig.repoCacheRoot,
-          { continueBranches },
+          {
+            continueBranches: inherit.continueBranches,
+            mergeBranches: inherit.mergeBranches,
+            caches,
+          },
         );
         // Feature 024: record start-ref events AFTER prepare, so each carries
         // the resolved startSha (the gate baseline). A prepare that throws
         // above writes no rows — such a run fails loudly before an agent
         // starts and hands nothing off.
         if (ctx.ticket && ticketId) {
-          await this.recordStartRefEvent(ctx.runId, workspace.repos, prior, matched);
+          await this.recordStartRefEvent(ctx.runId, workspace.repos, prior, matched, inherit);
         }
       } catch (err) {
+        // Feature 032: a diamond whose blocker branches conflict is not a
+        // generic prepare fault — it is a specific, actionable human case, and
+        // the run must not just die with a git message nobody can act on.
+        if (err instanceof BlockerMergeConflictError && ctx.ticket && ticketId) {
+          await this.raiseBlockerTask(
+            workspaceId,
+            ticketId,
+            blockerMergeConflictTask({
+              ticketKey: ctx.ticket.key,
+              repo: err.repoName,
+              startBranch: err.startRef.replace(/^origin\//, ''),
+              mergeBranches: err.mergeBranches,
+              blockerKeys: inherit?.plan.repos[err.repoName]?.blockers.map((b) => b.key) ?? [],
+            }),
+          );
+        }
         return { exitStatus: 'crashed', diagnostics: err instanceof Error ? err.message : String(err) };
       }
       workspaceDir = workspace.parentDir;
@@ -328,14 +426,36 @@ export class ClaudeCliExecutor implements AgentExecutor {
         buildWrapperText(ctx, workspaceDir, {
           useCallbackChannel: runtimeConfig.useCallbackChannel,
           featureContextSection,
-          repos: workspace?.repos.map((r) => ({
-            name: r.repo.name,
-            absPath: r.worktreeDir,
-            defaultBranch: r.repo.defaultBranch,
-            continueBranch: r.start.continueBranch,
-          })),
+          repos: workspace?.repos.map((r) => {
+            const repoPlan = inherit?.plan.repos[r.repo.name];
+            const blockers = repoPlan?.source === 'blocker' ? repoPlan.blockers : [];
+            const merged = r.start.mergedBranches ?? [];
+            return {
+              name: r.repo.name,
+              absPath: r.worktreeDir,
+              defaultBranch: r.repo.defaultBranch,
+              continueBranch: r.start.continueBranch,
+              // Feature 032: state the provenance so the agent knows whether
+              // this branch is ITS chain's work or a dependency it merely reads.
+              provenance:
+                blockers.length > 0 && merged.length > 0
+                  ? ('merged_blockers' as const)
+                  : blockers.length > 0
+                    ? ('inherited_blocker' as const)
+                    : r.start.continueBranch
+                      ? ('continue_own' as const)
+                      : ('default' as const),
+              ...(blockers.length > 0 ? { blockerKey: blockers[0].key } : {}),
+              ...(merged.length > 0
+                ? { mergedFrom: blockers.map((b) => ({ key: b.key, branch: b.branch })) }
+                : {}),
+            };
+          }),
           // Feature 020 (D4): non-empty only for ticket-narrowed runs.
           onDemandRepos: excludedRepos.map((r) => ({ name: r.name, url: r.url })),
+          // Feature 032: the direct blockers, from data already fetched during
+          // prepare — this adds no Jira call of its own.
+          linkedTickets: inherit?.linkedTickets ?? [],
         }),
       );
     } catch (err) {
@@ -802,6 +922,12 @@ export class ClaudeCliExecutor implements AgentExecutor {
             );
           }
         }
+        // This is the ONLY thing that decides which repositories a run mounts:
+        // the agent's base set, narrowed by the ticket's Components. Feature
+        // 032's branch inheritance reads this set and never adds to it (FR-010)
+        // — a blocker with work in an unmounted repository produces a
+        // `blocker_artifacts_unmounted` event and a human task, not a surprise
+        // extra clone with credentials the ticket's scope never granted.
         repos = narrowed.kind === 'resolved' ? narrowed.repos : resolved.repos;
         // D4: what narrowing left out stays reachable via the wrapper's
         // on-demand `.repos/<name>` note (empty for non-narrowed runs).
@@ -1034,6 +1160,258 @@ export class ClaudeCliExecutor implements AgentExecutor {
   }
 
   /**
+   * Feature 032 (contracts/branch-inheritance.md §§2-4): resolve what this run
+   * inherits from its blockers, and apply the missing-branch matrix.
+   *
+   * Runs whose ticket has no observed blockers do NO work here and no Jira
+   * fetch — their result is byte-identical to feature 023 (FR-016).
+   */
+  private async resolveInheritance(opts: {
+    ctx: RunContext;
+    ticketId: string | null;
+    workspaceId: string;
+    repos: WorktreeRepo[];
+    caches: Record<string, string>;
+    own: BranchMatch;
+  }): Promise<InheritanceResult> {
+    const { ctx, ticketId, workspaceId, repos, caches, own } = opts;
+    const empty: InheritanceResult = {
+      continueBranches: own.continueBranches,
+      mergeBranches: {},
+      plan: { repos: {}, unmounted: [], unmatched: own.unmatched },
+      dropped: [],
+      unmountedReported: [],
+      linkedTickets: [],
+    };
+    if (!ctx.ticket || !ticketId) return empty;
+
+    const [ticket] = await this.db
+      .select({ blockedBy: schema.tickets.blockedBy })
+      .from(schema.tickets)
+      .where(eq(schema.tickets.id, ticketId))
+      .limit(1);
+    // `null` (never observed since feature 032) and `[]` (observed, no links)
+    // mean the same thing here: nothing to inherit.
+    const blockedByKeys = [...((ticket?.blockedBy as string[] | null) ?? [])].sort();
+    if (blockedByKeys.length === 0) return empty;
+
+    const { found, missing } = await getBlockerWork(this.db, {
+      workspaceId,
+      blockedByKeys,
+      currentTicketId: ticketId,
+    });
+    if (found.length === 0 && missing.length === 0) return empty;
+
+    // ONE batched fetch for the blockers' LIVE status — the done/not-done
+    // asymmetry (FR-008) needs the status CATEGORY, which the tickets cache
+    // does not store, and it must be fresh at exactly this decision point
+    // (Principle I: Jira is the truth for status). A failure fails the run
+    // loudly rather than guessing: guessing "done" would silence a real
+    // problem, guessing "not done" would spam the human queue.
+    const statuses = await this.fetchBlockerStatuses(blockedByKeys);
+
+    const plan = buildStartPlan({ repos, own, blockerWork: found });
+
+    // The blocker branches that are no longer on origin (or were never usable)
+    // drop out of the plan here, before any worktree exists.
+    const dropped: DroppedBlocker[] = [];
+    for (const repo of repos) {
+      const repoPlan = plan.repos[repo.name];
+      if (repoPlan.source !== 'blocker') continue;
+      const surviving: typeof repoPlan.blockers = [];
+      for (const b of repoPlan.blockers) {
+        if (await branchExistsOnOrigin(caches[repo.name], b.branch)) {
+          surviving.push(b);
+          continue;
+        }
+        dropped.push({ key: b.key, repo: repo.name, branch: b.branch, status: statuses.get(b.key) });
+      }
+      if (surviving.length === 0) {
+        plan.repos[repo.name] = { source: 'default', mergeBranches: [], blockers: [] };
+      } else {
+        repoPlan.startBranch = surviving[0].branch;
+        repoPlan.mergeBranches = surviving.slice(1).map((b) => b.branch);
+        repoPlan.blockers = surviving;
+      }
+    }
+
+    // Blocker keys that produced nothing at all (no ticket row / no artifacts)
+    // join the same matrix — from the operator's side "the branch is gone" and
+    // "there never was one" are the same problem with the same fix.
+    for (const miss of missing) {
+      dropped.push({ key: miss.key, repo: null, branch: null, status: statuses.get(miss.key) });
+    }
+
+    await this.applyMissingBranchMatrix(ctx, workspaceId, ticketId, repos, dropped);
+    await this.reportUnmountedBlockerWork(ctx, workspaceId, ticketId, plan);
+
+    const continueBranches: Record<string, string> = { ...own.continueBranches };
+    const mergeBranches: Record<string, string[]> = {};
+    for (const [name, p] of Object.entries(plan.repos)) {
+      if (p.source === 'blocker' && p.startBranch) {
+        continueBranches[name] = p.startBranch;
+        if (p.mergeBranches.length > 0) mergeBranches[name] = p.mergeBranches;
+      }
+    }
+    return {
+      continueBranches,
+      mergeBranches,
+      plan,
+      dropped,
+      unmountedReported: plan.unmounted,
+      linkedTickets: buildLinkedTickets(blockedByKeys, found, statuses),
+    };
+  }
+
+  /**
+   * ONE `key in (…)` search for the blockers' live status. No silent fallback
+   * (constitution, Technology Constraints): a fetch failure throws, naming the
+   * keys, and the caller turns it into a crashed run with those diagnostics.
+   */
+  private async fetchBlockerStatuses(keys: string[]): Promise<Map<string, string>> {
+    try {
+      const issues = await this.jira.searchUpdated(`key in (${keys.join(', ')})`, ['status']);
+      return new Map(
+        issues.map((i) => [
+          i.key,
+          `${i.fields.status.name}|${i.fields.status.statusCategory.key}`,
+        ]),
+      );
+    } catch (err) {
+      throw new Error(
+        `could not read the status of blocker(s) [${keys.join(', ')}] from Jira — ` +
+          'refusing to guess whether their branches should still exist: ' +
+          (err instanceof Error ? err.message : String(err)),
+        // The detail is inlined above because this message becomes the run's
+        // `diagnostics`; `cause` keeps the original for anything reading the chain.
+        { cause: err },
+      );
+    }
+  }
+
+  /**
+   * FR-008's asymmetry. A blocker whose branch is gone AND whose status
+   * category is `done` is the NORMAL end of a chain — its PR merged and the
+   * branch was deleted, so the default branch already contains the work and the
+   * run starts there quietly. A blocker that is still OPEN with nothing usable
+   * is a genuine gap: the run proceeds from the default branch (stalling the
+   * chain would be worse) but a person is told, exactly once.
+   */
+  private async applyMissingBranchMatrix(
+    ctx: RunContext,
+    workspaceId: string,
+    ticketId: string,
+    repos: WorktreeRepo[],
+    dropped: DroppedBlocker[],
+  ): Promise<void> {
+    for (const d of dropped) {
+      const [statusName, category] = (d.status ?? '|').split('|');
+      const repoName = d.repo ?? repos.map((r) => r.name).join(', ');
+      const defaultBranch = repos.find((r) => r.name === d.repo)?.defaultBranch ?? 'the default branch';
+      if (category === 'done') {
+        await this.recordBlockerDropEvent(ctx.runId, 'blocker_branch_merged', {
+          repo: d.repo,
+          blockers: [{ key: d.key, branch: d.branch }],
+          message:
+            `${repoName}: ${d.key} is done and left no branch on origin — its work is already in ` +
+            `${defaultBranch}; starting there.`,
+        });
+        continue;
+      }
+      await this.recordBlockerDropEvent(ctx.runId, 'blocker_no_artifact', {
+        repo: d.repo,
+        blockers: [{ key: d.key, branch: d.branch }],
+        message:
+          `${repoName}: ${d.key} is still open (${statusName || 'status unknown'}) but left no ` +
+          `usable branch — starting from ${defaultBranch} WITHOUT its work.`,
+      });
+      if (!ctx.ticket) continue;
+      await this.raiseBlockerTask(
+        workspaceId,
+        ticketId,
+        blockerBranchLostTask({
+          ticketKey: ctx.ticket.key,
+          blockerKey: d.key,
+          repo: d.repo ?? 'this run\'s repositories',
+          blockerStatus: statusName || 'unknown',
+          defaultBranch,
+        }),
+      );
+    }
+  }
+
+  /**
+   * FR-010: a blocker changed a repository this run does not mount. The run is
+   * fine — the mounted repositories still inherited correctly — but the agent
+   * cannot see that part of the chain, so it is a visible diagnostic rather
+   * than a silent omission. Mounting is NEVER widened here: repository scope
+   * comes solely from the agent's base set narrowed by ticket Components
+   * (`narrowByTicketComponents`), and inheritance follows scope, never
+   * overrides it.
+   */
+  private async reportUnmountedBlockerWork(
+    ctx: RunContext,
+    workspaceId: string,
+    ticketId: string,
+    plan: StartPlan,
+  ): Promise<void> {
+    for (const u of plan.unmounted) {
+      await this.recordBlockerDropEvent(ctx.runId, 'blocker_artifacts_unmounted', {
+        repo: u.repo,
+        blockers: [{ key: u.key, branch: u.branch }],
+        message:
+          `${u.key} reported work in "${u.repo}", which this run does not mount — add the ` +
+          `matching Component to ${ctx.ticket?.key ?? 'the ticket'}, or widen the agent's ` +
+          'repository scope.',
+      });
+      if (!ctx.ticket) continue;
+      await this.raiseBlockerTask(
+        workspaceId,
+        ticketId,
+        blockerRepoUnmountedTask({
+          ticketKey: ctx.ticket.key,
+          blockerKey: u.key,
+          repo: u.repo,
+        }),
+      );
+    }
+  }
+
+  /** A repo-less start-ref event for a blocker that contributed nothing (§5b). */
+  private async recordBlockerDropEvent(
+    runId: string,
+    decision: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    await this.db
+      .insert(schema.runEvents)
+      .values({ runId, type: 'log', payload: { source: 'start-ref', decision, ...payload } });
+  }
+
+  /**
+   * Raise one of the three inheritance diagnostics, deduped on its title.
+   * Strictly non-fatal: the run itself is unaffected by the queue write, and a
+   * failure here must never turn a working run into a crashed one.
+   */
+  private async raiseBlockerTask(
+    workspaceId: string,
+    ticketId: string,
+    task: BlockerTask,
+  ): Promise<void> {
+    try {
+      const { created } = await createKeyedTicketTask(this.db, {
+        workspaceId,
+        ticketId,
+        title: task.title,
+        details: task.details,
+      });
+      if (created) this.logger.warn(task.title);
+    } catch (err) {
+      this.logger.error(`could not raise "${task.kind}" human task: ${String(err)}`);
+    }
+  }
+
+  /**
    * Feature 023: one timeline event PER MOUNTED REPO recording which ref this
    * run started from and why, so "where did this stage begin?" is answerable
    * from the run timeline alone, without logs. Written unconditionally —
@@ -1047,13 +1425,37 @@ export class ClaudeCliExecutor implements AgentExecutor {
     repos: MultiPrepareResult['repos'],
     prior: PriorWork | undefined,
     matched: BranchMatch,
+    inherit: InheritanceResult | null,
   ): Promise<void> {
     const rows = repos.map(({ repo, start }) => {
       const continueBranch = start.continueBranch;
-      const decision = continueBranch ? 'report_confirmed' : 'default_branch';
-      const message = continueBranch
-        ? `${repo.name}: continuing branch ${continueBranch}, reported by run ${prior?.runId}`
-        : `${repo.name}: no branch reported by prior work — starting from ${repo.defaultBranch}`;
+      // Feature 032: the plan says WHOSE branch this is — the ticket's own
+      // prior work or a blocker's. Both arrive as `continueBranch` in the
+      // worktree layer (it is a pure git layer and does not know the
+      // difference), so provenance is read back from the plan here.
+      const repoPlan = inherit?.plan.repos[repo.name];
+      const blockers = repoPlan?.source === 'blocker' ? repoPlan.blockers : [];
+      const mergedBranches = start.mergedBranches ?? [];
+
+      let decision: string;
+      let message: string;
+      if (blockers.length > 0 && mergedBranches.length > 0) {
+        decision = 'merged_blockers';
+        message =
+          `${repo.name}: starting from ${continueBranch} merged with ` +
+          `${mergedBranches.join(', ')} — work inherited from ` +
+          `${blockers.map((b) => b.key).join(', ')}`;
+      } else if (blockers.length > 0) {
+        decision = 'inherited_from_blocker';
+        message = `${repo.name}: starting from ${continueBranch}, inherited from blocker ${blockers[0].key}`;
+      } else if (continueBranch) {
+        decision = 'report_confirmed';
+        message = `${repo.name}: continuing branch ${continueBranch}, reported by run ${prior?.runId}`;
+      } else {
+        decision = 'default_branch';
+        message = `${repo.name}: no branch reported by prior work — starting from ${repo.defaultBranch}`;
+      }
+
       return {
         runId,
         type: 'log' as const,
@@ -1064,9 +1466,13 @@ export class ClaudeCliExecutor implements AgentExecutor {
           decision,
           continueBranch: continueBranch ?? null,
           // Feature 024: the resolved commit — the completion gate's baseline.
+          // Feature 032: resolved AFTER any merge, so a merged start point is
+          // the baseline by construction.
           startSha: start.startSha,
           reportedByRunId: prior?.runId ?? null,
           unmatchedReportedRepos: matched.unmatched,
+          ...(blockers.length > 0 ? { blockers } : {}),
+          ...(mergedBranches.length > 0 ? { mergedBranches } : {}),
         },
       };
     });

@@ -84,14 +84,22 @@ const icon = computed<Component>(() => ICONS[props.item.iconKey] ?? CircleDot);
 
     <div v-if="item.body || item.kv" class="body-wrap">
       <div class="body" :class="{ collapsed: collapsible && !expanded }" :data-test="`event-body-${item.id}`">
-        <MarkdownText v-if="item.bodyFormat === 'markdown'" :source="item.body" />
-        <dl v-else-if="item.bodyFormat === 'kv' && item.kv" class="kv">
+        <!--
+          Feature 032: a sentence AND its machine facts can both be present
+          (the start-ref events), so the kv list renders after the body rather
+          than instead of it. Every earlier shape keeps its exact rendering:
+          body-only events hit one of the first three branches, kv-only events
+          fall straight through to the list.
+        -->
+        <MarkdownText v-if="item.bodyFormat === 'markdown' && item.body" :source="item.body" />
+        <pre v-else-if="item.bodyFormat === 'mono' && item.body" class="mono">{{ item.body }}</pre>
+        <pre v-else-if="!item.bodyFormat && item.body" class="mono">{{ item.body }}</pre>
+        <dl v-if="item.kv" class="kv">
           <template v-for="pair in item.kv" :key="pair.key">
             <dt>{{ pair.key }}</dt>
             <dd>{{ pair.value }}</dd>
           </template>
         </dl>
-        <pre v-else class="mono">{{ item.body }}</pre>
       </div>
       <button
         v-if="collapsible"

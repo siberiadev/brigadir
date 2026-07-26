@@ -4,7 +4,7 @@ import { and, eq, asc } from 'drizzle-orm';
 import { schema } from '@brigadir/database';
 import { encodeJiraCredentials, JiraClientFactory, type JiraClient } from '@brigadir/jira';
 import { PipelineService } from '@brigadir/pipeline';
-import { ReconcileService, type WorkspaceContext } from '@brigadir/ingest';
+import { ReconcileService, PollerService, type WorkspaceContext } from '@brigadir/ingest';
 import type { JiraIssue, JiraIssueLink, StatusCategoryKey } from '@brigadir/contracts';
 import { slugifyAgentKey } from '@brigadir/contracts';
 import { WorkerAppModule } from '../../apps/worker/src/app.module';
@@ -50,6 +50,7 @@ describe('sprint sequencing (feature 022)', () => {
   let worker: TestingModule;
   let pipeline: PipelineService;
   let reconcile: ReconcileService;
+  let poller: PollerService;
   let workspaceId: string;
   let executorId: string;
   let ws: WorkspaceContext;
@@ -94,6 +95,7 @@ describe('sprint sequencing (feature 022)', () => {
     await worker.get(RunProcessor).worker.waitUntilReady();
     pipeline = worker.get(PipelineService, { strict: false });
     reconcile = worker.get(ReconcileService, { strict: false });
+    poller = worker.get(PollerService, { strict: false });
     jira = await worker.get(JiraClientFactory, { strict: false }).forWorkspace(workspaceId);
   }, 240_000);
 
@@ -448,4 +450,101 @@ describe('sprint sequencing (feature 022)', () => {
     expect(row.blockedState).toBe('waiting');
     expect(row.blockedBy).toEqual([keyBlocker]);
   });
+
+  /**
+   * Feature 032 (T020, data-model.md §2): `blocked_by` changed meaning from
+   * "the open blockers, while this ticket is waiting" to "every inward
+   * 'is blocked by' link, as last observed" — an OBSERVATION written on every
+   * pass and retained after release, because the dependent's prepare step reads
+   * it to inherit its blockers' branches. `blocked_state` becomes the ONLY
+   * waiting signal.
+   *
+   * Covered here rather than in a poller unit spec: `libs/ingest` has none, and
+   * these writes only mean anything against a real Postgres + a Jira that
+   * actually returns issuelinks.
+   */
+  describe('blocked_by write matrix (feature 032)', () => {
+    const cacheOf = async (ticketId: string) => {
+      const [row] = await db.db
+        .select({ blockedBy: schema.tickets.blockedBy, blockedState: schema.tickets.blockedState })
+        .from(schema.tickets)
+        .where(eq(schema.tickets.id, ticketId));
+      return row;
+    };
+
+    it('the poller writes it on EVERY observation, including tickets that never wait', async () => {
+      const [keyBlocker, keyDep] = [`SEQ-${++counter}`, `SEQ-${++counter}`];
+      // A blocker that is ALREADY done: the dependent never waits, yet the link
+      // must still be recorded — that is exactly the case pre-032 lost.
+      mock.seedIssue(keyBlocker, { status: 'Done' });
+      mock.setCategory('Done', 'done');
+      mock.seedIssue(keyDep, { status: 'Some Non-Trigger Status' });
+      mock.addBlockedByLink(keyDep, keyBlocker);
+      const ticketDep = await seedTicket(keyDep);
+
+      await poller.pollAndDiff(ws, jira);
+
+      const row = await cacheOf(ticketDep);
+      expect(row.blockedBy).toEqual([keyBlocker]);
+      expect(row.blockedState).toBeNull();
+    });
+
+    it('writes [] for a ticket with no inward links at all', async () => {
+      const key = `SEQ-${++counter}`;
+      mock.seedIssue(key, { status: 'Some Non-Trigger Status' });
+      const ticketId = await seedTicket(key);
+
+      await poller.pollAndDiff(ws, jira);
+
+      expect((await cacheOf(ticketId)).blockedBy).toEqual([]);
+    });
+
+    it('retains the links after the ticket is released, and only clears blocked_state', async () => {
+      const status = `Matrix Ready ${++counter}`;
+      await seedAgent(`matrix-worker-${counter}`, status);
+      const [keyBlocker, keyDep] = [`SEQ-${++counter}`, `SEQ-${++counter}`];
+      mock.seedIssue(keyBlocker, { status: 'In Progress' });
+      mock.seedIssue(keyDep, { status });
+      mock.addBlockedByLink(keyDep, keyBlocker);
+      const ticketDep = await seedTicket(keyDep, status);
+
+      await reconcile.reEvaluateDependencies(ws, jira);
+      expect(await cacheOf(ticketDep)).toMatchObject({
+        blockedBy: [keyBlocker],
+        blockedState: 'waiting',
+      });
+
+      mock.moveBlocker(keyBlocker, 'Done', 'done');
+      await reconcile.reEvaluateDependencies(ws, jira);
+
+      const released = await cacheOf(ticketDep);
+      expect(released.blockedState).toBeNull();
+      // The chain survives the release — this is what branch inheritance reads.
+      expect(released.blockedBy).toEqual([keyBlocker]);
+    });
+
+    it('records EVERY link while waiting, not just the still-open ones', async () => {
+      const status = `Matrix Mixed ${++counter}`;
+      await seedAgent(`matrix-mixed-${counter}`, status);
+      const [doneBlocker, openBlocker, keyDep] = [
+        `SEQ-${++counter}`,
+        `SEQ-${++counter}`,
+        `SEQ-${++counter}`,
+      ];
+      mock.seedIssue(doneBlocker, { status: 'Done' });
+      mock.setCategory('Done', 'done');
+      mock.seedIssue(openBlocker, { status: 'In Progress' });
+      mock.seedIssue(keyDep, { status });
+      mock.addBlockedByLink(keyDep, doneBlocker);
+      mock.addBlockedByLink(keyDep, openBlocker);
+      const ticketDep = await seedTicket(keyDep, status);
+
+      await reconcile.reEvaluateDependencies(ws, jira);
+
+      const row = await cacheOf(ticketDep);
+      expect(row.blockedState).toBe('waiting');
+      expect([...(row.blockedBy as string[])].sort()).toEqual([doneBlocker, openBlocker].sort());
+    });
+  });
+
 });

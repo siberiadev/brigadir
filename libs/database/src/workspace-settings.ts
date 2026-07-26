@@ -151,6 +151,45 @@ export async function getTicketScoping(db: Db, workspaceId: string): Promise<boo
 }
 
 /**
+ * The blocker status at which "is blocked by" dependents may start (feature
+ * 032, FR-001). Absent / empty / whitespace-only ⇒ `undefined`, and every
+ * caller then passes NO `releaseStatus` to the dependency gate, which is
+ * byte-identical legacy behaviour (done-category only, FR-016). The value is
+ * a Jira status NAME and is deliberately never validated against the board's
+ * workflow — an unknown name simply never matches (spec: degrade, don't refuse).
+ */
+export async function getDependencyReleaseStatus(
+  db: Db,
+  workspaceId: string,
+): Promise<string | undefined> {
+  const raw = (await getWorkspaceSettings(db, workspaceId)).dependency_release_status;
+  const trimmed = raw?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * Set or clear the dependency release status (feature 032). `null` or a blank
+ * string DELETES the key rather than storing an empty value — "unset" is the
+ * byte-identical legacy state, and an empty string in the blob would be a
+ * second way to spell it (and would fail the schema's `min(1)`).
+ */
+export async function setDependencyReleaseStatus(
+  db: Db,
+  workspaceId: string,
+  value: string | null,
+): Promise<void> {
+  const current = await getWorkspaceSettings(db, workspaceId);
+  const next = { ...current };
+  const trimmed = value?.trim();
+  if (!trimmed) delete next.dependency_release_status;
+  else next.dependency_release_status = trimmed;
+  await db
+    .update(schema.workspaces)
+    .set({ settings: WorkspaceSettingsSchema.parse(next), updatedAt: sql`now()` })
+    .where(eq(schema.workspaces.id, workspaceId));
+}
+
+/**
  * The workspace's ordered repository list (feature 005; first = default). An
  * absent/empty `repositories` blob yields `[]`.
  */

@@ -9,7 +9,7 @@ import {
   setReconcileState,
 } from '@brigadir/database';
 import { type JiraClient, POLL_FIELDS, buildScopeJql, sinceClause, parseJiraPriority } from '@brigadir/jira';
-import { PipelineService } from '@brigadir/pipeline';
+import { PipelineService, allBlockedByKeys } from '@brigadir/pipeline';
 import type { JiraBoardType, JiraIssue } from '@brigadir/contracts';
 
 /** Resolved workspace the reconcile pass operates on. */
@@ -141,12 +141,18 @@ export class PollerService {
         }
         // Advance the diff cache only after the trigger fired (or was a no-op),
         // so a failure re-processes the same transition next pass.
+        // Feature 032: `blocked_by` rides along as an OBSERVATION written on
+        // EVERY pass (`[]` when the issue has no inward blocked-by links), not
+        // just while a ticket waits — the dependent's prepare step reads it to
+        // inherit its blockers' branches long after they were released.
+        // `issuelinks` is already in POLL_FIELDS, so this costs no extra fetch.
         await this.db
           .update(schema.tickets)
           .set({
             lastSeenStatus: toStatus,
             lastSeenUpdated: new Date(updatedIso),
             summary: issue.fields.summary,
+            blockedBy: allBlockedByKeys(issue),
             ...parseJiraPriority(issue),
           })
           .where(eq(schema.tickets.id, ticketId));

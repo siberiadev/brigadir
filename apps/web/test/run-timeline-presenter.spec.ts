@@ -343,3 +343,130 @@ describe('presentEvent — channel_failure (feature 027)', () => {
     expect(item.kv).toBeNull();
   });
 });
+
+/**
+ * Feature 032 (T053): the five new start-ref decisions + the early-release
+ * annotation. Every one renders as a readable sentence plus a compact kv list
+ * and a decision chip — never a JSON dump of the payload (feature-026 rules).
+ */
+describe('presentEvent — branch inheritance (feature 032)', () => {
+  const startRef = (payload: Record<string, unknown>) =>
+    presentEvent(event('log', { source: 'start-ref', ...payload }));
+
+  it('inherited_from_blocker: names the repo, the blocker and the branch', () => {
+    const item = startRef({
+      repo: 'product',
+      decision: 'inherited_from_blocker',
+      message: 'product: starting from run/ST3-101, inherited from blocker ST3-101',
+      continueBranch: 'run/ST3-101',
+      startSha: 'abcdef1234567890',
+      blockers: [{ key: 'ST3-101', branch: 'run/ST3-101', runId: 'r-1' }],
+    });
+    expect(item.title).toBe('Start point · product');
+    expect(item.body).toContain('inherited from blocker ST3-101');
+    expect(item.bodyFormat).toBe('markdown');
+    expect(item.tags).toEqual([{ label: 'inherited from blocker', tone: 'info' }]);
+    expect(item.kv).toEqual([
+      { key: 'branch', value: 'run/ST3-101' },
+      { key: 'blockers', value: 'ST3-101 (run/ST3-101)' },
+      { key: 'start commit', value: 'abcdef123456' },
+    ]);
+  });
+
+  it('merged_blockers: lists the merge order and both blockers', () => {
+    const item = startRef({
+      repo: 'product',
+      decision: 'merged_blockers',
+      message: 'product: starting from run/A merged with run/B',
+      continueBranch: 'run/A',
+      mergedBranches: ['run/B'],
+      blockers: [
+        { key: 'ST3-1', branch: 'run/A', runId: 'r-1' },
+        { key: 'ST3-2', branch: 'run/B', runId: 'r-2' },
+      ],
+    });
+    expect(item.tags).toEqual([{ label: 'merged blockers', tone: 'info' }]);
+    expect(item.kv).toContainEqual({ key: 'merged', value: 'run/B' });
+    expect(item.kv).toContainEqual({ key: 'blockers', value: 'ST3-1 (run/A), ST3-2 (run/B)' });
+  });
+
+  it('blocker_branch_merged is a quiet, untoned chip (the normal end of a chain)', () => {
+    const item = startRef({
+      repo: 'product',
+      decision: 'blocker_branch_merged',
+      message: 'product: ST3-1 is done and left no branch on origin',
+      blockers: [{ key: 'ST3-1', branch: null }],
+    });
+    expect(item.tags).toEqual([{ label: 'blocker merged', tone: undefined }]);
+  });
+
+  it('blocker_no_artifact warns — the run started WITHOUT its blocker work', () => {
+    const item = startRef({
+      repo: 'product',
+      decision: 'blocker_no_artifact',
+      message: 'product: ST3-1 is still open (In Review) but left no usable branch',
+      blockers: [{ key: 'ST3-1', branch: null }],
+    });
+    expect(item.tags).toEqual([{ label: 'blocker branch missing', tone: 'warning' }]);
+    expect(item.body).toContain('left no usable branch');
+  });
+
+  it('blocker_artifacts_unmounted warns and names the repository', () => {
+    const item = startRef({
+      decision: 'blocker_artifacts_unmounted',
+      repo: 'backend',
+      message: 'ST3-1 reported work in "backend", which this run does not mount',
+      blockers: [{ key: 'ST3-1', branch: 'run/API' }],
+    });
+    expect(item.title).toBe('Start point · backend');
+    expect(item.tags).toEqual([{ label: 'repository not mounted', tone: 'warning' }]);
+  });
+
+  it('keeps the feature-023/024 decisions readable', () => {
+    const confirmed = startRef({
+      repo: 'product',
+      decision: 'report_confirmed',
+      message: 'product: continuing branch run/OWN, reported by run r-0',
+      continueBranch: 'run/OWN',
+      startSha: 'deadbeefcafe0000',
+    });
+    expect(confirmed.tags).toEqual([{ label: 'continues own branch', tone: undefined }]);
+    const plain = startRef({
+      repo: 'infra',
+      decision: 'default_branch',
+      message: 'infra: no branch reported by prior work — starting from main',
+    });
+    expect(plain.tags).toEqual([{ label: 'default branch', tone: undefined }]);
+    expect(plain.kv).toBeNull();
+  });
+
+  it('early release: names the status that let the dependent start', () => {
+    const item = presentEvent(
+      event('log', {
+        source: 'dependency-release',
+        early: true,
+        matched_status: 'In Review',
+        blockers: [{ key: 'ST3-101', status: 'In Review' }],
+        message: 'Released early: blocker(s) [ST3-101] reached "In Review" without being done.',
+      }),
+    );
+    expect(item.title).toBe('Released early');
+    expect(item.tags).toEqual([{ label: 'early release', tone: 'info' }]);
+    expect(item.kv).toEqual([
+      { key: 'released at status', value: 'In Review' },
+      { key: 'blockers', value: 'ST3-101 (In Review)' },
+    ]);
+  });
+
+  it('never renders a raw JSON dump in the body', () => {
+    const item = startRef({
+      repo: 'product',
+      decision: 'inherited_from_blocker',
+      message: 'product: starting from run/A',
+      blockers: [{ key: 'ST3-1', branch: 'run/A', runId: 'r-1' }],
+      startSha: 'abc123',
+    });
+    expect(item.body).not.toContain('{');
+    expect(item.body).not.toContain('runId');
+  });
+});

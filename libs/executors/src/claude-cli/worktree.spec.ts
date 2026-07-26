@@ -5,7 +5,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { prepareAll, cleanupAll, WorktreePrepareError, type WorktreeRepo } from './worktree';
+import {
+  prepareAll,
+  cleanupAll,
+  ensureCaches,
+  branchExistsOnOrigin,
+  WorktreePrepareError,
+  type WorktreeRepo,
+} from './worktree';
 
 const execFileAsync = promisify(execFile);
 
@@ -330,3 +337,205 @@ describe('worktree prepareAll/cleanupAll (T080, feature 019 multi-repo; 023 deta
 // longer suggests a branch name to any run, setup runs included. Its removal
 // is covered by the executor wrapper-text assertions (no `create …` line) and
 // the grep sweep in the tasks list.
+
+/**
+ * Feature 032 (T039): merging two blockers' branches into one repository's
+ * start point. Real git in temp dirs — the merge semantics (`--no-ff`, the
+ * post-merge startSha, the conflict abort) are the whole point, and a mock
+ * would prove none of them.
+ */
+describe('worktree prepareAll — blocker branch merges (feature 032)', () => {
+  let root: string;
+  let remoteDir: string;
+  let repo: WorktreeRepo;
+  let worktreeRoot: string;
+  let repoCacheRoot: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'brigadir-merge-test-'));
+    remoteDir = join(root, 'remote');
+    await initRemote(remoteDir);
+    repo = { name: 'product', url: remoteDir, defaultBranch: 'main' };
+    worktreeRoot = join(root, 'worktrees');
+    repoCacheRoot = join(root, 'repos');
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const prep = (
+    repos: WorktreeRepo[],
+    runId: string,
+    opts: {
+      continueBranches?: Record<string, string>;
+      mergeBranches?: Record<string, string[]>;
+    } = {},
+  ) => prepareAll(repos, runId, worktreeRoot, repoCacheRoot, opts);
+
+  /** Push a branch carrying one commit that writes `file`. */
+  async function seedBranch(branch: string, file: string, content = 'work\n'): Promise<void> {
+    const prepared = await prep([repo], `seed-${branch.replace(/\W/g, '-')}`);
+    const wt = prepared.repos[0].worktreeDir;
+    await writeFile(join(wt, file), content);
+    await execFileAsync('git', ['add', '-A'], { cwd: wt });
+    await execFileAsync(
+      'git',
+      ['-c', 'user.email=t@e.com', '-c', 'user.name=T', 'commit', '-m', `work on ${branch}`],
+      { cwd: wt },
+    );
+    await execFileAsync('git', ['-C', wt, 'switch', '-C', branch]);
+    await execFileAsync('git', ['-C', wt, 'push', 'origin', branch]);
+    await cleanupAll(prepared);
+  }
+
+  it('merges a second blocker branch into the start point and records the order', async () => {
+    await seedBranch('run/A', 'a.txt');
+    await seedBranch('run/B', 'b.txt');
+
+    const result = await prep([repo], 'run-merge', {
+      continueBranches: { product: 'run/A' },
+      mergeBranches: { product: ['run/B'] },
+    });
+    const wt = result.repos[0];
+
+    // Both blockers' files are present in the start point.
+    expect(existsSync(join(wt.worktreeDir, 'a.txt'))).toBe(true);
+    expect(existsSync(join(wt.worktreeDir, 'b.txt'))).toBe(true);
+    expect(wt.start.mergedBranches).toEqual(['run/B']);
+    expect(wt.start.continueBranch).toBe('run/A');
+  });
+
+  it('startSha is resolved AFTER the merge — the completion gate baseline includes it', async () => {
+    await seedBranch('run/A', 'a.txt');
+    await seedBranch('run/B', 'b.txt');
+
+    const result = await prep([repo], 'run-sha', {
+      continueBranches: { product: 'run/A' },
+      mergeBranches: { product: ['run/B'] },
+    });
+    const wt = result.repos[0];
+    expect(wt.start.startSha).toBe(await revParse(wt.worktreeDir, 'HEAD'));
+    // Not the tip of either input branch — it is the new merge commit.
+    expect(wt.start.startSha).not.toBe(await revParse(wt.cacheDir, 'origin/run/A'));
+    expect(wt.start.startSha).not.toBe(await revParse(wt.cacheDir, 'origin/run/B'));
+  });
+
+  it('--no-ff: a merge commit exists even when the merge could fast-forward', async () => {
+    await seedBranch('run/A', 'a.txt');
+    // run/AHEAD builds directly on run/A, so merging it would fast-forward.
+    const prepared = await prep([repo], 'seed-ahead', { continueBranches: { product: 'run/A' } });
+    const wt0 = prepared.repos[0].worktreeDir;
+    await writeFile(join(wt0, 'ahead.txt'), 'more\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: wt0 });
+    await execFileAsync(
+      'git',
+      ['-c', 'user.email=t@e.com', '-c', 'user.name=T', 'commit', '-m', 'ahead'],
+      { cwd: wt0 },
+    );
+    await execFileAsync('git', ['-C', wt0, 'switch', '-C', 'run/AHEAD']);
+    await execFileAsync('git', ['-C', wt0, 'push', 'origin', 'run/AHEAD']);
+    await cleanupAll(prepared);
+
+    const result = await prep([repo], 'run-noff', {
+      continueBranches: { product: 'run/A' },
+      mergeBranches: { product: ['run/AHEAD'] },
+    });
+    const wt = result.repos[0].worktreeDir;
+    const { stdout } = await execFileAsync('git', ['-C', wt, 'rev-list', '--merges', '-n', '1', 'HEAD']);
+    expect(stdout.trim()).not.toBe('');
+  });
+
+  it('merges three branches in the given order', async () => {
+    await seedBranch('run/A', 'a.txt');
+    await seedBranch('run/B', 'b.txt');
+    await seedBranch('run/C', 'c.txt');
+
+    const result = await prep([repo], 'run-three', {
+      continueBranches: { product: 'run/A' },
+      mergeBranches: { product: ['run/B', 'run/C'] },
+    });
+    expect(result.repos[0].start.mergedBranches).toEqual(['run/B', 'run/C']);
+    for (const f of ['a.txt', 'b.txt', 'c.txt']) {
+      expect(existsSync(join(result.repos[0].worktreeDir, f))).toBe(true);
+    }
+  });
+
+  it('a conflicting merge fails loudly, names repo + branches, and unwinds everything', async () => {
+    // Both branches change the SAME file differently ⇒ guaranteed conflict.
+    await seedBranch('run/A', 'shared.txt', 'from A\n');
+    await seedBranch('run/B', 'shared.txt', 'from B\n');
+
+    await expect(
+      prep([repo], 'run-conflict', {
+        continueBranches: { product: 'run/A' },
+        mergeBranches: { product: ['run/B'] },
+      }),
+    ).rejects.toMatchObject({
+      name: 'BlockerMergeConflictError',
+      repoName: 'product',
+      mergeBranches: ['run/B'],
+    });
+    // All-or-nothing: no half-prepared workspace survives.
+    expect(existsSync(join(worktreeRoot, 'run-conflict'))).toBe(false);
+  });
+
+  it('a merge branch that is not on origin is rejected before any merge happens', async () => {
+    await seedBranch('run/A', 'a.txt');
+    await expect(
+      prep([repo], 'run-missing-merge', {
+        continueBranches: { product: 'run/A' },
+        mergeBranches: { product: ['run/NEVER-PUSHED'] },
+      }),
+    ).rejects.toThrow(/is not on origin/);
+  });
+
+  it('rejects a malformed merge branch name', async () => {
+    await seedBranch('run/A', 'a.txt');
+    await expect(
+      prep([repo], 'run-bad-merge', {
+        continueBranches: { product: 'run/A' },
+        mergeBranches: { product: ['--upload-pack=evil'] },
+      }),
+    ).rejects.toThrow(/not a valid branch name/);
+  });
+
+  it('no mergeBranches ⇒ byte-identical to feature 023 (no merge commit, no field)', async () => {
+    await seedBranch('run/A', 'a.txt');
+    const result = await prep([repo], 'run-plain', { continueBranches: { product: 'run/A' } });
+    expect(result.repos[0].start.mergedBranches).toBeUndefined();
+    expect(result.repos[0].start.startSha).toBe(
+      await revParse(result.repos[0].cacheDir, 'origin/run/A'),
+    );
+  });
+});
+
+describe('branchExistsOnOrigin (feature 032)', () => {
+  let root: string;
+  let repoCacheRoot: string;
+  let repo: WorktreeRepo;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'brigadir-probe-test-'));
+    const remoteDir = join(root, 'remote');
+    await initRemote(remoteDir);
+    repo = { name: 'product', url: remoteDir, defaultBranch: 'main' };
+    repoCacheRoot = join(root, 'repos');
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('answers true/false instead of throwing — a missing blocker branch is routine', async () => {
+    const caches = await ensureCaches([repo], repoCacheRoot);
+    expect(await branchExistsOnOrigin(caches.product, 'main')).toBe(true);
+    expect(await branchExistsOnOrigin(caches.product, 'run/NOPE')).toBe(false);
+  });
+
+  it('answers false (not throw) for an unusable branch name from a blocker report', async () => {
+    const caches = await ensureCaches([repo], repoCacheRoot);
+    expect(await branchExistsOnOrigin(caches.product, '--upload-pack=evil')).toBe(false);
+    expect(await branchExistsOnOrigin(caches.product, '')).toBe(false);
+  });
+});

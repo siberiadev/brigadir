@@ -165,6 +165,53 @@ describe('workspace settings + rotation + expiry badge (T141)', () => {
     expect(bad.status).toBe(422);
   });
 
+  it('dependency_release_status (feature 032) round-trips, trims, and clears; unknown names accepted', async () => {
+    const id = await seedWorkspace(null);
+    type Body = { dependency_release_status: string | null };
+    const put = (body: unknown) =>
+      fetch(`${url}/api/workspaces/${id}/settings`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify(body),
+      });
+
+    // Absent settings key ⇒ null (the done-category rule).
+    const before = await fetch(`${url}/api/workspaces/${id}`, { headers });
+    expect(((await before.json()) as Body).dependency_release_status).toBeNull();
+
+    // Set, with surrounding whitespace trimmed on the way in.
+    const set = await put({ dependency_release_status: '  In Review  ' });
+    expect(set.status).toBe(200);
+    expect(((await set.json()) as Body).dependency_release_status).toBe('In Review');
+    const [row] = await db.db.select().from(schema.workspaces).where(eq(schema.workspaces.id, id));
+    expect((row.settings as { dependency_release_status?: string }).dependency_release_status).toBe(
+      'In Review',
+    );
+
+    // A PUT without the field is merge-patch: the value stays.
+    const untouched = await put({ branch_prefix: 'feat' });
+    expect(((await untouched.json()) as Body).dependency_release_status).toBe('In Review');
+
+    // FR-004: a status the board's workflow does not contain is ACCEPTED —
+    // the gate degrades to the done-category rule; the dashboard warns.
+    const unknown = await put({ dependency_release_status: 'Totally Made Up' });
+    expect(unknown.status).toBe(200);
+    expect(((await unknown.json()) as Body).dependency_release_status).toBe('Totally Made Up');
+
+    // null clears the key entirely (not stored as an empty string).
+    const cleared = await put({ dependency_release_status: null });
+    expect(((await cleared.json()) as Body).dependency_release_status).toBeNull();
+    const [after] = await db.db.select().from(schema.workspaces).where(eq(schema.workspaces.id, id));
+    expect(after.settings as Record<string, unknown>).not.toHaveProperty(
+      'dependency_release_status',
+    );
+
+    // A blank string clears too — "unset" has exactly one representation.
+    await put({ dependency_release_status: 'In Review' });
+    const blanked = await put({ dependency_release_status: '   ' });
+    expect(((await blanked.json()) as Body).dependency_release_status).toBeNull();
+  });
+
   // --- feature 008 (FR-014): additive read-only response fields ---
 
   it('toResponse maps bot_email (decoded email only) + branch_prefix + scope_jql, api_token absent', async () => {

@@ -101,6 +101,11 @@ export const WorkspaceSettingsRequestSchema = z
     // Jira Components. Absent ⇒ unchanged (settings jsonb; no DDL — mirrors
     // WorkspaceSettings.ticket_scoping, OFF by default).
     ticket_scoping: z.boolean().optional(),
+    // Feature 032: the blocker status at which dependents may start. ABSENT ⇒
+    // unchanged; `null` or an empty/blank string ⇒ clear the key (back to the
+    // done-category rule). Deliberately NOT validated against the board
+    // workflow — an unknown name degrades, it does not refuse (spec FR-004).
+    dependency_release_status: z.string().nullable().optional(),
     // Feature 030: role-template source override. ABSENT ⇒ unchanged; `null` ⇒
     // clear the override (fall back to global/built-in). Token is tri-state.
     agent_instructions: AgentInstructionsSourceSchema.nullable().optional(),
@@ -184,6 +189,9 @@ export const WorkspaceResponseSchema = z
     // Feature 020 (D2b): ticket repository scoping via Jira Components. Absent
     // settings key ⇒ false (OFF).
     ticket_scoping: z.boolean(),
+    // Feature 032: the configured dependency release status (Jira status name)
+    // or null when unset — unset means the legacy done-category rule.
+    dependency_release_status: z.string().nullable(),
     // Feature 030: the workspace's role-template source override (non-secret;
     // null = no override) + whether a sealed token is stored (never the token)
     // + which level is effective for this workspace by configuration presence.
