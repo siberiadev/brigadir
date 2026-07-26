@@ -52,6 +52,15 @@ async function openModal(wrapper: VueWrapper, editBtn: string) {
   await wrapper.find(`[data-test="${editBtn}"]`).trigger('click');
   await flush();
 }
+/** The dependency-release-status ElSelect inside the (teleported) Edit modal. */
+function releaseSelect(wrapper: VueWrapper) {
+  const el = wrapper
+    .findAllComponents({ name: 'ElSelect' })
+    .find((s) => s.attributes('data-test') === 'dependency-release-status');
+  if (!el) throw new Error('no ElSelect with data-test=dependency-release-status');
+  return el;
+}
+
 async function setBodyInput(sel: string, value: string) {
   const el = bodyQ(sel) as HTMLInputElement;
   el.value = value;
@@ -173,6 +182,91 @@ describe('Settings panels — Edit modals', () => {
     await flush();
     expect(bodyQ('branch-prefix')).toBeNull();
     expect(wrapper.find('[data-test="config-branch-prefix"]').text()).toBe('hotfix');
+  });
+
+  /**
+   * Feature 032: the dependency release status is a CONFIGURATION VALUE, so it
+   * follows the tab's convention (реш. 2026-07-13) — read-only in the
+   * descriptions block, editable only inside the Edit modal. The ticket-scoping
+   * switch stays inline because it is a standalone toggle, not a value.
+   */
+  it('General panel shows the dependency release status read-only, with no inline control', async () => {
+    const wrapper = await mountPanel(GeneralPanel, {
+      ...sampleWorkspace,
+      dependency_release_status: 'In Review',
+    });
+    expect(wrapper.find('[data-test="config-dependency-release-status"]').text()).toBe('In Review');
+    // No editable control outside the modal.
+    expect(wrapper.find('[data-test="dependency-release-status"]').exists()).toBe(false);
+  });
+
+  it('General panel falls back to the default label when the status is unset', async () => {
+    const wrapper = await mountPanel(GeneralPanel);
+    expect(wrapper.find('[data-test="config-dependency-release-status"]').text()).toBe(
+      'Done only (default)',
+    );
+  });
+
+  it('General panel edit modal seeds and saves the dependency release status', async () => {
+    let current: WorkspaceResponse = { ...sampleWorkspace, dependency_release_status: 'In Review' };
+    let sent: { dependency_release_status?: string | null } | undefined;
+    server.use(
+      http.get('/api/workspaces/:id', () => HttpResponse.json(current)),
+      http.put('/api/workspaces/:id/settings', async ({ request }) => {
+        sent = (await request.json()) as { dependency_release_status?: string | null };
+        current = {
+          ...current,
+          dependency_release_status: sent.dependency_release_status ?? null,
+        };
+        return HttpResponse.json(current);
+      }),
+    );
+    const wrapper = mountWithProviders(GeneralPanel, { props: { id: sampleWorkspace.id } });
+    active = wrapper;
+    await flush();
+
+    await openModal(wrapper, 'edit-config');
+    // Seeds from the persisted response, inside the modal.
+    expect(releaseSelect(wrapper).props('modelValue')).toBe('In Review');
+
+    await releaseSelect(wrapper).setValue('QA');
+    await flush();
+    await clickBody('save-settings');
+    await flush();
+    await flush();
+
+    expect(sent?.dependency_release_status).toBe('QA');
+    expect(bodyQ('dependency-release-status')).toBeNull();
+    expect(wrapper.find('[data-test="config-dependency-release-status"]').text()).toBe('QA');
+  });
+
+  it('clearing the status in the modal sends null (clear), not undefined (unchanged)', async () => {
+    let current: WorkspaceResponse = { ...sampleWorkspace, dependency_release_status: 'In Review' };
+    let sent: Record<string, unknown> | undefined;
+    server.use(
+      http.get('/api/workspaces/:id', () => HttpResponse.json(current)),
+      http.put('/api/workspaces/:id/settings', async ({ request }) => {
+        sent = (await request.json()) as Record<string, unknown>;
+        current = { ...current, dependency_release_status: null };
+        return HttpResponse.json(current);
+      }),
+    );
+    const wrapper = mountWithProviders(GeneralPanel, { props: { id: sampleWorkspace.id } });
+    active = wrapper;
+    await flush();
+
+    await openModal(wrapper, 'edit-config');
+    await releaseSelect(wrapper).setValue('');
+    await flush();
+    await clickBody('save-settings');
+    await flush();
+    await flush();
+
+    // `undefined` would be read as "leave unchanged" by the merge-patch.
+    expect(sent).toHaveProperty('dependency_release_status', null);
+    expect(wrapper.find('[data-test="config-dependency-release-status"]').text()).toBe(
+      'Done only (default)',
+    );
   });
 
   it('General panel: cancelling sends no request and leaves data unchanged', async () => {
