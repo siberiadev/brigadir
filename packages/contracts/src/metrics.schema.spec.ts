@@ -110,7 +110,10 @@ describe('MetricsCostResponseSchema', () => {
     tokens_by_type: series(false),
     tokens_by_executor: series(false),
     tokens_by_model: series(false),
+    tokens_by_role: series(false),
+    cost_by_role: series(true),
     cost_per_run: series(true),
+    tokens_per_run: series(false),
     top_workspaces_by_cost: [
       { workspace_id: 'w-1', name: 'Payments', total_cost_usd: '42.0000' },
     ],
@@ -126,6 +129,15 @@ describe('MetricsCostResponseSchema', () => {
   it('requires the tokens_by_executor block (executor token breakdown)', () => {
     const { tokens_by_executor: _omit, ...missing } = valid;
     expect(MetricsCostResponseSchema.safeParse(missing).success).toBe(false);
+  });
+
+  it('requires the per-role and per-run token blocks', () => {
+    const { tokens_by_role: _r, ...noRole } = valid;
+    expect(MetricsCostResponseSchema.safeParse(noRole).success).toBe(false);
+    const { tokens_per_run: _t, ...noTpr } = valid;
+    expect(MetricsCostResponseSchema.safeParse(noTpr).success).toBe(false);
+    const { cost_by_role: _c, ...noCostRole } = valid;
+    expect(MetricsCostResponseSchema.safeParse(noCostRole).success).toBe(false);
   });
 
   it('rejects a float total_cost_usd in a top-workspace row (money is string)', () => {

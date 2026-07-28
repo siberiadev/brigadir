@@ -37,7 +37,16 @@ const sampleCost = {
     { key: 'claude-sonnet-5', points: [150, 300] },
     { key: '__unknown__', points: [0, 100] },
   ]),
+  tokens_by_role: tb([
+    { key: 'Developer', points: [100, 250] },
+    { key: '__unknown__', points: [50, 150] },
+  ]),
+  cost_by_role: tb([
+    { key: 'Developer', points: ['0.7000', '2.0000'] },
+    { key: '__unknown__', points: ['0.3000', '1.0000'] },
+  ]),
   cost_per_run: tb([{ key: 'cost_per_run', points: ['0.5000', '0.5000'] }]),
+  tokens_per_run: tb([{ key: 'tokens_per_run', points: [75, 200] }]),
   top_workspaces_by_cost: [{ workspace_id: 'w-1', name: 'Payments', total_cost_usd: '3.0000' }],
 };
 
@@ -51,11 +60,14 @@ async function mountCost(filters: { period: '7d'; workspace_id?: string } = { pe
 describe('MetricsCost (US2)', () => {
   it('renders the cost charts (incl. tokens-by-executor) and the indicative marker for kimi', async () => {
     const wrapper = await mountCost();
-    // 3 generic cards + the two distinctly-tagged cards (tokens-by-executor,
-    // top-workspaces) = 5 charts.
+    // 3 generic cards (spend, tokens-by-type, avg cost per run) + the
+    // distinctly-tagged cards below.
     expect(wrapper.findAll('[data-test="chart-card"]').length).toBe(3);
     expect(wrapper.find('[data-test="tokens-by-executor"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="tokens-by-model"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="tokens-by-role"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="cost-by-role"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="tokens-per-run"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="top-workspaces"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="cost-indicative"]').exists()).toBe(true);
   });

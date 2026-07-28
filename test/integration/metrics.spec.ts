@@ -225,7 +225,10 @@ describe('metrics timeline (feature 029)', () => {
         body.tokens_by_type,
         body.tokens_by_executor,
         body.tokens_by_model,
+        body.tokens_by_role,
+        body.cost_by_role,
         body.cost_per_run,
+        body.tokens_per_run,
       ]) {
         for (const s of block.series) expect(s.points.length).toBe(block.buckets.length);
       }
@@ -271,6 +274,65 @@ describe('metrics timeline (feature 029)', () => {
 
       // cost_per_run is a single money series.
       expect(body.cost_per_run.series.map((s: { key: string }) => s.key)).toEqual(['cost_per_run']);
+
+      // tokens_per_run is a single NUMERIC series; all seeded runs sit in the
+      // window, so the bucket averages sum to something positive.
+      expect(body.tokens_per_run.series.map((s: { key: string }) => s.key)).toEqual([
+        'tokens_per_run',
+      ]);
+      const tpr = body.tokens_per_run.series[0];
+      expect(tpr.points.every((p: unknown) => typeof p === 'number')).toBe(true);
+      expect(sumPoints(tpr.points)).toBeGreaterThan(0);
+    });
+
+    it('splits tokens and cost by agent role; NULL role lands in __unknown__ (FR-014)', async () => {
+      // Own workspace so the sums are exact: one Planner run (165 tokens,
+      // $0.30) + one NULL-role run (330 tokens, $0.10), same created_at.
+      const p5 = await seedPipeline(db.db, { ticketKey: 'BRIG-5' });
+      const [planner] = await db.db
+        .insert(schema.agents)
+        .values({
+          workspaceId: p5.workspaceId,
+          executorId: p5.executorId,
+          name: 'Planner',
+          key: 'planner',
+          role: 'Planner',
+          instruction: 'x',
+          statusSuccess: 'S',
+          statusFailure: 'F',
+        })
+        .returning({ id: schema.agents.id });
+      await db.db.insert(schema.runs).values([
+        { workspaceId: p5.workspaceId, ticketId: p5.ticketId, agentId: planner.id, executorType: 'mock', status: 'succeeded', createdAt: hoursAgo(2), costUsd: '0.3000', usage: { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 10, cache_creation_input_tokens: 5 } },
+        { workspaceId: p5.workspaceId, ticketId: p5.ticketId, agentId: p5.agentId, executorType: 'mock', status: 'failed', createdAt: hoursAgo(2), costUsd: '0.1000', usage: { input_tokens: 200, output_tokens: 100, cache_read_input_tokens: 20, cache_creation_input_tokens: 10 } },
+      ]);
+
+      const body = await get(`/api/metrics/cost?workspace_id=${p5.workspaceId}`);
+
+      const roleTokens = Object.fromEntries(
+        body.tokens_by_role.series.map((s: { key: string; points: (number | string)[] }) => [
+          s.key,
+          sumPoints(s.points),
+        ]),
+      );
+      expect(roleTokens.Planner).toBe(165);
+      expect(roleTokens.__unknown__).toBe(330);
+
+      const roleCost = Object.fromEntries(
+        body.cost_by_role.series.map((s: { key: string; points: (number | string)[] }) => [
+          s.key,
+          sumPoints(s.points),
+        ]),
+      );
+      expect(roleCost.Planner).toBeCloseTo(0.3, 4);
+      expect(roleCost.__unknown__).toBeCloseTo(0.1, 4);
+      // Money points stay strings on the role stack.
+      for (const s of body.cost_by_role.series) {
+        expect(s.points.every((p: unknown) => typeof p === 'string')).toBe(true);
+      }
+
+      // Both runs share one bucket → average = (165 + 330) / 2.
+      expect(sumPoints(body.tokens_per_run.series[0].points)).toBeCloseTo(247.5, 4);
     });
 
     it('serves top_workspaces_by_cost only without a workspace filter (US2 AS3)', async () => {

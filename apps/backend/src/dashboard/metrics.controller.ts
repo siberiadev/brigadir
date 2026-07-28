@@ -141,14 +141,14 @@ export class MetricsController {
     const tokenSum = (jsonKey: string) =>
       sql<number>`coalesce(sum((${usage} ->> ${jsonKey})::bigint), 0)::float8`;
     // All token types summed per row (per-key coalesce so a missing field never
-    // NULLs out the whole sum), then summed over the bucket — the executor twin
-    // of the cost-by-executor stack.
-    const totalTokenSum = sql<number>`coalesce(sum(
-      coalesce((${usage} ->> 'input_tokens')::bigint, 0)
+    // NULLs out the whole sum) — shared by the bucket total and the per-run
+    // average below.
+    const rowTokens = sql`coalesce((${usage} ->> 'input_tokens')::bigint, 0)
       + coalesce((${usage} ->> 'output_tokens')::bigint, 0)
       + coalesce((${usage} ->> 'cache_read_input_tokens')::bigint, 0)
-      + coalesce((${usage} ->> 'cache_creation_input_tokens')::bigint, 0)
-    ), 0)::float8`;
+      + coalesce((${usage} ->> 'cache_creation_input_tokens')::bigint, 0)`;
+    // Summed over the bucket — the executor twin of the cost-by-executor stack.
+    const totalTokenSum = sql<number>`coalesce(sum(${rowTokens}), 0)::float8`;
 
     // Tokens attributed to the MODEL each run actually used. The model is not a
     // column on `runs` — it is captured in the run's session-init `log` event
@@ -169,7 +169,22 @@ export class MetricsController {
       .as('rm');
     const modelKey = sql<string>`coalesce(${modelLookup.model}, '__unknown__')`;
 
-    const [costRows, tokenRows, tokenExecRows, tokenModelRows, cprRows, topRows] = await Promise.all([
+    // Agent-role breakdown (runs.agent_id → agents.role, the activity-tab
+    // by_role convention). NULL role → '__unknown__'; the literal is inlined
+    // (not a param) so SELECT and GROUP BY match.
+    const roleKey = sql<string>`coalesce(${schema.agents.role}, '__unknown__')`;
+
+    const [
+      costRows,
+      tokenRows,
+      tokenExecRows,
+      tokenModelRows,
+      tokenRoleRows,
+      costRoleRows,
+      cprRows,
+      tprRows,
+      topRows,
+    ] = await Promise.all([
       this.db
         .select({
           bucketMs: bucket,
@@ -212,10 +227,41 @@ export class MetricsController {
       this.db
         .select({
           bucketMs: bucket,
+          key: roleKey,
+          value: totalTokenSum,
+        })
+        .from(schema.runs)
+        .innerJoin(schema.agents, eq(schema.runs.agentId, schema.agents.id))
+        .where(runWhere)
+        .groupBy(bucket, roleKey),
+      this.db
+        .select({
+          bucketMs: bucket,
+          key: roleKey,
+          value: sql<string>`coalesce(sum(${schema.runs.costUsd}), 0)::text`,
+        })
+        .from(schema.runs)
+        .innerJoin(schema.agents, eq(schema.runs.agentId, schema.agents.id))
+        .where(runWhere)
+        .groupBy(bucket, roleKey),
+      this.db
+        .select({
+          bucketMs: bucket,
           // null when a bucket has no runs; NULL-cost buckets → null → "0" fill.
           value: sql<
             string | null
           >`(sum(${schema.runs.costUsd}) / nullif(count(*), 0))::text`,
+        })
+        .from(schema.runs)
+        .where(runWhere)
+        .groupBy(bucket),
+      this.db
+        .select({
+          bucketMs: bucket,
+          // Average tokens per run in the bucket; per-row coalesce means runs
+          // with no usage still count in the denominator (a real run that
+          // reported nothing dilutes the average, it doesn't vanish).
+          value: sql<number | null>`(sum(${rowTokens}) / nullif(count(*), 0))::float8`,
         })
         .from(schema.runs)
         .where(runWhere)
@@ -267,10 +313,25 @@ export class MetricsController {
         buckets,
         series: pivotSeries(tokenModelRows, buckets),
       },
+      tokens_by_role: {
+        granularity,
+        buckets,
+        series: pivotSeries(tokenRoleRows, buckets),
+      },
+      cost_by_role: {
+        granularity,
+        buckets,
+        series: pivotSeries(costRoleRows, buckets, { money: true }),
+      },
       cost_per_run: {
         granularity,
         buckets,
         series: singleSeries(cprRows, buckets, 'cost_per_run', { money: true }),
+      },
+      tokens_per_run: {
+        granularity,
+        buckets,
+        series: singleSeries(tprRows, buckets, 'tokens_per_run'),
       },
       top_workspaces_by_cost: topRows.map((r) => ({
         workspace_id: r.workspaceId,

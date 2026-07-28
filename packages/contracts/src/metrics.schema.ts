@@ -122,8 +122,17 @@ export const MetricsCostResponseSchema = z
     // Total tokens stacked by the MODEL each run used (from its session-init log
     // event); '__unknown__' for runs with no model log. Points numeric.
     tokens_by_model: TimeBucketedSeriesSchema,
+    // Total tokens stacked by the AGENT ROLE of each run (runs.agent_id →
+    // agents.role, the activity-tab by_role convention); '__unknown__' when the
+    // role is NULL. Points numeric.
+    tokens_by_role: TimeBucketedSeriesSchema,
+    // Spend stacked by agent role — same breakdown, money strings.
+    cost_by_role: TimeBucketedSeriesSchema,
     // One series key='cost_per_run'; points money strings.
     cost_per_run: TimeBucketedSeriesSchema,
+    // One series key='tokens_per_run' — average tokens (all types summed) per
+    // run in the bucket; points numeric. The token twin of `cost_per_run`.
+    tokens_per_run: TimeBucketedSeriesSchema,
     // Top-10 by spend; present ONLY when workspace_id is unset, else [] (US2 AS3).
     top_workspaces_by_cost: z.array(TopWorkspaceCostSchema),
   })
