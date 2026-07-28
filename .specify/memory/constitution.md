@@ -82,8 +82,10 @@ idempotency layers:
 2. **Queue dedup** — BullMQ `deduplication: { id: ticket:agent }` on
    enqueue.
 3. **Database guard** — partial unique index `runs_one_active` on
-   `(ticket_id, agent_id)` WHERE status is active (`queued`, `running`,
-   `awaiting_human`).
+   `(ticket_id)` WHERE status is active (`queued`, `running`,
+   `awaiting_human`). Tightened from `(ticket_id, agent_id)` by migration
+   0011 (SXF-1174 Problem 6): one active run per TICKET — two agents must
+   never work one ticket concurrently.
 
 No layer may be removed or relied upon alone; each guards against failures
 the others cannot see (replayed webhooks, queue races, concurrent
@@ -92,7 +94,7 @@ through the same three layers.
 
 **Rationale**: Webhooks replay, pollers overlap with webhooks, and queues
 race — only defense in depth guarantees at most one active run per
-(ticket, agent).
+ticket.
 
 ### III. System-Only Jira Writes
 

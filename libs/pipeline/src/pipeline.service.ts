@@ -1,8 +1,8 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema, getDependencyReleaseStatus } from '@brigadir/database';
 import { JiraClientFactory, buildRunComment, NoTransitionPath } from '@brigadir/jira';
-import { RunTriggerService } from '@brigadir/runs';
+import { RunTriggerService, type TriggerResult } from '@brigadir/runs';
 import { HumanTaskService } from '@brigadir/human-tasks';
 import type { AgentReport, JiraBoardType, JiraIssue, TriggerEvent } from '@brigadir/contracts';
 import {
@@ -414,7 +414,7 @@ export class PipelineService {
 
     const scenario = mockScenarioOf(orchestrator.behavior);
     const routeTarget = routeTargetOf(orchestrator.behavior);
-    await this.runTrigger.trigger({
+    const res = await this.runTrigger.trigger({
       ticketId,
       agentId: orchestrator.id,
       triggerEvent: {
@@ -424,13 +424,29 @@ export class PipelineService {
         ...(routeTarget ? { target_agent: routeTarget } : {}),
       } as TriggerEvent,
     });
+    if (res.deduplicated) {
+      // Per-ticket runs_one_active (SXF-1174 Problem 6): another agent's active
+      // run holds the slot — no triage run exists for this failure. Recorded
+      // honestly: the marker must not claim a triage run that was never minted.
+      this.logger.warn(
+        `triage for failed run ${failingRunId} deduplicated — run ${res.existingRunId ?? '?'} is active on the ticket`,
+      );
+      return 'triage_deduplicated';
+    }
     return 'triaged';
   }
 
   /**
    * A completed orchestrator run: process its decision (FR-007..011). No generic
    * transition; every branch writes its own `jira_action` marker so a drift
-   * replay no-ops. Jira/enqueue failures throw (no marker) → retried next pass.
+   * replay no-ops. Failure semantics (SXF-1174 incident):
+   * - `NoTransitionPath` — board-config fault, same treatment as the worker
+   *   path: diagnostic `error` event persisted, NO marker → the next reconcile
+   *   pass retries and self-heals once the board workflow is fixed. Safe to
+   *   replay: the routed branch enqueues nothing before the Jira writes and
+   *   dedups on `deciding_run_id`.
+   * - any other throw — diagnostic `error` event persisted, then rethrown (no
+   *   marker) → retried next pass, now diagnosable from run events.
    */
   private async onOrchestratorFinished(
     runId: string,
@@ -439,7 +455,19 @@ export class PipelineService {
     agent: LoadedAgent,
     jiraKey: string,
   ): Promise<void> {
-    const decision = await this.processOrchestratorDecision(runId, run, ticketId, agent, jiraKey);
+    let decision: string;
+    try {
+      decision = await this.processOrchestratorDecision(runId, run, ticketId, agent, jiraKey);
+    } catch (err) {
+      if (err instanceof NoTransitionPath) {
+        this.logger.error(`orchestrator run ${runId}: ${err.message}`);
+        return;
+      }
+      if (!(err as { diagnosed?: boolean }).diagnosed) {
+        await this.recordCompletionError(runId, 'orchestrator_completion', err);
+      }
+      throw err;
+    }
     await this.db.insert(schema.runEvents).values({
       runId,
       type: 'jira_action',
@@ -487,23 +515,41 @@ export class PipelineService {
     }
 
     const routing = report.routing;
+
+    // Replay idempotency (SXF-1174): a rework run for this decision in ANY
+    // status means the decision was already executed — never mint a second one.
+    // Sits BEFORE the target/budget checks: a replay must not be re-judged
+    // against a budget its own prior run consumed, nor depend on the target
+    // still being enabled. Marker lands via the caller → drift repair stops.
+    const existing = await this.findExistingReworkRun(ticketId, runId);
+    if (existing) {
+      this.logger.warn(
+        `orchestrator run ${runId}: rework run ${existing.id} (${existing.status}) already exists — replay no-op`,
+      );
+      return 'routed';
+    }
+
     const target = await this.resolveRoutingTarget(run.workspaceId, routing.target_agent);
     const budget = await getReworkBudget(this.db, ticketId, run.workspaceId);
 
-    // Answer-triage delta: a human explicitly answered and picked the
-    // orchestrator, which itself grants ONE more rework cycle — this decision's
-    // rework run is exempt from the exhausted-budget override. It still counts
-    // in run history, so the NEXT automatic triage escalates `cycle_limit`.
+    // Answer-triage delta (FR-026/SC-003): a human answer grants ONE extra
+    // rework cycle — a hard cap at max + 1, NOT a blanket bypass. The granted
+    // run still counts in the budget, so a further answer-triage decision past
+    // max + 1 is overridden like any exhausted budget (defense-in-depth: no
+    // re-entry path can route unbounded cycles again — SXF-1174 Problem 3).
     // The automatic fail-triage cap (decideTriage) is unchanged.
     const humanGranted =
       (run.triggerEvent as { source?: string } | null)?.source === 'answer-triage';
+    const grantAllows = humanGranted && budget.cycleCount < budget.max + 1;
 
     // FR-009: invalid target or exhausted budget ⇒ override to a human task
     // carrying the orchestrator's task text + the override reason.
-    if (!target || (!budget.available && !humanGranted)) {
+    if (!target || (!budget.available && !grantAllows)) {
       const reason = !target
         ? `target agent "${routing.target_agent}" is not a valid, enabled worker in this workspace`
-        : `rework budget exhausted (${budget.cycleCount} of ${budget.max})`;
+        : humanGranted
+          ? `rework budget exhausted (${budget.cycleCount} of ${budget.max}) — the one human-granted extra cycle is already used`
+          : `rework budget exhausted (${budget.cycleCount} of ${budget.max})`;
       await this.humanTasks.createNonBlocking(runId, {
         kind: 'blocker',
         title: 'Routing overridden — manual attention needed',
@@ -512,9 +558,29 @@ export class PipelineService {
       return target ? 'override_budget' : 'override_invalid_target';
     }
 
-    // FR-008: valid routing ⇒ enqueue the rework run, transition the ticket to
-    // the target's running status directly (never through a trigger status), and
-    // post a routing comment naming the target + task.
+    // SXF-1174 Problem 6: per-ticket serialization. A stale routing decision
+    // must not preempt an agent already working the ticket — override to a
+    // human task BEFORE any Jira write (nothing transitioned, nothing enqueued).
+    const conflict = await this.findActiveRunOnTicket(ticketId, runId);
+    if (conflict) {
+      await this.humanTasks.createNonBlocking(runId, {
+        kind: 'blocker',
+        title: 'Routing overridden — another agent is active on this ticket',
+        details:
+          `${routing.task}\n\nOverride reason: agent "${conflict.agentName}" already has an active run ` +
+          `${conflict.id} (${conflict.status}) on this ticket, so routing to "${routing.target_agent}" was not ` +
+          `executed and no Jira transition was made. Wait for (or cancel) the active run, then re-route or ` +
+          `handle manually.`,
+      });
+      return 'override_active_run';
+    }
+
+    // FR-008: valid routing ⇒ transition the ticket to the target's running
+    // status directly (never through a trigger status), post a routing comment
+    // naming the target + task, and only THEN enqueue the rework run. Jira
+    // precedes the enqueue (SXF-1174): a Jira failure must leave nothing
+    // enqueued — the run trigger is the last, least-likely-to-fail step, and a
+    // crash after it is healed by the `deciding_run_id` dedup guard above.
     const trigger = run.triggerEvent as
       | { failing_run_id?: string; human_task_id?: string }
       | null;
@@ -523,26 +589,122 @@ export class PipelineService {
     // this decision rides along into the rework run.
     const humanTaskId = trigger?.human_task_id;
     const targetScenario = mockScenarioOf(target.behavior);
-    await this.runTrigger.trigger({
-      ticketId,
-      agentId: target.id,
-      triggerEvent: {
-        source: 'rework',
-        deciding_run_id: runId,
-        target_agent: routing.target_agent,
-        task: routing.task,
-        ...(failingRunId ? { failing_run_id: failingRunId } : {}),
-        ...(humanTaskId ? { human_task_id: humanTaskId } : {}),
-        ...(targetScenario ? { mock_scenario: targetScenario } : {}),
-      } as TriggerEvent,
-    });
 
-    const jira = await this.jiraFactory.forWorkspace(run.workspaceId);
-    if (target.statusRunning) {
-      await jira.transitionTo(jiraKey, target.statusRunning);
+    let stage = 'jira_transition';
+    let triggerResult: TriggerResult;
+    try {
+      const jira = await this.jiraFactory.forWorkspace(run.workspaceId);
+      if (target.statusRunning) {
+        await jira.transitionTo(jiraKey, target.statusRunning);
+      }
+      stage = 'jira_comment';
+      await jira.addComment(jiraKey, buildRunComment(report));
+
+      stage = 'enqueue_rework';
+      triggerResult = await this.runTrigger.trigger({
+        ticketId,
+        agentId: target.id,
+        triggerEvent: {
+          source: 'rework',
+          deciding_run_id: runId,
+          target_agent: routing.target_agent,
+          task: routing.task,
+          ...(failingRunId ? { failing_run_id: failingRunId } : {}),
+          ...(humanTaskId ? { human_task_id: humanTaskId } : {}),
+          ...(targetScenario ? { mock_scenario: targetScenario } : {}),
+        } as TriggerEvent,
+      });
+    } catch (err) {
+      await this.recordCompletionError(runId, stage, err);
+      throw err;
     }
-    await jira.addComment(jiraKey, buildRunComment(report));
+    // Race remnant of the guard above: another run won the per-ticket
+    // runs_one_active slot between the check and the insert. Handled OUTSIDE
+    // the try so a task-creation failure is not mislabeled as an
+    // `enqueue_rework` staged error.
+    if (triggerResult.deduplicated) {
+      await this.humanTasks.createNonBlocking(runId, {
+        kind: 'blocker',
+        title: 'Routing overridden — another agent is active on this ticket',
+        details:
+          `${routing.task}\n\nOverride reason: while this routing decision was being executed, run ` +
+          `${triggerResult.existingRunId ?? 'unknown'} became active on the ticket, so the rework run for ` +
+          `"${routing.target_agent}" was NOT created. Note: the Jira transition/comment for this decision ` +
+          `had already been applied — the ticket may have been transitioned` +
+          (target.statusRunning ? ` to "${target.statusRunning}"` : '') +
+          ` without a matching run; move it back manually if needed.`,
+      });
+      return 'override_active_run';
+    }
     return 'routed';
+  }
+
+  /**
+   * The rework run (any status, terminal included) already minted for an
+   * orchestrator decision. `runs_one_active` only dedups ACTIVE runs, so a
+   * drift-repair replay after the rework run went terminal would otherwise
+   * mint a fresh one (the SXF-1174 loop: 5 runs off one decision). Scoped by
+   * ticket (runs_ticket index) — a ticket only ever has a handful of runs.
+   */
+  private async findExistingReworkRun(
+    ticketId: string,
+    decidingRunId: string,
+  ): Promise<{ id: string; status: string } | undefined> {
+    const [row] = await this.db
+      .select({ id: schema.runs.id, status: schema.runs.status })
+      .from(schema.runs)
+      .where(
+        and(
+          eq(schema.runs.ticketId, ticketId),
+          sql`${schema.runs.triggerEvent} ->> 'deciding_run_id' = ${decidingRunId}`,
+        ),
+      )
+      .limit(1);
+    return row;
+  }
+
+  /**
+   * Any ACTIVE run on the ticket other than the deciding run (SXF-1174
+   * Problem 6 — per-ticket serialization; the exclude is defensive: a routed
+   * decision implies the deciding run is already terminal).
+   */
+  private async findActiveRunOnTicket(
+    ticketId: string,
+    excludeRunId: string,
+  ): Promise<{ id: string; status: string; agentName: string } | undefined> {
+    const [row] = await this.db
+      .select({
+        id: schema.runs.id,
+        status: schema.runs.status,
+        agentName: schema.agents.name,
+      })
+      .from(schema.runs)
+      .innerJoin(schema.agents, eq(schema.runs.agentId, schema.agents.id))
+      .where(
+        and(
+          eq(schema.runs.ticketId, ticketId),
+          inArray(schema.runs.status, ['queued', 'running', 'awaiting_human']),
+          ne(schema.runs.id, excludeRunId),
+        ),
+      )
+      .limit(1);
+    return row;
+  }
+
+  /**
+   * Persist the diagnostic for a failed orchestrator-completion step (same
+   * event shape as the worker path's NoTransitionPath handling). Tags the
+   * error so the outer catch in `onOrchestratorFinished` never double-records.
+   */
+  private async recordCompletionError(runId: string, stage: string, err: unknown): Promise<void> {
+    if (typeof err === 'object' && err !== null) {
+      (err as { diagnosed?: boolean }).diagnosed = true;
+    }
+    await this.db.insert(schema.runEvents).values({
+      runId,
+      type: 'error',
+      payload: { stage, error: err instanceof Error ? err.message : String(err) },
+    });
   }
 
   /**

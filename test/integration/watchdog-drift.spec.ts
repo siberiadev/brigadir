@@ -107,9 +107,14 @@ describe('watchdog + drift repair (T068)', () => {
 
   beforeEach(() => mock.reset());
 
-  async function seedTicket(status: string): Promise<{ ticketId: string; key: string }> {
+  async function seedTicket(
+    status: string,
+    opts: { seedJira?: boolean } = {},
+  ): Promise<{ ticketId: string; key: string }> {
     const key = `BRIG-${++counter}`;
-    mock.seedIssue(key, { status });
+    // seedJira: false → the mock returns 404 for this issue, so any Jira write
+    // for it throws through the real pipeline (deterministic per-run poison).
+    if (opts.seedJira !== false) mock.seedIssue(key, { status });
     const [t] = await db.db
       .insert(schema.tickets)
       .values({ workspaceId, jiraKey: key, jiraId: '10000', summary: key, lastSeenStatus: status })
@@ -191,5 +196,119 @@ describe('watchdog + drift repair (T068)', () => {
       .from(schema.runs)
       .where(and(eq(schema.runs.ticketId, ticketId), eq(schema.runs.agentId, agentId)));
     expect(runs).toHaveLength(1);
+  });
+
+  // --- SXF-1174 (remediation Problem 4): per-run isolation ---
+
+  async function markerFor(runId: string) {
+    return db.db
+      .select({ id: schema.runEvents.id })
+      .from(schema.runEvents)
+      .where(and(eq(schema.runEvents.runId, runId), eq(schema.runEvents.type, 'jira_action')));
+  }
+
+  it('SXF-1174: drift repair — a poisoned run does not starve the rest of the pending set', async () => {
+    // Poisoned FIRST (oldest-first order → processed first, proving isolation):
+    // its Jira issue does not exist, so the repair's transition throws.
+    const poisoned = await seedTicket(TRIGGER, { seedJira: false });
+    const [poisonedRun] = await db.db
+      .insert(schema.runs)
+      .values({
+        workspaceId,
+        ticketId: poisoned.ticketId,
+        agentId,
+        executorType: 'mock',
+        status: 'succeeded',
+        outcome: 'success',
+        report: SUCCESS_REPORT,
+        attempt: 1,
+        startedAt: sql`now() - interval '3 minutes'`,
+        finishedAt: sql`now() - interval '2 minutes'`,
+      })
+      .returning({ id: schema.runs.id });
+    const healthy = await seedTicket(TRIGGER);
+    const [healthyRun] = await db.db
+      .insert(schema.runs)
+      .values({
+        workspaceId,
+        ticketId: healthy.ticketId,
+        agentId,
+        executorType: 'mock',
+        status: 'succeeded',
+        outcome: 'success',
+        report: SUCCESS_REPORT,
+        attempt: 1,
+        startedAt: sql`now() - interval '2 minutes'`,
+        finishedAt: sql`now() - interval '1 minute'`,
+      })
+      .returning({ id: schema.runs.id });
+
+    // Resolves despite the poisoned run throwing mid-loop.
+    await expect(drift.repair(ws)).resolves.toBeUndefined();
+
+    // The healthy run behind the poisoned one was still repaired.
+    expect(mock.transitionsFor(healthy.key)).toEqual(['Code Review']);
+    expect(mock.commentsFor(healthy.key)).toHaveLength(1);
+    expect(await markerFor(healthyRun.id)).toHaveLength(1);
+
+    // The poisoned run got no marker (retried next pass) and wrote nothing.
+    expect(await markerFor(poisonedRun.id)).toHaveLength(0);
+    expect(mock.transitionsFor(poisoned.key)).toEqual([]);
+
+    // Next pass: healthy is marker-guarded (unchanged), poisoned still pending.
+    await drift.repair(ws);
+    expect(mock.transitionsFor(healthy.key)).toEqual(['Code Review']);
+    expect(mock.commentsFor(healthy.key)).toHaveLength(1);
+    expect(await markerFor(poisonedRun.id)).toHaveLength(0);
+  });
+
+  it('SXF-1174: watchdog — a poisoned stale run does not block finalization of the rest', async () => {
+    // Poisoned FIRST (oldest started_at → swept first).
+    const poisoned = await seedTicket(TRIGGER, { seedJira: false });
+    const [poisonedRun] = await db.db
+      .insert(schema.runs)
+      .values({
+        workspaceId,
+        ticketId: poisoned.ticketId,
+        agentId,
+        executorType: 'mock',
+        status: 'running',
+        attempt: 1,
+        startedAt: sql`now() - interval '40 minutes'`,
+      })
+      .returning({ id: schema.runs.id });
+    const healthy = await seedTicket(TRIGGER);
+    const [healthyRun] = await db.db
+      .insert(schema.runs)
+      .values({
+        workspaceId,
+        ticketId: healthy.ticketId,
+        agentId,
+        executorType: 'mock',
+        status: 'running',
+        attempt: 1,
+        startedAt: sql`now() - interval '30 minutes'`,
+      })
+      .returning({ id: schema.runs.id });
+
+    await expect(watchdog.sweep(ws)).resolves.toBeUndefined();
+
+    // BOTH runs were finalized this pass — the poisoned one did not block.
+    const statusOf = async (id: string) => {
+      const [r] = await db.db
+        .select({ status: schema.runs.status })
+        .from(schema.runs)
+        .where(eq(schema.runs.id, id));
+      return r.status;
+    };
+    expect(await statusOf(poisonedRun.id)).toBe('timed_out');
+    expect(await statusOf(healthyRun.id)).toBe('timed_out');
+
+    // Healthy got the full failure treatment; the poisoned run's Jira write is
+    // left to drift repair (terminal, no marker).
+    expect(mock.transitionsFor(healthy.key)).toEqual(['Blocked']);
+    expect(await markerFor(healthyRun.id)).toHaveLength(1);
+    expect(await markerFor(poisonedRun.id)).toHaveLength(0);
+    expect(mock.transitionsFor(poisoned.key)).toEqual([]);
   });
 });

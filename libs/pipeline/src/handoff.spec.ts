@@ -336,6 +336,20 @@ describe('buildHandoffSection', () => {
       );
     });
 
+    it('states the consumed grant past max + 1 — no false promise of another cycle (SXF-1174)', async () => {
+      const db = makeDb({
+        failingRun: { workspaceId: 'ws-1', ticketId: 'tk-1', report: failingReport },
+        roster: [{ key: 'developer', name: 'Developer', role: null, description: null }],
+        cycleCount: 3,
+        settings: { rework_max: 2 },
+        humanTask: { title: 'Q', details: null },
+      });
+      const out = await buildHandoffSection(trigger, db);
+      expect(out).toContain('Rework cycles used: 3 of 2');
+      expect(out).toContain('including the one human-granted extra cycle');
+      expect(out).not.toContain('permits ONE more rework cycle');
+    });
+
     it('degrades best-effort when the parked run has no report (request_human park)', async () => {
       const db = makeDb({
         humanTask: { title: 'Which auth provider?', details: null },

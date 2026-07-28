@@ -186,7 +186,7 @@ async function rosterAndBudgetLines(
   db: BrigadirDb,
   workspaceId: string,
   ticketId: string,
-): Promise<{ lines: string[]; budgetAvailable: boolean }> {
+): Promise<{ lines: string[]; budgetAvailable: boolean; cycleCount: number; max: number }> {
   const lines: string[] = [];
   const roster = await db
     .select({
@@ -216,7 +216,7 @@ async function rosterAndBudgetLines(
   const budget = await getReworkBudget(db, ticketId, workspaceId);
   lines.push(`Rework cycles used: ${budget.cycleCount} of ${budget.max}`);
   lines.push('');
-  return { lines, budgetAvailable: budget.available };
+  return { lines, budgetAvailable: budget.available, cycleCount: budget.cycleCount, max: budget.max };
 }
 
 const DECISION_PROTOCOL_LINES = [
@@ -251,9 +251,12 @@ async function buildTriageSection(triggerEvent: TriggerEvent, db: BrigadirDb): P
  * Answer-triage (delta on feature 010): a human resolved a blocking task with
  * the orchestrator as the resume target. Same decision material as `triage`,
  * plus the Q&A up top — the answer is the primary input to the decision. When
- * the budget is exhausted, the section says routing is still permitted: the
- * human answer grants one more cycle (`processOrchestratorDecision` exempts
- * this decision from the exhausted-budget override).
+ * the budget is exhausted but the human grant is still available
+ * (`cycle_count < rework_max + 1`), the section says routing is still
+ * permitted: the human answer grants ONE more cycle. Past max + 1 the grant is
+ * consumed (FR-026/SC-003 hard cap) — the section says so, because a routed
+ * decision would be overridden to a human task by
+ * `processOrchestratorDecision`.
  */
 async function buildAnswerTriageSection(
   triggerEvent: TriggerEvent,
@@ -280,9 +283,15 @@ async function buildAnswerTriageSection(
     const rb = await rosterAndBudgetLines(db, failing.workspaceId, failing.ticketId);
     lines.push(...rb.lines);
     if (!rb.budgetAvailable) {
-      lines.push(
-        'The rework budget above is exhausted, but because a human answered, the system permits ONE more rework cycle for this decision.',
-      );
+      if (rb.cycleCount < rb.max + 1) {
+        lines.push(
+          'The rework budget above is exhausted, but because a human answered, the system permits ONE more rework cycle for this decision.',
+        );
+      } else {
+        lines.push(
+          'The rework budget above is exhausted, including the one human-granted extra cycle — a routed decision will be overridden to a human task. Reply needs_human unless a human raises the rework budget first.',
+        );
+      }
       lines.push('');
     }
   }

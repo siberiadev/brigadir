@@ -358,6 +358,22 @@ export class ClaudeCliRunProcessor
           await ingestChannelBreadcrumbs(this.db, runId, 'exit');
           return;
         }
+        // SXF-1174 Problem 7 (defense-in-depth): an open BLOCKING human task
+        // means a human question is pending — the run belongs in
+        // awaiting_human, not failed, even if the park at task-creation time
+        // was somehow missed. Guarded park (WHERE status='running'); the Jira
+        // blocked-status transition is intentionally skipped here (reconcile
+        // heals it). Not a terminal state — no afterFinalize.
+        if (await this.humanTasks.hasOpenBlockingTask(runId)) {
+          const parked = await this.runs.parkIfStillRunning(runId);
+          if (parked) {
+            this.logger.warn(
+              `run ${runId} exited while a blocking human task is open — parked as awaiting_human instead of fail-closed`,
+            );
+          }
+          await ingestChannelBreadcrumbs(this.db, runId, 'exit');
+          return;
+        }
         // FR-010/011 (D7): no valid outbox report — fail closed, guarded WHERE
         // status='running' ONLY: a legitimate awaiting_human park (or an
         // already-finalized run) is a no-op, never clobbered.

@@ -456,9 +456,32 @@ describe('CallbackService (T100)', () => {
       blocking: true,
     });
 
-    expect(result).toEqual({ ok: true, blocking: true, mayFinishWithoutComplete: true });
+    expect(result).toEqual({ ok: true, created: true, blocking: true, mayFinishWithoutComplete: true });
     const [, passedInput] = createFromRequest.mock.calls[0];
     expect(passedInput.details).not.toContain(secret);
+  });
+
+  it('human: a dedup no-op surfaces created:false to the agent (SXF-1174 Problem 7)', async () => {
+    const createFromRequest = vi
+      .fn()
+      .mockResolvedValue({ created: false, blocking: true, mayFinishWithoutComplete: true });
+    const service = new CallbackService(
+      fakeDb() as never,
+      fakeModuleRef() as never,
+      {} as unknown as RunsService,
+      {} as unknown as PipelineService,
+      { acceptTeamReport: vi.fn() } as unknown as SetupApplyService,
+      { createFromRequest } as unknown as HumanTaskService,
+    );
+
+    const result = await service.human('run-1', {
+      kind: 'blocker',
+      title: 'Same question again',
+      details: 'dup',
+      blocking: true,
+    });
+
+    expect(result).toEqual({ ok: true, created: false, blocking: true, mayFinishWithoutComplete: true });
   });
 
   // --- feature 013: answer options through both intake surfaces ---
@@ -486,7 +509,7 @@ describe('CallbackService (T100)', () => {
       ],
     });
 
-    expect(result).toEqual({ ok: true, blocking: true, mayFinishWithoutComplete: true });
+    expect(result).toEqual({ ok: true, created: true, blocking: true, mayFinishWithoutComplete: true });
     const [, passedInput] = createFromRequest.mock.calls[0];
     expect(JSON.stringify(passedInput.options)).not.toContain(secret);
     expect(passedInput.options).toHaveLength(2);

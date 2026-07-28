@@ -89,9 +89,16 @@ export class DependencyReleaseService {
 
   /**
    * (ticket, agent) pairs eligible for release: ticket's last seen status IS an
-   * enabled agent's trigger status, and no active/succeeded run exists for the
-   * pair. `succeeded` is excluded deliberately (unlike the human re-trigger
-   * path): the pass must never re-run finished work it did not observe leaving.
+   * enabled agent's trigger status, and no active/succeeded/cancelled run
+   * exists for the pair. `succeeded` is excluded deliberately (unlike the human
+   * re-trigger path): the pass must never re-run finished work it did not
+   * observe leaving. `cancelled` is excluded too (SXF-1174 Problem 5): a
+   * human's cancel must STICK while the trigger condition holds — the pair is
+   * re-armed only by an observed status change (poller diff → onStatusChanged)
+   * or an explicit dashboard Retry. `failed`/`timed_out` stay un-suppressed
+   * (the failure flow transitions the ticket out of the trigger status and
+   * owes triage); `superseded` stays (resume replaces the run transactionally
+   * with an active one).
    */
   private async candidates(workspaceId: string, blockedByKey?: string): Promise<CandidateRow[]> {
     return this.db
@@ -127,7 +134,7 @@ export class DependencyReleaseService {
             select 1 from ${schema.runs}
             where ${schema.runs.ticketId} = ${schema.tickets.id}
               and ${schema.runs.agentId} = ${schema.agents.id}
-              and ${schema.runs.status} in ('queued', 'running', 'awaiting_human', 'succeeded')
+              and ${schema.runs.status} in ('queued', 'running', 'awaiting_human', 'succeeded', 'cancelled')
           )`,
         ),
       );

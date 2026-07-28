@@ -77,7 +77,9 @@ export class CallbackService {
   async human(
     runId: string,
     rawBody: unknown,
-  ): Promise<{ ok: true; blocking: boolean; mayFinishWithoutComplete?: boolean } | ValidationFailure> {
+  ): Promise<
+    { ok: true; created: boolean; blocking: boolean; mayFinishWithoutComplete?: boolean } | ValidationFailure
+  > {
     const parsed = RequestHumanSchema.safeParse(rawBody);
     if (!parsed.success) {
       return { kind: 'validation', errors: parsed.error.issues };
@@ -92,9 +94,12 @@ export class CallbackService {
       options: scrubOptions(input.options),
     });
 
+    // `created:false` = dedup no-op (an open task of the same blocking-ness
+    // already exists). Surfaced so the agent can tell a real park from a
+    // swallowed one (SXF-1174 Problem 7 — the two were byte-identical).
     return result.blocking
-      ? { ok: true, blocking: true, mayFinishWithoutComplete: result.mayFinishWithoutComplete }
-      : { ok: true, blocking: false };
+      ? { ok: true, created: result.created, blocking: true, mayFinishWithoutComplete: result.mayFinishWithoutComplete }
+      : { ok: true, created: result.created, blocking: false };
   }
 
   async complete(

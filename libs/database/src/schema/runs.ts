@@ -48,9 +48,11 @@ export const runs = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    // Third idempotency level: one active run per (ticket, agent).
+    // Third idempotency level: one active run per TICKET (SXF-1174 Problem 6,
+    // migration 0011 — tightened from (ticket, agent)): two agents must never
+    // work one ticket concurrently.
     uniqueIndex('runs_one_active')
-      .on(t.ticketId, t.agentId)
+      .on(t.ticketId)
       .where(sql`status IN ('queued', 'running', 'awaiting_human')`),
     // Feature 011 (D3): unique-index NULLs are distinct, so `runs_one_active`
     // cannot guard ticketless rows — this companion index allows at most ONE

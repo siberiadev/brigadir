@@ -15,7 +15,17 @@ export type ResolveResult =
   | { outcome: 'not_open' }
   // feature 010 (FR-015, AC US3-3): target_agent_id present but invalid
   // (missing / disabled / other workspace) — nothing changes.
-  | { outcome: 'invalid_target' };
+  | { outcome: 'invalid_target' }
+  // SXF-1174 Problem 6 (per-ticket runs_one_active): another run became active
+  // on the ticket while resolving — race-only (the index forbids a parked run
+  // coexisting with another active run at rest). Task stays open/resumable.
+  | { outcome: 'active_run_conflict' };
+
+/** Internal result of the supersede+insert transaction. */
+type ResumeRunResult =
+  | { kind: 'resumed'; id: string }
+  | { kind: 'gone' }
+  | { kind: 'conflict' };
 
 /** The resolved, validated resume target agent (feature 010). */
 interface ResumeTarget {
@@ -85,10 +95,11 @@ export class ResumeService {
         target = await this.resolveTargetAgent(task.workspaceId, input.target_agent_id);
         if (!target) return { outcome: 'invalid_target' };
       }
-      const newRunId = await this.resumeRun(task.runId, input.answer, taskId, target);
-      if (!newRunId) return { outcome: 'not_open' };
+      const resumed = await this.resumeRun(task.runId, input.answer, taskId, target);
+      if (resumed.kind === 'conflict') return { outcome: 'active_run_conflict' };
+      if (resumed.kind === 'gone') return { outcome: 'not_open' };
       await this.closeTask(taskId, 'resolved', input);
-      return { outcome: 'resumed', newRunId };
+      return { outcome: 'resumed', newRunId: resumed.id };
     }
 
     // done_manually | dismiss — close the parked run (if any), no new attempt.
@@ -148,7 +159,7 @@ export class ResumeService {
     answer: string | undefined,
     humanTaskId: string,
     target: ResumeTarget | undefined,
-  ): Promise<string | undefined> {
+  ): Promise<ResumeRunResult> {
     const [parked] = await this.db
       .select({
         workspaceId: schema.runs.workspaceId,
@@ -161,7 +172,7 @@ export class ResumeService {
       .from(schema.runs)
       .where(eq(schema.runs.id, parkedRunId))
       .limit(1);
-    if (!parked) return undefined;
+    if (!parked) return { kind: 'gone' };
 
     // A different chosen agent runs on its own executor profile with the attempt
     // count restarted at 1 (FR-015); resuming the original agent keeps attempt+1.
@@ -222,30 +233,45 @@ export class ResumeService {
         };
 
     let newRunId: string | undefined;
-    await this.db.transaction(async (tx) => {
-      const superseded = await tx
-        .update(schema.runs)
-        .set({ status: 'superseded', finishedAt: sql`now()` })
-        .where(and(eq(schema.runs.id, parkedRunId), eq(schema.runs.status, 'awaiting_human')))
-        .returning({ id: schema.runs.id });
-      if (superseded.length === 0) return; // race: no longer awaiting_human — bail, newRunId stays undefined
+    try {
+      await this.db.transaction(async (tx) => {
+        const superseded = await tx
+          .update(schema.runs)
+          .set({ status: 'superseded', finishedAt: sql`now()` })
+          .where(and(eq(schema.runs.id, parkedRunId), eq(schema.runs.status, 'awaiting_human')))
+          .returning({ id: schema.runs.id });
+        if (superseded.length === 0) return; // race: no longer awaiting_human — bail, newRunId stays undefined
 
-      const [inserted] = await tx
-        .insert(schema.runs)
-        .values({
-          workspaceId: parked.workspaceId,
-          ticketId: parked.ticketId,
-          agentId: newAgentId,
-          executorType: newExecutorType,
-          status: 'queued',
-          attempt: newAttempt,
-          triggerEvent,
-        })
-        .returning({ id: schema.runs.id });
-      newRunId = inserted.id;
-    });
+        const [inserted] = await tx
+          .insert(schema.runs)
+          .values({
+            workspaceId: parked.workspaceId,
+            ticketId: parked.ticketId,
+            agentId: newAgentId,
+            executorType: newExecutorType,
+            status: 'queued',
+            attempt: newAttempt,
+            triggerEvent,
+          })
+          .returning({ id: schema.runs.id });
+        newRunId = inserted.id;
+      });
+    } catch (err) {
+      if ((err as { code?: string }).code === '23505') {
+        // SXF-1174 Problem 6: per-ticket runs_one_active — another run became
+        // active on the ticket between our supersede and insert (race-only:
+        // at rest the index forbids parked + other-active coexisting). The tx
+        // rolled back, so the parked run is still awaiting_human and the task
+        // stays open — the human can resume again once the conflict resolves.
+        this.logger.warn(
+          `resume of run ${parkedRunId} hit runs_one_active — another run is active on the ticket`,
+        );
+        return { kind: 'conflict' };
+      }
+      throw err;
+    }
 
-    if (!newRunId) return undefined;
+    if (!newRunId) return { kind: 'gone' };
 
     // No BullMQ `deduplication` option here (unlike RunTriggerService): the
     // dedup key is tied to the JOB's retained Redis lifetime, not the
@@ -261,7 +287,7 @@ export class ResumeService {
 
     await this.transitionToRunning(parked.workspaceId, newAgentId, parked.ticketId, newRunId);
 
-    return newRunId;
+    return { kind: 'resumed', id: newRunId };
   }
 
   private async transitionToRunning(

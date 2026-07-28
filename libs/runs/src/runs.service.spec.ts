@@ -41,6 +41,25 @@ describe('RunsService.failIfStillRunning (T102, D7)', () => {
   });
 });
 
+describe('RunsService.parkIfStillRunning (SXF-1174 Problem 7 — promotion at fail-close)', () => {
+  it('parks a running run as awaiting_human', async () => {
+    const captured: { set?: unknown } = {};
+    const service = new RunsService(fakeDb('running', captured) as never);
+    await expect(service.parkIfStillRunning('run-1')).resolves.toBe(true);
+    expect(captured.set).toEqual({ status: 'awaiting_human' });
+  });
+
+  it('is a no-op when the run is already awaiting_human', async () => {
+    const service = new RunsService(fakeDb('awaiting_human') as never);
+    await expect(service.parkIfStillRunning('run-1')).resolves.toBe(false);
+  });
+
+  it('is a no-op when the run is already failed', async () => {
+    const service = new RunsService(fakeDb('failed') as never);
+    await expect(service.parkIfStillRunning('run-1')).resolves.toBe(false);
+  });
+});
+
 describe('RunsService.recordCostUsage', () => {
   function costFakeDb(captured: { sets: unknown[] }, opts: { throwOnUpdate?: boolean } = {}): unknown {
     return {

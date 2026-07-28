@@ -1,5 +1,5 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { DRIZZLE, type BrigadirDb, schema } from '@brigadir/database';
 import { RunsService } from '@brigadir/runs';
 import { PipelineService } from '@brigadir/pipeline';
@@ -38,15 +38,26 @@ export class WatchdogService {
           eq(schema.runs.status, 'running'),
           sql`${schema.runs.startedAt} < now() - ((${schema.agents.timeoutMinutes} + ${grace}) * interval '1 minute')`,
         ),
-      );
+      )
+      .orderBy(asc(schema.runs.startedAt));
 
     for (const s of stale) {
-      const finalized = await this.runs.finalizeStatus(s.runId, 'timed_out', {
-        error: `watchdog: exceeded timeout (${s.timeoutMinutes}m) + grace (${grace}m)`,
-      });
-      if (finalized) {
-        this.logger.warn(`watchdog finalized run ${s.runId} as timed_out`);
-        await this.pipeline.onRunFinished(s.runId);
+      try {
+        const finalized = await this.runs.finalizeStatus(s.runId, 'timed_out', {
+          error: `watchdog: exceeded timeout (${s.timeoutMinutes}m) + grace (${grace}m)`,
+        });
+        if (finalized) {
+          this.logger.warn(`watchdog finalized run ${s.runId} as timed_out`);
+          await this.pipeline.onRunFinished(s.runId);
+        }
+      } catch (err) {
+        // Per-run isolation (SXF-1174 Problem 4): the run is already finalized
+        // timed_out (guarded DB write) — only its Jira write is pending, and
+        // drift repair picks that up (terminal, no marker). Later stale runs
+        // must still be finalized NOW, not next pass.
+        this.logger.error(
+          `watchdog: run ${s.runId} completion failed (others continue; Jira write repaired next pass): ${String(err)}`,
+        );
       }
     }
   }
