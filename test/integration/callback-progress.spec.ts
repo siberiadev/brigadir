@@ -117,7 +117,7 @@ describe('progress events + non-blocking human notes (T111)', () => {
     });
     expect(humanRes.status).toBe(200);
     const humanBody = (await humanRes.json()) as { ok: boolean; blocking: boolean };
-    expect(humanBody).toEqual({ ok: true, blocking: false });
+    expect(humanBody).toEqual({ ok: true, created: true, blocking: false });
 
     // Run must NOT be parked — the guard would reject a subsequent complete otherwise.
     const [midRun] = await db.db.select().from(schema.runs).where(eq(schema.runs.id, runId)).limit(1);

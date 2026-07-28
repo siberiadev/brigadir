@@ -454,7 +454,7 @@ export class RunsController {
     const result = await this.runTrigger.trigger({ ticketId: run.ticketId, agentId: run.agentId });
     if (result.deduplicated) {
       // `runs_one_active` rejected a second active run → surfaced cleanly (not a 500).
-      throw conflictError('active_run_exists', 'An active run already exists for this ticket and agent.');
+      throw conflictError('active_run_exists', 'An active run already exists on this ticket.');
     }
     return { ok: true, run_id: result.runId, deduplicated: false };
   }

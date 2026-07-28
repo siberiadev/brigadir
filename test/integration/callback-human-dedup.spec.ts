@@ -10,12 +10,14 @@ import { startDatabase, startRedis, seedPipeline, DbHarness, RedisHarness } from
 const JWT_SECRET = 'callback-human-dedup-test-jwt-secret';
 
 /**
- * T110 (US2, FR-020) — at most one open human task per run, whether it
- * arrives via two `request_human` calls or a `request_human` followed by a
- * `complete_task{needs_human}` reaching the SAME dedup guard from the
- * completion path.
+ * T110 (US2, FR-020) — at most one open human task per run PER BLOCKING-NESS,
+ * whether it arrives via two `request_human` calls or a `request_human`
+ * followed by a `complete_task{needs_human}` reaching the parallel dedup
+ * guard on the completion path. Narrowed after SXF-1174 Problem 7: an open
+ * non-blocking FYI must never swallow a blocking escalation (the incident
+ * discarded a 570 s run's pending human question exactly that way).
  */
-describe('needs_human / request_human dedup — at most one open task per run (T110)', () => {
+describe('needs_human / request_human dedup — at most one open task per run per blocking-ness (T110)', () => {
   let db: DbHarness;
   let redis: RedisHarness;
   let backend: INestApplication;
@@ -137,5 +139,81 @@ describe('needs_human / request_human dedup — at most one open task per run (T
     const open = await openTasksFor(runId);
     expect(open).toHaveLength(1);
     expect(open[0].title).toBe('Blocked on credentials'); // original still stands
+  });
+
+  // SXF-1174 Problem 7 — the incident ordering: a non-blocking FYI at
+  // 11:22:57 created an open task; the blocking escalation 40 s later hit the
+  // old any-open-task guard → no row, no park, success-shaped response → run
+  // fail-closed at exit with the human's question discarded.
+  it('a non-blocking FYI does not swallow a later blocking escalation (SXF-1174 Problem 7)', async () => {
+    const { runId, workspaceId, ticketKey } = await seedRunningRun();
+    const token = tokenFor(runId, workspaceId, ticketKey);
+
+    const fyi = await post(runId, 'human', token, {
+      kind: 'blocker',
+      title: 'Unrelated hygiene finding (FYI)',
+      details: 'plaintext creds found outside my workspace',
+      blocking: false,
+    });
+    expect(fyi.status).toBe(200);
+    expect(await fyi.json()).toMatchObject({ ok: true, created: true, blocking: false });
+
+    const escalation = await post(runId, 'human', token, {
+      kind: 'blocker',
+      title: 'No restore path exists — need the actual dump',
+      details: 'exhausted every restore option',
+      blocking: true,
+    });
+    expect(escalation.status).toBe(200);
+    expect(await escalation.json()).toMatchObject({
+      ok: true,
+      created: true,
+      blocking: true,
+      mayFinishWithoutComplete: true,
+    });
+
+    // BOTH tasks are open, and the blocking one parked the run.
+    const open = await openTasksFor(runId);
+    expect(open).toHaveLength(2);
+    expect(open.find((t) => t.blocking)?.title).toBe('No restore path exists — need the actual dump');
+    expect(open.find((t) => !t.blocking)?.title).toBe('Unrelated hygiene finding (FYI)');
+
+    const [run] = await db.db
+      .select({ status: schema.runs.status })
+      .from(schema.runs)
+      .where(eq(schema.runs.id, runId));
+    expect(run.status).toBe('awaiting_human');
+  });
+
+  it('a dedup no-op answers created:false and leaves a timeline event', async () => {
+    const { runId, workspaceId, ticketKey } = await seedRunningRun();
+    const token = tokenFor(runId, workspaceId, ticketKey);
+
+    const first = await post(runId, 'human', token, {
+      kind: 'question',
+      title: 'First question',
+      details: 'a',
+      blocking: true,
+    });
+    expect(await first.json()).toMatchObject({ ok: true, created: true, blocking: true });
+
+    const second = await post(runId, 'human', token, {
+      kind: 'question',
+      title: 'Second question',
+      details: 'b',
+      blocking: true,
+    });
+    // The agent can now tell a dedup no-op from a real park.
+    expect(await second.json()).toMatchObject({ ok: true, created: false, blocking: true });
+
+    const events = await db.db
+      .select()
+      .from(schema.runEvents)
+      .where(eq(schema.runEvents.runId, runId));
+    const dedupEvent = events.find(
+      (e) => e.type === 'log' && (e.payload as { deduplicated?: boolean }).deduplicated === true,
+    );
+    expect(dedupEvent).toBeDefined();
+    expect((dedupEvent!.payload as { task_id?: string }).task_id).toBeDefined();
   });
 });

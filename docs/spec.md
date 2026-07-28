@@ -95,7 +95,7 @@ onStatusChanged(ticket, from, to, source):
   agents = enabled agents WHERE trigger_status == to
            AND (trigger_jql IS NULL OR ticket matches trigger_jql)   # Phase 0: только trigger_status
   for agent in agents:
-    if EXISTS active run (ticket, agent): skip (log)
+    if EXISTS active run (ticket): skip (log)   # с миграции 0011 — один активный прогон на тикет
     INSERT runs (status=queued) — ловим unique violation как «уже есть»
     queue[agent.executor.type].add('run', {runId}, {
       deduplication: {id: `${ticket.id}:${agent.id}`},

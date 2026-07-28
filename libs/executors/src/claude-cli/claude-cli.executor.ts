@@ -747,6 +747,24 @@ export class ClaudeCliExecutor implements AgentExecutor {
             return;
           }
 
+          // Callback-wired runs never carry structured_output on the terminal
+          // event — `--json-schema` is deliberately not passed (args.ts, FR-011:
+          // exactly one live completion channel). Parsing it here would ALWAYS
+          // fail and its "no schema-valid structured_output" message would
+          // shadow the processor's accurate fail-closed diagnostic ("exited
+          // without a complete_task or request_human callback") — the SXF-1174
+          // Problem 7 red herring. Settle with no diagnostics; the processor
+          // decides via outbox/DB state what actually happened.
+          if (runtimeConfig.useCallbackChannel) {
+            settle({
+              exitStatus: 'completed',
+              externalRef,
+              costUsd,
+              usage: terminal.usage,
+            });
+            return;
+          }
+
           const parsedReport = ReportSchema.safeParse(terminal.structuredOutput);
           if (parsedReport.success) {
             settle({

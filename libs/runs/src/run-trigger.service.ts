@@ -102,6 +102,8 @@ export class RunTriggerService {
       if ((err as { code?: string }).code === '23505') {
         // 23505 comes from `runs_one_active` (ticketed) or `runs_one_active_setup`
         // (ticketless, per-workspace) — the lookup mirrors whichever guard fired.
+        // `runs_one_active` is per-TICKET since SXF-1174 Problem 6 (migration
+        // 0011): the holder may belong to a DIFFERENT agent.
         const [existing] = await this.db
           .select({ id: schema.runs.id })
           .from(schema.runs)
@@ -109,7 +111,7 @@ export class RunTriggerService {
             and(
               ticketId === null
                 ? and(eq(schema.runs.workspaceId, agent.workspaceId), isNull(schema.runs.ticketId))
-                : and(eq(schema.runs.ticketId, ticketId), eq(schema.runs.agentId, agentId)),
+                : eq(schema.runs.ticketId, ticketId),
               inArray(schema.runs.status, ACTIVE_STATUSES),
             ),
           )
@@ -135,6 +137,10 @@ export class RunTriggerService {
         // Triage/rework/resume continuations and workspace-setup skip the BullMQ
         // dedup layer to avoid the retained-job swallow (QUEUE_DEDUP_SKIP_SOURCES);
         // the DB partial unique guards already made this enqueue exactly-once.
+        // Deliberately NOT widened to per-ticket alongside runs_one_active
+        // (SXF-1174 Problem 6): level 2 only guards duplicate enqueues and runs
+        // strictly after a successful insert — a per-ticket id would let agent
+        // A's retained completed job swallow agent B's later legitimate enqueue.
         ...(skipQueueDedup ? {} : { deduplication: { id: `${ticketId}:${agentId}` } }),
         attempts: agent.maxAttempts,
         backoff: { type: 'custom' },

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
-import { eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { schema } from '@brigadir/database';
 import { encodeJiraCredentials } from '@brigadir/jira';
 import { ResumeService } from '@brigadir/human-tasks';
@@ -151,7 +151,7 @@ describe('answer-triage resume (delta on 010)', () => {
    * Park a WORKER run (with a persisted failure report) on a fresh ticket +
    * open blocking human task. Optionally pre-exhaust the rework budget.
    */
-  async function parkWorkerRun(opts: { exhaustBudget?: boolean } = {}) {
+  async function parkWorkerRun(opts: { exhaustBudget?: boolean; reworkRuns?: number } = {}) {
     const key = `BRIG-${++counter}`;
     mock.seedIssue(key, { status: 'Blocked' });
     const [ticket] = await db.db
@@ -159,9 +159,12 @@ describe('answer-triage resume (delta on 010)', () => {
       .values({ workspaceId, jiraKey: key, jiraId: '10000', summary: key })
       .returning({ id: schema.tickets.id });
 
-    if (opts.exhaustBudget) {
-      // Two prior rework-sourced runs — the default budget (2) is exhausted.
-      for (let i = 0; i < 2; i++) {
+    // exhaustBudget: two prior rework-sourced runs — the default budget (2) is
+    // exhausted. reworkRuns overrides the count (e.g. 3 = the human-granted
+    // extra cycle is consumed too).
+    const priorRework = opts.reworkRuns ?? (opts.exhaustBudget ? 2 : 0);
+    if (priorRework > 0) {
+      for (let i = 0; i < priorRework; i++) {
         await db.db.insert(schema.runs).values({
           workspaceId,
           ticketId: ticket.id,
@@ -274,6 +277,53 @@ describe('answer-triage resume (delta on 010)', () => {
     // The ticket transitioned to the rework target's running status (the
     // answer-triage run itself never transitions — orchestrator statusRunning is NULL).
     await waitFor(() => mock.transitionsFor(key).includes('In Progress'));
+  }, 120_000);
+
+  it('SXF-1174: a second grant past max + 1 is overridden, not routed — the human grant is a hard cap', async () => {
+    // Three prior rework runs (max 2): the one human-granted extra cycle is
+    // already consumed. Another human answer must NOT route again.
+    const { taskId, ticketId } = await parkWorkerRun({ reworkRuns: 3 });
+
+    const result = await resume.resolve(taskId, {
+      action: 'resume',
+      answer: 'Try once more.',
+      target_agent_id: orchestratorId,
+    });
+    expect(result.outcome).toBe('resumed');
+    const triageRunId = (result as { newRunId: string }).newRunId;
+
+    // The routed decision is overridden: wait for the decision marker.
+    let marker: Record<string, unknown> | undefined;
+    await waitFor(async () => {
+      const rows = await db.db
+        .select({ payload: schema.runEvents.payload })
+        .from(schema.runEvents)
+        .where(and(eq(schema.runEvents.runId, triageRunId), eq(schema.runEvents.type, 'jira_action')));
+      marker = rows[0]?.payload as Record<string, unknown> | undefined;
+      return marker !== undefined;
+    });
+    expect(marker?.orchestrator_decision).toBe('override_budget');
+
+    // No rework run was minted off this decision — still exactly 3 rework runs.
+    const decided = await db.db
+      .select({ id: schema.runs.id })
+      .from(schema.runs)
+      .where(
+        and(
+          eq(schema.runs.ticketId, ticketId),
+          sql`${schema.runs.triggerEvent} ->> 'deciding_run_id' = ${triageRunId}`,
+        ),
+      );
+    expect(decided).toHaveLength(0);
+
+    // The override landed as an open non-blocking human task naming the consumed grant.
+    const tasks = await db.db
+      .select({ blocking: schema.humanTasks.blocking, details: schema.humanTasks.details })
+      .from(schema.humanTasks)
+      .where(and(eq(schema.humanTasks.runId, triageRunId), eq(schema.humanTasks.status, 'open')));
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].blocking).toBe(false);
+    expect(String(tasks[0].details)).toMatch(/human-granted extra cycle is already used/);
   }, 120_000);
 
   it('a parked ORCHESTRATOR run resumed with no explicit target still re-triages (effective-agent rule)', async () => {

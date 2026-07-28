@@ -321,6 +321,29 @@ describe('ClaudeCliExecutor.run (T082)', () => {
     expect(result.diagnostics).toBeDefined();
   });
 
+  // SXF-1174 Problem 7: callback-wired runs never carry structured_output on
+  // the terminal event (--json-schema is not passed — FR-011), so the
+  // "no schema-valid structured_output" diagnostic was pure noise that
+  // shadowed the processor's accurate fail-closed message. The executor must
+  // settle 'completed' with NO diagnostics and let the processor decide from
+  // outbox/DB state.
+  it('callback-wired: completed with no structured_output settles with no diagnostics', async () => {
+    const group = makeGroup();
+    spawnGroupMock.mockReturnValue(group);
+    const executor = makeExecutor({ ...executorConfig, useCallbackChannel: true });
+
+    const runPromise = executor.run(makeCtx(), new AbortController().signal);
+    await waitForSpawn(spawnGroupMock);
+    for (const line of readFixtureLines('stream-no-report')) group.child.stdout.write(line + '\n');
+    await flush();
+    group.child.emit('close', 0, null);
+
+    const result = await runPromise;
+    expect(result.exitStatus).toBe('completed');
+    expect(result.report).toBeUndefined();
+    expect(result.diagnostics).toBeUndefined();
+  });
+
   it('crashed: nonzero exit with no result event ever seen', async () => {
     const group = makeGroup();
     spawnGroupMock.mockReturnValue(group);

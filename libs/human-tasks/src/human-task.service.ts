@@ -19,7 +19,11 @@ export interface CreateHumanTaskInput {
 }
 
 export interface CreateHumanTaskResult {
-  /** false when an open task already existed for this run (FR-020 dedup) — no second row inserted. */
+  /**
+   * false when an open task of the SAME blocking-ness already existed for this
+   * run (FR-020 dedup, narrowed after SXF-1174 Problem 7) — no second row
+   * inserted. Surfaced to the agent in the callback response.
+   */
   created: boolean;
   blocking: boolean;
   mayFinishWithoutComplete: boolean;
@@ -27,10 +31,12 @@ export interface CreateHumanTaskResult {
 
 /**
  * HumanTaskService (FR-012/014/015/020). Creates a human task from a
- * `request_human` callback, deduped to one open task per run; a blocking
- * request additionally parks the run (`awaiting_human`, guarded — only from
- * `running`) and drives the Jira blocked-status transition + question
- * comment. Non-blocking requests only queue the task; the run keeps running.
+ * `request_human` callback, deduped to one open task per run PER
+ * BLOCKING-NESS (narrowed after SXF-1174 Problem 7 — an open non-blocking FYI
+ * must never swallow a blocking escalation); a blocking request additionally
+ * parks the run (`awaiting_human`, guarded — only from `running`) and drives
+ * the Jira blocked-status transition + question comment. Non-blocking
+ * requests only queue the task; the run keeps running.
  */
 @Injectable()
 export class HumanTaskService {
@@ -47,7 +53,7 @@ export class HumanTaskService {
    * Non-blocking human task from a pipeline fallback (feature 010, FR-005/009/
    * 010) — the triage-limit, routing-override, and orchestrator-failure paths.
    * Delegates to {@link createFromRequest} with `blocking=false`: it queues the
-   * task (deduped to one open task per run) and never parks the run or moves the
+   * task (deduped to one open non-blocking task per run) and never parks the run or moves the
    * ticket (the ticket already sits in its failure status). `title`/`details`
    * must already be scrubbed by the caller (system-composed here, or read back
    * from an already-scrubbed report field).
@@ -144,14 +150,45 @@ export class HumanTaskService {
       throw new Error(`run ${runId} not found`);
     }
 
+    // Dedup (FR-020), per blocking-ness (SXF-1174 Problem 7): a blocking
+    // request dedups only against an open BLOCKING task, a non-blocking one
+    // only against an open NON-BLOCKING task. Keying on "any open task" let a
+    // non-blocking FYI silently disarm a later blocking escalation — no row,
+    // no park — and the run fail-closed at exit with the question discarded.
     const existingOpen = await this.db
       .select({ id: schema.humanTasks.id })
       .from(schema.humanTasks)
-      .where(and(eq(schema.humanTasks.runId, runId), eq(schema.humanTasks.status, 'open')))
+      .where(
+        and(
+          eq(schema.humanTasks.runId, runId),
+          eq(schema.humanTasks.status, 'open'),
+          eq(schema.humanTasks.blocking, input.blocking),
+        ),
+      )
       .limit(1);
 
     if (existingOpen.length > 0) {
-      this.logger.log(`run ${runId} already has an open human task — dedup guard (FR-020), no new row`);
+      this.logger.log(
+        `run ${runId} already has an open ${input.blocking ? 'blocking' : 'non-blocking'} human task — dedup guard (FR-020), no new row`,
+      );
+      // The no-op must be visible on the timeline — the incident's swallowed
+      // escalation left zero trace anywhere but a server log line.
+      await this.db.insert(schema.runEvents).values({
+        runId,
+        type: 'log',
+        payload: {
+          source: 'callback',
+          message: `request_human deduplicated against open task ${existingOpen[0].id} — no new task created`,
+          deduplicated: true,
+          task_id: existingOpen[0].id,
+        },
+      });
+      // Belt-and-braces: an open blocking task means the run must be parked.
+      // The original creation parked it, but if that park was ever missed the
+      // dedup hit must not perpetuate the miss (guarded, idempotent).
+      if (input.blocking) {
+        await this.parkRun(runId);
+      }
       return { created: false, blocking: input.blocking, mayFinishWithoutComplete: input.blocking };
     }
 
@@ -179,6 +216,27 @@ export class HumanTaskService {
     }
 
     return { created: true, blocking: true, mayFinishWithoutComplete: true };
+  }
+
+  /**
+   * SXF-1174 Problem 7 (defense-in-depth): the worker's fail-closed branch
+   * asks this before flipping an exited run to `failed` — an open BLOCKING
+   * task means a human question is pending and the run should be parked, not
+   * failed, even if the park at creation time was somehow missed.
+   */
+  async hasOpenBlockingTask(runId: string): Promise<boolean> {
+    const rows = await this.db
+      .select({ id: schema.humanTasks.id })
+      .from(schema.humanTasks)
+      .where(
+        and(
+          eq(schema.humanTasks.runId, runId),
+          eq(schema.humanTasks.status, 'open'),
+          eq(schema.humanTasks.blocking, true),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
   }
 
   /** Guarded — only parks a run that is currently `running` (never clobbers a race). */

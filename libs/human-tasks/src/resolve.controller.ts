@@ -42,6 +42,12 @@ export class ResolveController {
           ok: false,
           error: 'target_agent_id is not a valid, enabled agent in this workspace',
         });
+      case 'active_run_conflict':
+        throw new ConflictException({
+          ok: false,
+          error:
+            'another run is active on this ticket — wait for it to finish (or cancel it), then resume again',
+        });
       case 'resumed':
         return { ok: true, action: 'resume', newRunId: result.newRunId };
       case 'closed':

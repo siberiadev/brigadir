@@ -5,13 +5,29 @@ import { startDatabase, seedPipeline, DbHarness, SeededPipeline } from './harnes
 
 const ACTIVE = ['queued', 'running', 'awaiting_human'];
 
-describe('runs_one_active partial unique index (T014)', () => {
+describe('runs_one_active partial unique index — one active run per TICKET (T014 + SXF-1174 Problem 6)', () => {
   let h: DbHarness;
   let p: SeededPipeline;
+  let secondAgentId: string;
 
   beforeAll(async () => {
     h = await startDatabase();
     p = await seedPipeline(h.db);
+    const [agentB] = await h.db
+      .insert(schema.agents)
+      .values({
+        workspaceId: p.workspaceId,
+        executorId: p.executorId,
+        name: 'implementer-b',
+        key: 'implementer-b',
+        instruction: 'Second agent.',
+        statusSuccess: 'Code Review',
+        statusFailure: 'Blocked',
+        maxAttempts: 2,
+        behavior: {},
+      })
+      .returning({ id: schema.agents.id });
+    secondAgentId = agentB.id;
   });
 
   afterAll(async () => {
@@ -46,6 +62,23 @@ describe('runs_one_active partial unique index (T014)', () => {
     expect(active).toHaveLength(1);
   });
 
+  it('rejects an active run for a DIFFERENT agent on the same ticket (SXF-1174 Problem 6)', async () => {
+    // The previous test left one active run (agent A) on the ticket.
+    let code: string | undefined;
+    try {
+      await h.db.insert(schema.runs).values({
+        workspaceId: p.workspaceId,
+        ticketId: p.ticketId,
+        agentId: secondAgentId,
+        executorType: 'mock',
+        status: 'queued',
+      });
+    } catch (err) {
+      code = (err as { code?: string }).code;
+    }
+    expect(code).toBe('23505');
+  });
+
   it('allows a new active run once the prior run reaches a terminal state', async () => {
     // move the single active run to a terminal state
     await h.db
@@ -53,7 +86,19 @@ describe('runs_one_active partial unique index (T014)', () => {
       .set({ status: 'succeeded', finishedAt: sql`now()` })
       .where(and(eq(schema.runs.ticketId, p.ticketId), inArray(schema.runs.status, ACTIVE)));
 
-    await expect(insertActiveRun()).resolves.toBeUndefined();
+    // The freed per-ticket slot is claimable by ANY agent — here the second one.
+    await expect(
+      h.db
+        .insert(schema.runs)
+        .values({
+          workspaceId: p.workspaceId,
+          ticketId: p.ticketId,
+          agentId: secondAgentId,
+          executorType: 'mock',
+          status: 'queued',
+        })
+        .then(() => undefined),
+    ).resolves.toBeUndefined();
 
     const active = await h.db
       .select({ id: schema.runs.id })

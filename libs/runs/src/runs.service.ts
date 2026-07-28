@@ -171,6 +171,22 @@ export class RunsService {
   }
 
   /**
+   * SXF-1174 Problem 7 (defense-in-depth): promotion counterpart of the
+   * fail-closed guard. When the process exits while an open BLOCKING human
+   * task exists but the park was somehow missed, the run is parked
+   * `awaiting_human` instead of fail-closed — the pending human question
+   * survives. Same guard discipline: `WHERE status = 'running'` ONLY.
+   */
+  async parkIfStillRunning(runId: string): Promise<boolean> {
+    const rows = await this.db
+      .update(schema.runs)
+      .set({ status: 'awaiting_human' })
+      .where(and(eq(schema.runs.id, runId), eq(schema.runs.status, 'running')))
+      .returning({ id: schema.runs.id });
+    return rows.length > 0;
+  }
+
+  /**
    * Process-exit-derived finalize for callback-wired runs — the D7 posture of
    * `failIfStillRunning`, generalized to any terminal status (timed_out,
    * cancelled, crash-exhausted). Guards `WHERE status = 'running'` ONLY: the
@@ -274,11 +290,20 @@ export class RunsService {
     runId: string,
     humanTask: NonNullable<AgentReport['human_task']>,
   ): Promise<void> {
-    // dedup: one open human_task per run
+    // dedup: one open BLOCKING human_task per run (this path always inserts
+    // blocking=true). Per-blocking-ness, matching HumanTaskService (SXF-1174
+    // Problem 7): an open non-blocking FYI must not swallow the blocking
+    // question a needs_human report carries.
     const existing = await this.db
       .select({ id: schema.humanTasks.id })
       .from(schema.humanTasks)
-      .where(and(eq(schema.humanTasks.runId, runId), eq(schema.humanTasks.status, 'open')))
+      .where(
+        and(
+          eq(schema.humanTasks.runId, runId),
+          eq(schema.humanTasks.status, 'open'),
+          eq(schema.humanTasks.blocking, true),
+        ),
+      )
       .limit(1);
     if (existing.length > 0) return;
 

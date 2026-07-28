@@ -77,6 +77,7 @@ describe('D7 no-clobber: awaiting_human vs silent-exit fail-closed (T109)', () =
     callbacks?: Array<
       | { tool: 'progress' | 'human' | 'complete'; body: Record<string, unknown> }
       | { tool: 'sleep'; ms: number }
+      | { tool: 'stream'; fixture: string }
     >,
     configExtra: Record<string, unknown> = {},
   ): Promise<{ runId: string; ticketKey: string }> {
@@ -181,5 +182,49 @@ describe('D7 no-clobber: awaiting_human vs silent-exit fail-closed (T109)', () =
     const row = await pollRun(runId, TERMINAL);
     expect(row.status).toBe('failed');
     expect(row.error).toBeTruthy();
+  });
+
+  // SXF-1174 Problem 7 (defense-in-depth): if a blocking task is open but its
+  // park was missed (the incident's dedup swallow — seeded here directly as
+  // the anomaly state), the exit must promote the run to awaiting_human
+  // instead of fail-closing it: the pending human question survives.
+  it('promotion: an exited run with an open blocking task but a missed park ends awaiting_human, not failed', async () => {
+    const { runId } = await seedAndTrigger([
+      { tool: 'sleep', ms: 2500 },
+      // A terminal result event (no structured output) so the exit takes the
+      // 'completed' fail-closed branch — the one the promotion guards.
+      { tool: 'stream', fixture: 'stream-no-report' },
+    ]);
+
+    // While the fake CLI lingers, seed the anomaly: an open BLOCKING task with
+    // the run still 'running' (no park).
+    await pollRun(runId, (s) => s === 'running');
+    const [running] = await db.db.select().from(schema.runs).where(eq(schema.runs.id, runId)).limit(1);
+    await db.db.insert(schema.humanTasks).values({
+      workspaceId: running.workspaceId,
+      runId,
+      ticketId: running.ticketId,
+      kind: 'blocker',
+      title: 'Question whose park was missed',
+      details: 'anomaly seeded directly — task open, run still running',
+      blocking: true,
+      status: 'open',
+    });
+
+    const row = await pollRun(runId, TERMINAL);
+    expect(row.status).toBe('awaiting_human');
+    expect(row.error).toBeNull();
+  });
+
+  // SXF-1174 Problem 7: the fail-closed error must name what actually
+  // happened. The old executor-side "no schema-valid structured_output"
+  // diagnostic was structurally guaranteed for callback-wired runs (no
+  // --json-schema) and shadowed this message — the incident's red herring.
+  it('fail-closed diagnostic names the missing callback, not structured_output', async () => {
+    const { runId } = await seedAndTrigger([{ tool: 'stream', fixture: 'stream-no-report' }]);
+
+    const row = await pollRun(runId, TERMINAL);
+    expect(row.status).toBe('failed');
+    expect(row.error).toBe('claude_cli exited without a complete_task or request_human callback');
   });
 });

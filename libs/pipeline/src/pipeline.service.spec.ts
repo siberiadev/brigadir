@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { RunTriggerService } from '@brigadir/runs';
 import type { HumanTaskService } from '@brigadir/human-tasks';
-import type { JiraClientFactory } from '@brigadir/jira';
+import { NoTransitionPath, type JiraClientFactory } from '@brigadir/jira';
 import { PipelineService } from './pipeline.service';
 
 /**
@@ -106,10 +106,12 @@ describe('PipelineService.processOrchestratorDecision — budget bypass (answer-
   const HUMAN_TASK_ID = '33333333-3333-4333-8333-333333333333';
 
   // Like `chain`, but also awaitable without `.limit()` — the budget count
-  // query (`getReworkBudget`) awaits the builder directly.
+  // query (`getReworkBudget`) awaits the builder directly. `innerJoin` for the
+  // active-run-on-ticket lookup (SXF-1174 Problem 6).
   function awaitableChain(rows: unknown[]) {
     const c = {
       from: () => c,
+      innerJoin: () => c,
       where: () => c,
       limit: () => Promise.resolve(rows),
       then: (res: (v: unknown[]) => unknown, rej?: (e: unknown) => unknown) =>
@@ -118,7 +120,8 @@ describe('PipelineService.processOrchestratorDecision — budget bypass (answer-
     return c;
   }
 
-  function setup(triggerSource: 'answer-triage' | 'triage') {
+  function setup(triggerSource: 'answer-triage' | 'triage', opts: { cycleCount?: number } = {}) {
+    const cycleCount = opts.cycleCount ?? 2;
     const run = {
       status: 'succeeded',
       report: {
@@ -154,7 +157,7 @@ describe('PipelineService.processOrchestratorDecision — budget bypass (answer-
         if (keys.includes('isOrchestrator')) return awaitableChain([agent]);
         if (keys.includes('jiraKey')) return awaitableChain([{ jiraKey: 'BRIG-1' }]);
         if (keys.includes('statusRunning')) return awaitableChain([target]); // resolveRoutingTarget
-        if (keys.includes('count')) return awaitableChain([{ count: 2 }]); // budget EXHAUSTED (max 2)
+        if (keys.includes('count')) return awaitableChain([{ count: cycleCount }]); // budget count (max 2)
         if (keys.includes('settings')) return awaitableChain([{ settings: { rework_max: 2 } }]);
         return awaitableChain([]); // marker guard
       },
@@ -205,6 +208,20 @@ describe('PipelineService.processOrchestratorDecision — budget bypass (answer-
 
     expect(runTrigger.trigger).not.toHaveBeenCalled();
     expect(humanTasks.createNonBlocking).toHaveBeenCalledTimes(1);
+    const marker = inserted.find((i) => i.type === 'jira_action');
+    expect(marker?.payload).toMatchObject({ orchestrator_decision: 'override_budget' });
+  });
+
+  it('answer-triage past max + 1 is overridden — the human grant is a hard cap, not a blanket bypass (SXF-1174)', async () => {
+    // cycleCount 3 with max 2: the one human-granted extra cycle is consumed.
+    const { service, runTrigger, humanTasks, inserted } = setup('answer-triage', { cycleCount: 3 });
+
+    await service.onRunFinished('run-triage');
+
+    expect(runTrigger.trigger).not.toHaveBeenCalled();
+    expect(humanTasks.createNonBlocking).toHaveBeenCalledTimes(1);
+    const [, task] = (humanTasks.createNonBlocking as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(String(task.details)).toMatch(/human-granted extra cycle is already used/);
     const marker = inserted.find((i) => i.type === 'jira_action');
     expect(marker?.payload).toMatchObject({ orchestrator_decision: 'override_budget' });
   });
@@ -338,5 +355,180 @@ describe('PipelineService.onStatusChanged — configurable release status (featu
     });
     expect(h.trigger).toHaveBeenCalledTimes(1);
     expect(h.events).toEqual([]);
+  });
+});
+
+/**
+ * SXF-1174 (remediation Problems 1+2): the orchestrator completion path is
+ * replay-idempotent and diagnosable. A rework run already minted for this
+ * decision (any status) short-circuits the replay before target/budget checks;
+ * Jira writes precede the enqueue; every failure persists a staged `error`
+ * run_event.
+ */
+describe('PipelineService.processOrchestratorDecision — replay idempotency + diagnostics (SXF-1174)', () => {
+  function awaitableChain(rows: unknown[]) {
+    const c = {
+      from: () => c,
+      innerJoin: () => c,
+      where: () => c,
+      limit: () => Promise.resolve(rows),
+      then: (res: (v: unknown[]) => unknown, rej?: (e: unknown) => unknown) =>
+        Promise.resolve(rows).then(res, rej),
+    };
+    return c;
+  }
+
+  function setup(opts: {
+    existingRework?: { id: string; status: string };
+    activeConflict?: { id: string; status: string; agentName: string };
+    transitionError?: Error;
+    commentError?: Error;
+    triggerDeduplicated?: boolean;
+  } = {}) {
+    const run = {
+      status: 'succeeded',
+      report: {
+        schema_version: 1,
+        outcome: 'routed',
+        summary: 'Route to Developer.',
+        checks: [],
+        routing: { target_agent: 'Developer', task: 'Fix the thing.' },
+      },
+      error: null,
+      agentId: 'agent-brigadir',
+      ticketId: 'ticket-1',
+      workspaceId: 'ws-1',
+      triggerEvent: { source: 'triage' },
+    };
+    const agent = { name: 'brigadir', statusSuccess: '—', statusFailure: '—', isOrchestrator: true };
+    const target = { id: 'agent-dev', statusRunning: 'In Progress', behavior: {} };
+
+    const inserted: Array<{ type?: string; payload?: unknown }> = [];
+    const db = {
+      select: (cols: Record<string, unknown>) => {
+        const keys = Object.keys(cols ?? {});
+        if (keys.includes('status') && keys.includes('report')) return awaitableChain([run]);
+        if (keys.includes('isOrchestrator')) return awaitableChain([agent]);
+        if (keys.includes('jiraKey')) return awaitableChain([{ jiraKey: 'BRIG-1' }]);
+        if (keys.includes('statusRunning')) return awaitableChain([target]); // resolveRoutingTarget
+        if (keys.includes('count')) return awaitableChain([{ count: 0 }]); // budget available
+        if (keys.includes('settings')) return awaitableChain([{ settings: {} }]);
+        if (keys.includes('agentName'))
+          return awaitableChain(opts.activeConflict ? [opts.activeConflict] : []); // active-run-on-ticket guard
+        if (keys.includes('status') && keys.includes('id'))
+          return awaitableChain(opts.existingRework ? [opts.existingRework] : []); // deciding_run_id dedup
+        return awaitableChain([]); // marker guard
+      },
+      insert: () => ({
+        values: async (v: { type?: string; payload?: unknown }) => {
+          inserted.push(v);
+        },
+      }),
+    };
+
+    const transitionTo = opts.transitionError
+      ? vi.fn().mockRejectedValue(opts.transitionError)
+      : vi.fn().mockResolvedValue(undefined);
+    const addComment = opts.commentError
+      ? vi.fn().mockRejectedValue(opts.commentError)
+      : vi.fn().mockResolvedValue(undefined);
+    const jiraFactory = {
+      forWorkspace: vi.fn().mockResolvedValue({ transitionTo, addComment }),
+    } as unknown as JiraClientFactory;
+    const runTrigger = {
+      trigger: vi.fn().mockResolvedValue(
+        opts.triggerDeduplicated
+          ? { deduplicated: true, existingRunId: 'r-x' }
+          : { deduplicated: false, runId: 'run-rw' },
+      ),
+    };
+    const humanTasks = { createNonBlocking: vi.fn() };
+
+    const service = new PipelineService(
+      db as never,
+      jiraFactory,
+      runTrigger as unknown as RunTriggerService,
+      humanTasks as unknown as HumanTaskService,
+    );
+    return { service, runTrigger, humanTasks, transitionTo, addComment, inserted };
+  }
+
+  it('replay with an existing rework run (terminal) short-circuits: no Jira, no trigger, marker routed', async () => {
+    const { service, runTrigger, humanTasks, transitionTo, addComment, inserted } = setup({
+      existingRework: { id: 'run-old', status: 'cancelled' },
+    });
+
+    await service.onRunFinished('run-triage');
+
+    expect(runTrigger.trigger).not.toHaveBeenCalled();
+    expect(transitionTo).not.toHaveBeenCalled();
+    expect(addComment).not.toHaveBeenCalled();
+    expect(humanTasks.createNonBlocking).not.toHaveBeenCalled();
+    const marker = inserted.find((i) => i.type === 'jira_action');
+    expect(marker?.payload).toMatchObject({ orchestrator_decision: 'routed' });
+  });
+
+  it('NoTransitionPath: resolves, nothing enqueued, error event persisted, no marker', async () => {
+    const { service, runTrigger, inserted } = setup({
+      transitionError: new NoTransitionPath('BRIG-1', 'Blocked', 'In Progress'),
+    });
+
+    await expect(service.onRunFinished('run-triage')).resolves.toBeUndefined();
+
+    expect(runTrigger.trigger).not.toHaveBeenCalled(); // Jira precedes the enqueue
+    const errors = inserted.filter((i) => i.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].payload).toMatchObject({ stage: 'jira_transition' });
+    expect(inserted.find((i) => i.type === 'jira_action')).toBeUndefined();
+  });
+
+  it('generic comment failure: rethrows with exactly one staged error event, no marker, no trigger', async () => {
+    const { service, runTrigger, inserted } = setup({ commentError: new Error('boom') });
+
+    await expect(service.onRunFinished('run-triage')).rejects.toThrow('boom');
+
+    expect(runTrigger.trigger).not.toHaveBeenCalled();
+    const errors = inserted.filter((i) => i.type === 'error');
+    expect(errors).toHaveLength(1); // no double-record from the outer catch
+    expect(errors[0].payload).toMatchObject({ stage: 'jira_comment', error: 'boom' });
+    expect(inserted.find((i) => i.type === 'jira_action')).toBeUndefined();
+  });
+
+  it('active run on the ticket → override_active_run before any Jira write (SXF-1174 Problem 6)', async () => {
+    const { service, runTrigger, humanTasks, transitionTo, addComment, inserted } = setup({
+      activeConflict: { id: 'run-busy', status: 'running', agentName: 'Fixer' },
+    });
+
+    await service.onRunFinished('run-triage');
+
+    expect(transitionTo).not.toHaveBeenCalled();
+    expect(addComment).not.toHaveBeenCalled();
+    expect(runTrigger.trigger).not.toHaveBeenCalled();
+    expect(humanTasks.createNonBlocking).toHaveBeenCalledTimes(1);
+    const [, task] = (humanTasks.createNonBlocking as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(String(task.details)).toMatch(/Fixer/);
+    expect(String(task.details)).toMatch(/run-busy/);
+    const marker = inserted.find((i) => i.type === 'jira_action');
+    expect(marker?.payload).toMatchObject({ orchestrator_decision: 'override_active_run' });
+  });
+
+  it('race remnant: trigger dedups mid-flight → override_active_run task noting Jira already written', async () => {
+    const { service, runTrigger, humanTasks, transitionTo, inserted } = setup({
+      triggerDeduplicated: true,
+    });
+
+    await service.onRunFinished('run-triage');
+
+    // Jira writes happened first (the ordering); the dedup surfaced after.
+    expect(transitionTo).toHaveBeenCalledWith('BRIG-1', 'In Progress');
+    expect(runTrigger.trigger).toHaveBeenCalledTimes(1);
+    expect(humanTasks.createNonBlocking).toHaveBeenCalledTimes(1);
+    const [, task] = (humanTasks.createNonBlocking as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(String(task.details)).toMatch(/had already been applied/);
+    expect(String(task.details)).toMatch(/r-x/);
+    // Not a staged error — no error event.
+    expect(inserted.filter((i) => i.type === 'error')).toHaveLength(0);
+    const marker = inserted.find((i) => i.type === 'jira_action');
+    expect(marker?.payload).toMatchObject({ orchestrator_decision: 'override_active_run' });
   });
 });

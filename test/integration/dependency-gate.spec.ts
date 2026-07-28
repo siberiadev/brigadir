@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { schema } from '@brigadir/database';
 import { encodeJiraCredentials, JiraClientFactory, type JiraClient } from '@brigadir/jira';
 import { PipelineService } from '@brigadir/pipeline';
@@ -388,5 +388,47 @@ describe('dependency gate (T057 trigger-side, T066 reconcile-side)', () => {
     await reconcile.reEvaluateDependencies(ws, jira);
     expect(await runCount(agentId)).toBe(1);
     await setReleaseStatus(null);
+  });
+
+  // ---- SXF-1174 Problem 5: cancel sticks against the release pass ----
+
+  it('a cancelled run suppresses the release pass; a genuine status change re-arms (SXF-1174 Problem 5)', async () => {
+    const status = 'Ready for Cancel-Test';
+    const agentId = await seedAgent('gate-cancelled', status);
+    const key = `BRIG-${++counter}`;
+    // Gate is clear (no links): without the fix the standing-state candidates
+    // query would re-trigger this pair on every pass.
+    mock.seedIssue(key, { status });
+    const [ticket] = await db.db
+      .insert(schema.tickets)
+      .values({ workspaceId, jiraKey: key, jiraId: '10000', summary: key, lastSeenStatus: status })
+      .returning({ id: schema.tickets.id });
+    // The human cancelled the agent's run while the ticket still sits in the
+    // trigger status — the exact incident state (mimir respawned in 13 s).
+    await db.db.insert(schema.runs).values({
+      workspaceId,
+      ticketId: ticket.id,
+      agentId,
+      executorType: 'mock',
+      status: 'cancelled',
+      finishedAt: sql`now()`,
+      triggerEvent: { source: 'poll' },
+    });
+
+    // Two release passes: the cancel sticks — nothing is re-triggered.
+    await reconcile.reEvaluateDependencies(ws, jira);
+    await reconcile.reEvaluateDependencies(ws, jira);
+    expect(await runCount(agentId)).toBe(1); // only the seeded cancelled run
+
+    // A genuine observed status change re-arms the pair via the poller path
+    // (the cancelled run is not active, so runs_one_active does not block).
+    await pipeline.onStatusChanged({
+      ticketId: ticket.id,
+      issue: issueWith(key, status, []),
+      fromStatus: 'In Progress',
+      toStatus: status,
+      source: 'poller',
+    });
+    expect(await runCount(agentId)).toBe(2);
   });
 });
