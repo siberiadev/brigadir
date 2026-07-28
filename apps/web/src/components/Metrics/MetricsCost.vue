@@ -14,8 +14,9 @@ import { formatCostUsd } from '../../utils/currency';
 import ChartCard from './ChartCard.vue';
 
 /**
- * Cost & Usage tab (US2): spend stacked by executor, tokens by type, average
- * cost per run, and top workspaces by spend. Provider-preset executors
+ * Cost & Usage tab (US2): spend stacked by executor, tokens by type/executor/
+ * model/agent-role, spend by agent role, average cost and tokens per run, and
+ * top workspaces by spend. Provider-preset executors
  * (kimi/deepseek_api) are flagged as indicative (FR-008). The top-workspaces
  * chart is meaningless with a single workspace selected, so it hides then.
  */
@@ -47,8 +48,27 @@ const tokensOption = computed(() =>
     ? timeSeriesOption(theme.value, data.value.tokens_by_type, 'line', { labelFn: tokenTypeLabel })
     : null,
 );
+const tokensByRoleOption = computed(() =>
+  data.value
+    ? timeSeriesOption(theme.value, data.value.tokens_by_role, 'bar', {
+        stack: true,
+        labelFn: metricSeriesLabel,
+      })
+    : null,
+);
+const costByRoleOption = computed(() =>
+  data.value
+    ? timeSeriesOption(theme.value, data.value.cost_by_role, 'bar', {
+        stack: true,
+        labelFn: metricSeriesLabel,
+      })
+    : null,
+);
 const cprOption = computed(() =>
   data.value ? timeSeriesOption(theme.value, data.value.cost_per_run, 'line') : null,
+);
+const tprOption = computed(() =>
+  data.value ? timeSeriesOption(theme.value, data.value.tokens_per_run, 'line') : null,
 );
 
 // Indicative caveat when a provider-preset executor is in the stack (FR-008).
@@ -113,10 +133,34 @@ const topOption = computed(() =>
     />
 
     <ChartCard
+      title="Tokens by agent role"
+      :option="tokensByRoleOption"
+      :loading="loading"
+      :empty="isSeriesEmpty(data?.tokens_by_role)"
+      data-test="tokens-by-role"
+    />
+
+    <ChartCard
+      title="Cost by agent role"
+      :option="costByRoleOption"
+      :loading="loading"
+      :empty="isSeriesEmpty(data?.cost_by_role)"
+      data-test="cost-by-role"
+    />
+
+    <ChartCard
       title="Average cost per run"
       :option="cprOption"
       :loading="loading"
       :empty="isSeriesEmpty(data?.cost_per_run)"
+    />
+
+    <ChartCard
+      title="Average tokens per run"
+      :option="tprOption"
+      :loading="loading"
+      :empty="isSeriesEmpty(data?.tokens_per_run)"
+      data-test="tokens-per-run"
     />
 
     <ChartCard
