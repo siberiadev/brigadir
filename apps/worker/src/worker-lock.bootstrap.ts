@@ -71,14 +71,24 @@ export class WorkerLockBootstrap implements OnApplicationBootstrap, OnApplicatio
 
   private async resumeAll(): Promise<void> {
     for (const worker of this.workers()) {
+      // Порядок проверок критичен (инцидент 2026-07-28). `pause(true)` без
+      // активных джоб роняет mainLoop (`while (!closing && !paused)`), поэтому
+      // после onLost воркер оказывается ОДНОВРЕМЕННО paused=true и
+      // running=false. `run()` в этом состоянии молча возвращается на своём
+      // `if (closing || paused) return`, а флаг снимает ТОЛЬКО resume() — при
+      // обратном порядке ветка resume недостижима и воркер навсегда перестаёт
+      // потреблять, продолжая держать лок и логировать «enabled».
+      if (worker.isPaused()) {
+        // resume() сам поднимет главный цикл, если тот уже вышел.
+        worker.resume();
+        continue;
+      }
       if (!worker.isRunning()) {
         // autorun:false — первый старт главного цикла. run() резолвится только
         // при close(), поэтому намеренно без await; ошибки цикла — в лог.
         worker.run().catch((err: unknown) => {
           this.logger.error(`worker run loop failed: ${(err as Error).message}`);
         });
-      } else if (worker.isPaused()) {
-        worker.resume();
       }
     }
     this.logger.log('worker-lock held — queue consumption enabled');

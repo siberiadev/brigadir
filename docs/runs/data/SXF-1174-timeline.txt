@@ -1,0 +1,92 @@
+SXF-1174 — [SQPU] Extract shared metrics arithmetic into metrics-math util
+workspace: Squad Pulse Team b3e0fdc9-0a6a-49ac-968d-d653791fdbfa settings.enabled = False
+ticket.last_seen_status: Review @ 2026-07-28T11:13:33.913+07:00
+blocked_by: ['SXF-1173'] blocked_state: None
+
+AGENTS (workspace):
+  brigadir         orch=True  enabled=True  trigger=None                 running=None             success='—'              failure='—'
+  heimdall-qa      orch=False enabled=True  trigger='Ready for QA'       running='QA'             success='QA Done'        failure='Blocked'
+  mimir-reviewer   orch=False enabled=True  trigger='Review'             running=None             success='Ready for QA'   failure='Blocked'
+  odin-planner     orch=False enabled=True  trigger='Backlog'            running=None             success='Ready for Development' failure='Blocked'
+  thor-developer   orch=False enabled=True  trigger='Ready for Development' running='In Progress'    success='Review'         failure='Blocked'
+
+RUNS (chronological):
+  created_at           run       agent           source         status      outcome       dur_s     cost   ev jira_action deciding 
+  ---------------------------------------------------------------------------------------------------------------------------------
+  2026-07-27T22:31:15  5890636f  odin-planner    poll           succeeded   success      1375.8   6.5242  106           1          
+  2026-07-27T23:19:02  b51c09f1  thor-developer  poll           superseded  None        37147.8    2.482   83           0          
+  2026-07-28T09:38:10  acd95115  thor-developer  human-resume   superseded  needs_human   671.1    2.301   65           0          
+  2026-07-28T10:03:25  b4d27e5e  brigadir        answer-triage  succeeded   routed        262.5   1.1091   16           0          
+  2026-07-28T10:07:48  49f595cf  heimdall-qa     rework         cancelled   None          209.9   0.5859   23           0 b4d27e5e 
+  2026-07-28T10:11:35  4e013e29  heimdall-qa     rework         cancelled   None          118.3   0.2725   15           0 b4d27e5e 
+  2026-07-28T11:14:18  8a92fa06  mimir-reviewer  poll           cancelled   None          721.2   2.0521   91           0          
+  2026-07-28T11:14:22  e033adef  heimdall-qa     rework         failed      None          570.3   1.9844   87           0 b4d27e5e 
+  2026-07-28T11:24:04  c6d3bd1f  heimdall-qa     rework         cancelled   None          135.5   0.4022   27           0 b4d27e5e 
+  2026-07-28T11:26:32  49779be1  mimir-reviewer  poll           cancelled   None           20.6   0.1091    8           0          
+  2026-07-28T11:26:33  7f2bd0cf  heimdall-qa     rework         cancelled   None           19.3             6           0 b4d27e5e 
+
+EVENT-TYPE PROFILE per run:
+  5890636f odin-planner    {'log': 5, 'progress': 18, 'tool_call': 82, 'jira_action': 1}
+  b51c09f1 thor-developer  {'log': 5, 'progress': 27, 'tool_call': 51}
+  acd95115 thor-developer  {'log': 4, 'tool_call': 47, 'progress': 14}
+  b4d27e5e brigadir        {'log': 1, 'progress': 5, 'tool_call': 10}
+  49f595cf heimdall-qa     {'log': 4, 'progress': 1, 'tool_call': 18}
+  4e013e29 heimdall-qa     {'log': 4, 'progress': 1, 'tool_call': 10}
+  8a92fa06 mimir-reviewer  {'log': 5, 'progress': 22, 'tool_call': 64}
+  e033adef heimdall-qa     {'log': 4, 'tool_call': 76, 'progress': 7}
+  c6d3bd1f heimdall-qa     {'log': 4, 'tool_call': 22, 'progress': 1}
+  49779be1 mimir-reviewer  {'log': 5, 'tool_call': 3}
+  7f2bd0cf heimdall-qa     {'log': 4, 'tool_call': 2}
+
+REWORK RUNS SHARING ONE ORCHESTRATOR DECISION (the replay loop):
+  deciding_run_id=b4d27e5e-f688-47fe-9490-c6f941464c40 → 5 rework run(s)
+    2026-07-28T10:07:48  49f595cf  heimdall-qa  cancelled  target=heimdall-qa task_len=3969 human_task=153d413d-d931-40e7-a21a-60b879d9802c failing_run=acd95115-5f5b-43bc-b74b-5aec38a832f6
+    2026-07-28T10:11:35  4e013e29  heimdall-qa  cancelled  target=heimdall-qa task_len=3969 human_task=153d413d-d931-40e7-a21a-60b879d9802c failing_run=acd95115-5f5b-43bc-b74b-5aec38a832f6
+    2026-07-28T11:14:22  e033adef  heimdall-qa  failed     target=heimdall-qa task_len=3969 human_task=153d413d-d931-40e7-a21a-60b879d9802c failing_run=acd95115-5f5b-43bc-b74b-5aec38a832f6
+    2026-07-28T11:24:04  c6d3bd1f  heimdall-qa  cancelled  target=heimdall-qa task_len=3969 human_task=153d413d-d931-40e7-a21a-60b879d9802c failing_run=acd95115-5f5b-43bc-b74b-5aec38a832f6
+    2026-07-28T11:26:33  7f2bd0cf  heimdall-qa  cancelled  target=heimdall-qa task_len=3969 human_task=153d413d-d931-40e7-a21a-60b879d9802c failing_run=acd95115-5f5b-43bc-b74b-5aec38a832f6
+
+HUMAN TASKS on this ticket:
+  2026-07-27T22:31:21 51026d8d kind=blocker blocking=False status=resolved run=- resolved_by=None
+     title: [blocker_branch_lost] SXF-1174: no usable branch from SXF-1173 for this run's repositories
+     resolution: SXF-1173 fixes are already in the feat/SXF-1172-... branch
+  2026-07-27T23:25:36 2fe2bcd6 kind=blocker blocking=True status=resolved run=b51c09f1 resolved_by=None
+     title: Shared Postgres is 19 migrations behind: all 105 snapshot tests error on missing users.gitlab_id
+     resolution: Run `npm run migration:run` against the shared Postgres to apply the 19 pending migrations, then re-run `npm run test:snapshot` and report the real result.
+  2026-07-28T09:52:21 58c5a567 kind=blocker blocking=False status=open run=- resolved_by=None
+     title: [blocker_branch_lost] SXF-1174: no usable branch from SXF-1173 for this run's repositories
+  2026-07-28T10:01:22 153d413d kind=blocker blocking=True status=resolved run=acd95115 resolved_by=None
+     title: Snapshot baseline was captured against a dataset the shared DB no longer holds
+     resolution: Restore/re-seed the shared DB to the dataset the baseline was captured against (notably work_item_transitions), then re-run npm run test:snapshot and report.
+  2026-07-28T11:22:57 7695370d kind=blocker blocking=False status=open run=e033adef resolved_by=None
+     title: Unrelated hygiene finding: plaintext prod creds in local file, outside my workspace
+
+HUMAN TASKS elsewhere in the workspace:
+  2026-07-27T17:45:40 a61bd4bb kind=review status=dismissed ticket=- run=3ffc304c-8e3e-48c3-8d0e-fe917cb79c57
+     title: Team assembled — review the workspace
+
+RUN ERRORS:
+  e033adef heimdall-qa (failed):
+     no schema-valid structured_output: [
+       {
+         "expected": "object",
+         "code": "invalid_type",
+         "path": [],
+         "message": "Invalid input: expected object, received undefined"
+       }
+     ]
+
+SIBLING TICKETS in workspace:
+  SXF-1173     QA Done                blocked_state=None blocked_by=[]
+  SXF-1174     Review                 blocked_state=None blocked_by=['SXF-1173']
+  SXF-1175     Backlog                blocked_state=waiting blocked_by=['SXF-1174']
+  SXF-1176     Backlog                blocked_state=waiting blocked_by=['SXF-1175']
+  SXF-1177     Backlog                blocked_state=waiting blocked_by=['SXF-1175', 'SXF-1179']
+  SXF-1178     Backlog                blocked_state=waiting blocked_by=['SXF-1175', 'SXF-1177']
+  SXF-1179     Backlog                blocked_state=waiting blocked_by=['SXF-1175', 'SXF-1176']
+  SXF-1180     Backlog                blocked_state=waiting blocked_by=['SXF-1175', 'SXF-1178']
+  SXF-1181     Backlog                blocked_state=waiting blocked_by=['SXF-1177', 'SXF-1180']
+  SXF-1182     Backlog                blocked_state=waiting blocked_by=['SXF-1176', 'SXF-1177', 'SXF-1178', 'SXF-1179', 'SXF-1180', 'SXF-1181']
+  SXF-1183     Backlog                blocked_state=waiting blocked_by=['SXF-1182']
+  SXF-1184     Backlog                blocked_state=waiting blocked_by=['SXF-1179']
+  SXF-1185     Backlog                blocked_state=waiting blocked_by=['SXF-1183', 'SXF-1184']

@@ -183,6 +183,47 @@ describe('exclusive worker lock (027 US2)', () => {
     },
   );
 
+  it(
+    'lock lost then re-acquired → consumption really resumes (regression 2026-07-28)',
+    { timeout: 120_000 },
+    async () => {
+      const prefix = process.env.BULLMQ_PREFIX ?? 'bull';
+      const worker = await bootWorker('dev');
+      const lock = worker.get(WorkerLockService);
+      const proc = worker.get(RunProcessor);
+      expect(lock.state).toBe('held');
+      await waitFor(() => proc.worker.isRunning(), 10_000);
+
+      // Лок уходит из-под живого воркера (в прод это случилось после сна
+      // машины: PX истёк, ключ достался никому). renew() не продлит чужое
+      // значение → onLost → pauseAll.
+      await redisClient.set(
+        workerLockKey(prefix),
+        JSON.stringify({
+          mode: 'agents',
+          pid: 999_999,
+          hostname: 'thief',
+          acquired_at: new Date().toISOString(),
+        }),
+        'PX',
+        LOCK_TTL_MS,
+      );
+      await waitFor(() => lock.state === 'blocked', 10_000);
+
+      // Чужой держатель исчезает — воркер берёт лок обратно.
+      await redisClient.del(workerLockKey(prefix));
+      await waitFor(() => lock.state === 'held', 10_000);
+
+      // Суть регрессии: «лок держится» само по себе ничего не значит —
+      // проверяем, что джоба, положенная ПОСЛЕ re-acquire, реально исполнена.
+      await waitFor(() => proc.worker.isRunning() && !proc.worker.isPaused(), 10_000);
+      const runId = await seedMockRun(worker.get(RunTriggerService), 'LOCK-3');
+      await waitFor(async () => (await runStatus(runId)) === 'succeeded', 30_000);
+
+      await worker.close();
+    },
+  );
+
   it('distinct prefixes are independent (suite isolation)', { timeout: 60_000 }, async () => {
     const originalPrefix = process.env.BULLMQ_PREFIX;
     const workerA = await bootWorker('dev');

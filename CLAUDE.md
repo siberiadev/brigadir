@@ -9,6 +9,7 @@
 - `docs/architecture.md` — схема БД (§3, реализована as-is), AgentExecutor (§4), callback-протокол (§5), ReportSchema (§6)
 - `docs/progress.md` — журнал итераций; новые итерации дописываются туда
 - `docs/local-setup.md` — локальный запуск (dev-режим, compose, секреты, грабли)
+- `docs/runs/` — post-mortem'ы отдельных прогонов (один прогон = один файл, генерируются скиллом `/analyze-run`); источник рекомендаций по улучшению платформы, накопленных из практики
 - `.specify/memory/constitution.md` — обязательные принципы; проверяется гейтами spec-kit
 
 ## Команды
@@ -16,6 +17,7 @@
 - `pnpm typecheck && pnpm lint && pnpm test` — статика + юниты + веб (vue-tsc и компонентные тесты дашборда входят в корневые гейты; веб-скрипты сами собирают `@brigadir/contracts`, т.к. bare-импорт резолвится в gitignored `dist` пакета)
 - `pnpm test:integration` — интеграционные (vitest + testcontainers, нужен Docker; общие контейнеры на прогон — см. `test/integration/global-setup.ts`)
 - `docker compose up --build` — полный стек (postgres, redis, backend, worker)
+- `/analyze-run <ссылка на прогон>` — скилл разбора прогона (`.claude/skills/analyze-run/`): факты + верификация утверждений агента + рекомендации по платформе в `docs/runs/*.md`; для `failed`/`awaiting_human`/`timed_out` — план разблокировки и перезапуска. Меняющие состояние вызовы (`resolve`/`retry`/`cancel`) — только с подтверждения человека.
 
 ## Возможность: собрать команду под борду через `brigadir-admin` (admin-MCP)
 
