@@ -290,6 +290,18 @@ export class ClaudeCliExecutor implements AgentExecutor {
       envSecretValues,
     } = await this.loadRunConfig(ctx);
 
+    // Feature 034: the whole preparation phase used to be un-abortable — the
+    // signal grows its first listener only inside runProcess, so an abort
+    // during a hung clone/fetch fired into the void and the run wedged in
+    // 'running' forever. Boundary checks + signal-aware git ops close that;
+    // an abort here maps to the abort's own outcome, never 'crashed' (which
+    // would burn an attempt on a cancel and mislabel a timeout).
+    const abortedDuringPrepare = (): ExecutorResult => ({
+      exitStatus: signal.reason === 'cancelled' ? 'cancelled' : 'timeout',
+      diagnostics: 'aborted during workspace preparation',
+    });
+    if (signal.aborted) return abortedDuringPrepare();
+
     // The run's workspace dir: the parent `worktreeRoot/<runId>` holding one
     // worktree per repo (feature 019, research D3), or a scratch temp dir for
     // no-repo runs. `workspace` stays null exactly for the scratch case.
@@ -347,7 +359,8 @@ export class ClaudeCliExecutor implements AgentExecutor {
         // Feature 032: caches are ensured FIRST (their `fetch --prune` is what
         // makes the origin probes below truthful), then the blockers' work is
         // resolved against them, and only then are worktrees added.
-        const caches = await ensureCaches(repos, runtimeConfig.repoCacheRoot);
+        const caches = await ensureCaches(repos, runtimeConfig.repoCacheRoot, signal);
+        signal.throwIfAborted();
         inherit = await this.resolveInheritance({
           ctx,
           ticketId,
@@ -366,6 +379,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
             continueBranches: inherit.continueBranches,
             mergeBranches: inherit.mergeBranches,
             caches,
+            signal,
           },
         );
         // Feature 024: record start-ref events AFTER prepare, so each carries
@@ -381,6 +395,10 @@ export class ClaudeCliExecutor implements AgentExecutor {
           }
         }
       } catch (err) {
+        // Feature 034: an abort mid-prepare is the run being killed, not a
+        // fault — checked FIRST (a conflict discovered while aborting needs no
+        // human task for a run that is already being ended).
+        if (signal.aborted) return abortedDuringPrepare();
         // Feature 032: a diamond whose blocker branches conflict is not a
         // generic prepare fault — it is a specific, actionable human case, and
         // the run must not just die with a git message nobody can act on.
@@ -477,7 +495,20 @@ export class ClaudeCliExecutor implements AgentExecutor {
     } catch (err) {
       await mcpConfig?.cleanup();
       await this.cleanupWorkspace(workspace, workspaceDir, runtimeConfig.keepFailedWorktrees, ctx.runId);
+      if (signal.aborted) return abortedDuringPrepare();
       return { exitStatus: 'crashed', diagnostics: err instanceof Error ? err.message : String(err) };
+    }
+
+    // Feature 034: last pre-spawn boundary — an already-aborted run must not
+    // spawn a CLI process just to kill it.
+    if (signal.aborted) {
+      try {
+        await mcpConfig?.cleanup();
+      } catch (err) {
+        this.logger.error(`mcp-config cleanup failed for run ${ctx.runId}: ${String(err)}`);
+      }
+      await this.cleanupWorkspace(workspace, workspaceDir, runtimeConfig.keepFailedWorktrees, ctx.runId);
+      return abortedDuringPrepare();
     }
 
     const result = await this.runProcess(
@@ -614,10 +645,20 @@ export class ClaudeCliExecutor implements AgentExecutor {
       // events can interleave with its own promise resolution in either
       // order, so two independent "resolve the run" call sites would race.
       let abortReason: 'timeout' | 'cancelled' | undefined;
+      // Feature 034 (settlement fallback): armed AFTER terminate() completes in
+      // the abort path; fires only if 'close' still hasn't arrived — a
+      // detached grandchild that inherited the stdio pipes can hold 'close'
+      // open forever even though the process group is already SIGKILLed.
+      let settleFallbackTimer: NodeJS.Timeout | undefined;
+      // Exactly-once guard for handleClose itself (not just the resolve): the
+      // fallback path calls handleClose(null), and a late real 'close' must
+      // not re-run its persist side effects.
+      let closeStarted = false;
 
       const settle = (result: ExecutorResult): void => {
         if (settled) return;
         settled = true;
+        if (settleFallbackTimer) clearTimeout(settleFallbackTimer);
         resolvePromise(result);
       };
 
@@ -633,6 +674,28 @@ export class ClaudeCliExecutor implements AgentExecutor {
           .catch((err) => this.logger.error(`failed to persist run_event for ${ctx.runId}: ${String(err)}`));
         lastPersist = p;
         return p;
+      };
+
+      // Feature 034: every kill path arms the settlement fallback — the wedge
+      // (an escaped stdio-holding descendant blocking 'close') threatens the
+      // abort kill AND the rate-limit kill alike (incident 2026-07-19: the
+      // rate-limited process lingered ~50min until the watchdog abort).
+      const terminateAndSettle = (): void => {
+        void group
+          .terminate(runtimeConfig.killGraceMs)
+          .catch(() => undefined)
+          .then(() => {
+            if (settled || closeStarted) return;
+            if (settleFallbackTimer) clearTimeout(settleFallbackTimer);
+            settleFallbackTimer = setTimeout(() => {
+              if (settled || closeStarted) return;
+              void persistRunEvent('log', {
+                source: 'settlement-timeout',
+                message: `process group did not close within ${runtimeConfig.settleGraceMs}ms of the kill — settling the run from the parsed outcome`,
+              });
+              void handleClose(null);
+            }, runtimeConfig.settleGraceMs);
+          });
       };
 
       const rl = createInterface({ input: group.child.stdout! });
@@ -651,7 +714,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
             case 'rate_limit':
               rateLimited = { retryDelayMs: parsed.retryDelayMs, attempt: parsed.attempt };
               // D5: don't wait out a subscription window inside a worker slot.
-              void group.terminate(runtimeConfig.killGraceMs);
+              terminateAndSettle();
               break;
           }
         }
@@ -661,7 +724,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
 
       const onAbort = (): void => {
         abortReason = signal.reason === 'cancelled' ? 'cancelled' : 'timeout';
-        void group.terminate(runtimeConfig.killGraceMs);
+        terminateAndSettle();
       };
       signal.addEventListener('abort', onAbort, { once: true });
       if (signal.aborted) onAbort();
@@ -671,6 +734,8 @@ export class ClaudeCliExecutor implements AgentExecutor {
       });
 
       const handleClose = async (code: number | null): Promise<void> => {
+        if (closeStarted) return;
+        closeStarted = true;
         signal.removeEventListener('abort', onAbort);
 
         // The CLI prices total_cost_usd at ANTHROPIC rates regardless of the
@@ -813,6 +878,9 @@ export class ClaudeCliExecutor implements AgentExecutor {
       };
 
       group.child.once('close', (code) => {
+        // Disarm the settlement fallback synchronously — the real 'close' won
+        // the race and must not be shadowed by a spurious fallback event.
+        if (settleFallbackTimer) clearTimeout(settleFallbackTimer);
         void handleClose(code);
       });
     });
