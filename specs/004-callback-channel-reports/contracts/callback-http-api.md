@@ -59,6 +59,14 @@ Body = `ReportSchema` (the full structured report). Effect:
 - The MCP server writes the completion marker on 2xx (FR-013).
 - Repeat completion for an already-finalized run → **409** `{ "ok": false, "error": "conflict" }`
   (FR-009; the guarded UPDATE matches 0 rows).
+- **Feature 033 (side effect, evidence-gated, fail-open):** after a successful finalize, if the
+  request carried a parseable `x-brigadir-observed-heads` header, the run is ticket-bound, and the
+  report has ≥1 `pass` check, the backend whole-replaces `tickets.verification` with a sha-anchored
+  receipt (`VerificationReceiptSchema`: `{version, runId, agentRole, agentName, outcome,
+  recordedAt, gates[≤10, pass-only, deduped], repos{name→sha}}`) and writes a
+  `run_events` row (`type:'log'`, `payload.source:'verification-receipt'`). Written for ALL report
+  outcomes. Any failure in this block is logged and never affects the completion response; the
+  worker exit-time/outbox finalization paths carry no observed heads and never write receipts.
 
 **200** `{ "ok": true, "outcome": "success" }`.
 

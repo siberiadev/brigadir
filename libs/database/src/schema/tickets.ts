@@ -27,6 +27,10 @@ export const tickets = pgTable(
     blockedBy: jsonb('blocked_by'),
     // waiting | cycle | dead_end | out_of_scope
     blockedState: text('blocked_state'),
+    // feature 033: sha-anchored verification receipt (VerificationReceiptSchema)
+    // written on callback complete with measured observed heads; whole-replace,
+    // never cleared — a stale receipt self-invalidates by sha mismatch.
+    verification: jsonb('verification'),
   },
   (t) => [unique('tickets_workspace_key').on(t.workspaceId, t.jiraKey)],
 );

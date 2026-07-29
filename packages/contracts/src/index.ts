@@ -1,6 +1,7 @@
 export * from './answer-option.schema';
 export * from './agent-key';
 export * from './report.schema';
+export * from './verification-receipt.schema';
 export * from './callback-tools.schema';
 export * from './agents-config.schema';
 export * from './trigger-event.schema';

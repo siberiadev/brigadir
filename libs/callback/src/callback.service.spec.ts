@@ -394,6 +394,177 @@ describe('CallbackService (T100)', () => {
     expect(finalizeWithReport).toHaveBeenCalledTimes(1);
   });
 
+  // --- feature 033: ticket-level verification receipt ---
+
+  // A db that serves the gate baseline query, the runs⨝agents lookup (both the
+  // receipt writer's and maybeQueueReviewTask's — same chain shape, one row
+  // carrying all selected fields), captures tickets updates and event inserts.
+  function receiptDb(opts: {
+    startRefRows?: Array<{ repo: string; startSha: string }>;
+    runRow?: { ticketId: string | null; agentRole: string | null; agentName: string | null };
+    failTicketUpdate?: boolean;
+  }) {
+    const inserted: Array<{ payload?: { source?: string } }> = [];
+    const ticketUpdates: unknown[] = [];
+    const startRefs = (opts.startRefRows ?? []).map((r) => ({
+      payload: { source: 'start-ref', repo: r.repo, startSha: r.startSha },
+    }));
+    const joinRow = opts.runRow ? [{ ...opts.runRow, behavior: {} }] : [];
+    return {
+      inserted,
+      ticketUpdates,
+      insert: () => ({
+        values: async (v: { payload?: { source?: string } }) => {
+          inserted.push(v);
+        },
+      }),
+      update: () => ({
+        set: (vals: unknown) => ({
+          where: async () => {
+            if (opts.failTicketUpdate) throw new Error('tickets update exploded');
+            ticketUpdates.push(vals);
+          },
+        }),
+      }),
+      select: () => ({
+        from: () => ({
+          where: async () => startRefs,
+          innerJoin: () => ({ where: () => ({ limit: async () => joinRow }) }),
+          limit: async () => [],
+        }),
+      }),
+    };
+  }
+
+  function makeReceiptService(db: unknown) {
+    return new CallbackService(
+      db as never,
+      fakeModuleRef() as never,
+      { finalizeWithReport: vi.fn().mockResolvedValue(true) } as unknown as RunsService,
+      { onRunFinished: vi.fn().mockResolvedValue(undefined) } as unknown as PipelineService,
+      { acceptTeamReport: vi.fn() } as unknown as SetupApplyService,
+      { createFromRequest: vi.fn().mockResolvedValue({ created: true, blocking: false }) } as unknown as HumanTaskService,
+    );
+  }
+
+  const receiptRunRow = { ticketId: 'ticket-1', agentRole: 'Developer', agentName: 'Nemo' };
+
+  it('complete: writes a ticket verification receipt (pass checks only) and a receipt event', async () => {
+    const db = receiptDb({ startRefRows: [{ repo: 'product', startSha: A }], runRow: receiptRunRow });
+    const service = makeReceiptService(db);
+
+    const result = await service.complete(
+      'run-1',
+      {
+        schema_version: 1,
+        outcome: 'success',
+        summary: 'done',
+        checks: [
+          { name: 'lint', status: 'pass' },
+          { name: 'e2e', status: 'fail' },
+        ],
+      },
+      observedHeader({ product: A }),
+    );
+
+    expect(result).toEqual({ ok: true, outcome: 'success' });
+    expect(db.ticketUpdates).toHaveLength(1);
+    const update = db.ticketUpdates[0] as { verification: { gates: string[]; repos: Record<string, string>; runId: string } };
+    expect(update.verification.gates).toEqual(['lint']);
+    expect(update.verification.repos).toEqual({ product: A });
+    expect(update.verification.runId).toBe('run-1');
+    const event = db.inserted.find((e) => e.payload?.source === 'verification-receipt');
+    expect(event).toBeDefined();
+    expect((event as { payload: { message: string } }).payload.message).toContain('lint');
+    expect((event as { payload: { message: string } }).payload.message).toContain(`product@${A.slice(0, 7)}`);
+  });
+
+  it('complete: no receipt without an observed-heads header', async () => {
+    const db = receiptDb({ runRow: receiptRunRow });
+    const service = makeReceiptService(db);
+
+    await service.complete('run-1', {
+      schema_version: 1,
+      outcome: 'success',
+      summary: 'done',
+      checks: [{ name: 'lint', status: 'pass' }],
+    });
+
+    expect(db.ticketUpdates).toHaveLength(0);
+  });
+
+  it('complete: no receipt for a ticketless run', async () => {
+    const db = receiptDb({
+      startRefRows: [{ repo: 'product', startSha: A }],
+      runRow: { ticketId: null, agentRole: null, agentName: null },
+    });
+    const service = makeReceiptService(db);
+
+    await service.complete(
+      'run-1',
+      { schema_version: 1, outcome: 'success', summary: 'done', checks: [{ name: 'lint', status: 'pass' }] },
+      observedHeader({ product: A }),
+    );
+
+    expect(db.ticketUpdates).toHaveLength(0);
+  });
+
+  it('complete: no receipt when the report has zero pass checks', async () => {
+    const db = receiptDb({ startRefRows: [{ repo: 'product', startSha: A }], runRow: receiptRunRow });
+    const service = makeReceiptService(db);
+
+    await service.complete(
+      'run-1',
+      { schema_version: 1, outcome: 'failure', summary: 'broke', checks: [{ name: 'lint', status: 'fail' }] },
+      observedHeader({ product: A }),
+    );
+
+    expect(db.ticketUpdates).toHaveLength(0);
+    expect(db.inserted.find((e) => e.payload?.source === 'verification-receipt')).toBeUndefined();
+  });
+
+  it('complete: a failure outcome with honest pass checks still records a receipt', async () => {
+    const db = receiptDb({ startRefRows: [{ repo: 'product', startSha: A }], runRow: receiptRunRow });
+    const service = makeReceiptService(db);
+
+    await service.complete(
+      'run-1',
+      {
+        schema_version: 1,
+        outcome: 'failure',
+        summary: 'one e2e is flaky',
+        checks: [
+          { name: 'lint', status: 'pass' },
+          { name: 'typecheck', status: 'pass' },
+          { name: 'e2e', status: 'fail' },
+        ],
+      },
+      observedHeader({ product: A }),
+    );
+
+    expect(db.ticketUpdates).toHaveLength(1);
+    const update = db.ticketUpdates[0] as { verification: { gates: string[]; outcome: string } };
+    expect(update.verification.gates).toEqual(['lint', 'typecheck']);
+    expect(update.verification.outcome).toBe('failure');
+  });
+
+  it('complete: a receipt-write failure never breaks the completion (fail-open)', async () => {
+    const db = receiptDb({
+      startRefRows: [{ repo: 'product', startSha: A }],
+      runRow: receiptRunRow,
+      failTicketUpdate: true,
+    });
+    const service = makeReceiptService(db);
+
+    const result = await service.complete(
+      'run-1',
+      { schema_version: 1, outcome: 'success', summary: 'done', checks: [{ name: 'lint', status: 'pass' }] },
+      observedHeader({ product: A }),
+    );
+
+    expect(result).toEqual({ ok: true, outcome: 'success' });
+  });
+
   it('progress: valid input inserts a run_events row and returns ok', async () => {
     const inserted: unknown[] = [];
     const db = {
