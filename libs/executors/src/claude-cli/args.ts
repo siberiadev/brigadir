@@ -93,6 +93,15 @@ export function buildArgs(input: ArgsInput): string[] {
     args.push('--mcp-config', input.mcpConfigPath);
   }
 
+  if (useCallbackChannel) {
+    // Token-spend problem 1: ScheduleWakeup is never in --allowed-tools, but
+    // the CLI auto-allows it under dontAsk — production data (176-run
+    // analysis, 2026-07-28) shows agents used it to poll, which costs a full
+    // cache-read turn per wakeup, same as sleep-polling. Waiting must end the
+    // session (bash-guard + wrapper rule), so the tool is disallowed outright.
+    args.push('--disallowed-tools', 'ScheduleWakeup');
+  }
+
   args.push('--settings', settings, '--permission-mode', 'dontAsk');
 
   if (input.maxTurns !== undefined) {

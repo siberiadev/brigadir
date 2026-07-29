@@ -24,6 +24,8 @@ export type TimelineTypeKey =
   | 'channel_down'
   // feature 027: доставка callback'а исчерпала ретраи (breadcrumb → run_events).
   | 'channel_failure'
+  // token-spend problem 1: PreToolUse bash-guard отклонил sleep-ожидание.
+  | 'tool_denied'
   | 'unknown';
 
 export type BodyFormat = 'markdown' | 'mono' | 'kv';
@@ -74,6 +76,7 @@ const KNOWN_TYPES = new Set([
   'undelivered_report',
   'channel_down',
   'channel_failure',
+  'tool_denied',
 ]);
 
 /**
@@ -265,6 +268,26 @@ function presentToolCall(payload: unknown, rawType: string): Presented {
     return { title, body: null, percent: null, bodyFormat: 'kv', kv, fieldTruncated };
   }
   return { title, body: null, percent: null, bodyFormat: null, fieldTruncated };
+}
+
+/**
+ * Token-spend problem 1: a PreToolUse bash-guard denial (`tool_denied`). The
+ * denied command is the body (mono); when only the guard's reason survived
+ * (evicted/unknown tool_use), it takes the body slot instead. The `denied`
+ * warning tag is the outcome marker.
+ */
+function presentToolDenied(payload: unknown, rawType: string): Presented {
+  const rec = asRecord(payload) ?? {};
+  const name = asString(rec.name);
+  const body = asString(rec.command) ?? asString(rec.reason);
+  return {
+    title: name ? prettifyToolName(name) : rawType,
+    tags: [{ label: 'denied', tone: 'warning' }],
+    body,
+    percent: null,
+    bodyFormat: body ? 'mono' : null,
+    fieldTruncated: rec.truncated === true,
+  };
 }
 
 function presentProgress(payload: unknown): Presented {
@@ -543,6 +566,9 @@ export function presentEvent(e: RunCardEvent): TimelineItem {
       break;
     case 'channel_failure':
       presented = presentChannelFailure(e.payload);
+      break;
+    case 'tool_denied':
+      presented = presentToolDenied(e.payload, e.type);
       break;
     default:
       presented = presentUnknown(e.payload, e.type);

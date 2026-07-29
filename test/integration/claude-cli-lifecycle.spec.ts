@@ -156,6 +156,31 @@ describe('claude_cli lifecycle (T084/US1, T087/US4)', () => {
     expect(row.usage).toMatchObject({ input_tokens: 1200, output_tokens: 340 });
   });
 
+  // Token-spend problem 1: a bash-guard denial (user tool_result carrying the
+  // [brigadir-bash-guard] prefix) lands in run_events as `tool_denied` —
+  // proves the parser → persistRunEvent → DB path end-to-end.
+  it('bash-guard denial: the denied Bash call is persisted as a tool_denied run_event', async () => {
+    const { runId } = await triggerRun('stream-bash-guard-denied');
+    await pollRun(runId, TERMINAL);
+
+    const events = await db.db
+      .select()
+      .from(schema.runEvents)
+      .where(eq(schema.runEvents.runId, runId))
+      .orderBy(schema.runEvents.id);
+
+    const denied = events.find((e) => e.type === 'tool_denied');
+    expect(denied).toBeDefined();
+    expect(denied!.payload).toMatchObject({ name: 'Bash', command: 'sleep 600' });
+    expect(String((denied!.payload as Record<string, unknown>).reason)).toContain(
+      '[brigadir-bash-guard]',
+    );
+    // The attempted call itself is still a normal tool_call row before it.
+    const toolCallIdx = events.findIndex((e) => e.type === 'tool_call');
+    expect(toolCallIdx).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf(denied!)).toBeGreaterThan(toolCallIdx);
+  });
+
   it('stderr tail: a nonzero exit with stderr output records a bounded tail in `error`', async () => {
     // No fixture set at all → fake-claude.mjs skips stdout streaming entirely
     // and goes straight to writing stderr + exiting nonzero.

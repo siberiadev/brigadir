@@ -30,6 +30,10 @@ spawn(cliPath, argv, {
 --strict-mcp-config
 --settings <inline hardening JSON>
 --permission-mode dontAsk
+[--disallowed-tools ScheduleWakeup]   // callback-wired runs only (token-spend
+                                      // problem 1: the CLI auto-allows the tool
+                                      // under dontAsk; wakeup-polling costs a
+                                      // full cache-read turn per check)
 [--max-turns <n>] [--max-budget-usd <n>]
 ```
 
@@ -45,6 +49,7 @@ The wrapped instruction / task text (arbitrary ticket content) is written to
 | `system`/`init` | `session_id`, `model`, `tools`, `mcp_servers` | `externalRef=session_id`; `run_events(log)` |
 | assistant msg w/ `tool_use` | tool `name`, `input` | `run_events(tool_call)` (bounded) |
 | assistant msg w/ text | text | `run_events(progress)` (sampled, truncated) |
+| `user` msg w/ `tool_result` containing `[brigadir-bash-guard]` | `tool_use_id`, result text | `run_events(tool_denied)` (bounded payload `{name, command?, reason, truncated}`); every other `user` event is still ignored |
 | `system`/`api_retry` | `error`, `retry_delay_ms`, `attempt`, `max_retries` | if `error=="rate_limit"` → `run_events(api_retry)`, capture ttl, group-kill, `exitStatus:'rate_limited'` (D5) |
 | `result` (terminal) | `subtype`, `is_error`, `total_cost_usd`, `usage`, `structured_output`, `result` | capture cost/usage; report = `structured_output` (D1) |
 

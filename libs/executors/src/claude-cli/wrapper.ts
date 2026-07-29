@@ -48,8 +48,18 @@ function callbackToolsSection(): string[] {
       'with `network error` or `fetch failed`, immediately call ' +
       "mcp__brigadir__request_human(blocking=true, title='MCP callback channel unreachable', " +
       'details=...) and stop the session. Do not retry the same tool more than three times ' +
-      'yourself, and do not use `ScheduleWakeup`, `Bash sleep`, or `until false` loops to wait ' +
-      'for infrastructure recovery inside a run.',
+      'yourself.',
+    // Token-spend problem 1 (analysis 2026-07-28): every polling turn re-reads
+    // the whole cached context — waiting must END the session, never loop in
+    // it. Enforced at the boundary by the PreToolUse bash-guard.
+    'Never wait in-session for ANY precondition — not CI, not a deploy, not another ticket, not ' +
+      'a human answer, not infrastructure recovery. Do not use `ScheduleWakeup`, `Bash sleep`, ' +
+      'or `until false` polling loops to wait; sleep-based waiting is blocked by the harness. ' +
+      'If forward progress needs a condition that does not hold right now, end the session ' +
+      'instead: call mcp__brigadir__request_human(blocking=true, ...) when a person must act or ' +
+      'answer, or mcp__brigadir__complete_task(outcome="failure" or "needs_human") describing ' +
+      'exactly what you are waiting for — the platform restarts the run when the condition ' +
+      'holds.',
     '- outcome="success" ONLY if every required check actually passed in this session. Never ' +
       'claim a check passed without running it.',
     '- outcome="failure" if something required failed — report each check honestly with its ' +

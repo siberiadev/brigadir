@@ -42,6 +42,18 @@ describe('buildWrapperText (T103, D6)', () => {
     expect(text).toContain('until false');
   });
 
+  // Token-spend problem 1 (analysis 2026-07-28): the prohibition covers ANY
+  // precondition, not just infrastructure recovery, and names both
+  // session-ending exits.
+  it('callback path bans in-session waiting for any precondition and names the exit paths', () => {
+    const text = buildWrapperText(ctx, '/tmp/wt', { useCallbackChannel: true });
+    expect(text).toContain('Never wait in-session for ANY precondition');
+    expect(text).toContain('blocked by the harness');
+    expect(text).toContain('mcp__brigadir__request_human(blocking=true');
+    expect(text).toContain('mcp__brigadir__complete_task(outcome="failure" or "needs_human")');
+    expect(text).toContain('restarts the run when the condition holds');
+  });
+
   it('structured-output path does not contain callback-channel fail-fast rules', () => {
     const text = buildWrapperText(ctx, '/tmp/wt', { useCallbackChannel: false });
     expect(text).not.toContain('MCP callback channel unreachable');
