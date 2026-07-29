@@ -539,3 +539,58 @@ describe('branchExistsOnOrigin (feature 032)', () => {
     expect(await branchExistsOnOrigin(caches.product, '')).toBe(false);
   });
 });
+
+/**
+ * Feature 034: the prepare phase is abortable — the run's AbortSignal threads
+ * into the network git ops, and boundary checks stop work between repos. (The
+ * per-command WORKTREE_GIT_TIMEOUT_MS hang-breaker is exercised implicitly by
+ * every test above: all git calls run through the same gitExec wrapper.)
+ */
+describe('abortable prepare (feature 034)', () => {
+  let root: string;
+  let remoteDir: string;
+  let repo: WorktreeRepo;
+  let worktreeRoot: string;
+  let repoCacheRoot: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'brigadir-worktree-abort-'));
+    remoteDir = join(root, 'remote');
+    await initRemote(remoteDir);
+    repo = { name: 'product', url: remoteDir, defaultBranch: 'main' };
+    worktreeRoot = join(root, 'worktrees');
+    repoCacheRoot = join(root, 'repos');
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('ensureCaches with a pre-aborted signal throws before cloning anything', async () => {
+    const controller = new AbortController();
+    controller.abort('timeout');
+    await expect(ensureCaches([repo], repoCacheRoot, controller.signal)).rejects.toThrow();
+    expect(existsSync(join(repoCacheRoot, 'product'))).toBe(false);
+  });
+
+  it('prepareAll with a pre-aborted signal throws and leaves no workspace behind', async () => {
+    const controller = new AbortController();
+    controller.abort('cancelled');
+    await expect(
+      prepareAll([repo], 'run-abort-1', worktreeRoot, repoCacheRoot, {
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow();
+    expect(existsSync(join(worktreeRoot, 'run-abort-1'))).toBe(false);
+  });
+
+  it('an un-aborted signal changes nothing — the workspace prepares normally', async () => {
+    const controller = new AbortController();
+    const ws = await prepareAll([repo], 'run-abort-2', worktreeRoot, repoCacheRoot, {
+      signal: controller.signal,
+    });
+    expect(ws.repos).toHaveLength(1);
+    expect(existsSync(ws.repos[0].worktreeDir)).toBe(true);
+    await cleanupAll(ws);
+  });
+});

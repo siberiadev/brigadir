@@ -23,6 +23,7 @@ loader.
 | `maxTurns` | int ≥ 1 | no | — | `--max-turns`; also `RunContext.limits.maxTurns` |
 | `killGraceMs` | int ≥ 0 | no | 5000 | SIGTERM→SIGKILL grace (D2) |
 | `cancelPollMs` | int ≥ 1 | no | 3000 | run-status cancel poll interval (D4) |
+| `settleGraceMs` | int ≥ 0 | no | 5000 | feature 034: post-kill window for `close` before the run settles from the parsed outcome (runtime clamp [100, 60000]); a wedged stdio-holding descendant can no longer block settlement — a `run_events` log row (`payload.source: 'settlement-timeout'`) records the fallback |
 
 Budget/timeout live on the **agent**, not the executor (existing
 `AgentConfigSchema.max_budget_usd`, `timeout_minutes`) → flow into

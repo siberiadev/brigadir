@@ -11,11 +11,17 @@ import { DriftRepairService } from './drift-repair.service';
 /**
  * ReconcileService (contracts.md C7 / research D7). One pass = four ordered
  * steps, each wrapped in its own try/catch so a failing step logs and continues
- * (never starves the rest). All steps share ONE pass-level Jira budget — the
- * single lazy JiraClient's global token-bucket + concurrency cap serialize every
- * Jira call across the steps.
+ * (never starves the rest). All Jira-bound steps share ONE pass-level Jira
+ * budget — the single lazy JiraClient's global token-bucket + concurrency cap
+ * serialize every Jira call across the steps.
  *
- * Steps: poll & diff → dependency re-eval → watchdog → drift repair.
+ * Steps: watchdog (global, Jira-free, includes the queued sweep) → then
+ * per-workspace: poll & diff → dependency re-eval → drift repair.
+ *
+ * Feature 034: the watchdog is a pure-DB reaper and runs FIRST, before any
+ * Jira client resolution — a credential-decode failure or board-introspection
+ * outage must never starve run finalization (the 17h-Reviewer incident: a
+ * workspace-level Jira failure silently disabled its watchdog).
  *
  * Board introspection is wired here LAZILY (closing the phase-1-3 deviation):
  * boot stays credential-free; at the START of a pass, if `jira_board_type` is
@@ -46,6 +52,10 @@ export class ReconcileService {
   ) {}
 
   async run(): Promise<void> {
+    // Jira-free and workspace-independent — must run even when every
+    // workspace is disabled or every Jira credential is broken.
+    await this.step('watchdog', () => this.watchdog.sweepAll());
+
     const workspaces = await this.db
       .select({
         id: schema.workspaces.id,
@@ -86,7 +96,6 @@ export class ReconcileService {
 
         await this.step('poll & diff', () => this.poller.pollAndDiff(ws, jira));
         await this.step('dependency re-eval', () => this.reEvaluateDependencies(ws, jira));
-        await this.step('watchdog', () => this.watchdog.sweep(ws));
         await this.step('drift repair', () => this.drift.repair(ws));
       } catch (err) {
         this.logger.error(

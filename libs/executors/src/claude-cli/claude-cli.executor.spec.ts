@@ -469,7 +469,9 @@ describe('ClaudeCliExecutor.run (T082)', () => {
     const controller = new AbortController();
 
     const runPromise = executor.run(makeCtx(), controller.signal);
-    await flush();
+    // Feature 034 made the prepare phase abortable, so the abort must land on
+    // the RUNNING process to exercise the terminate path — wait for the spawn.
+    await waitForSpawn(spawnGroupMock);
     controller.abort('timeout');
 
     const result = await runPromise;
@@ -544,7 +546,7 @@ describe('ClaudeCliExecutor.run (T082)', () => {
     const controller = new AbortController();
 
     const runPromise = executor.run(makeCtx(), controller.signal);
-    await flush();
+    await waitForSpawn(spawnGroupMock);
     controller.abort('cancelled');
 
     const result = await runPromise;
@@ -676,6 +678,148 @@ describe('ClaudeCliExecutor.run (T082)', () => {
     expect(result.exitStatus).toBe('crashed');
     expect(result.diagnostics).toContain('branch already exists');
     expect(spawnGroupMock).not.toHaveBeenCalled();
+  });
+
+  // --- Feature 034: settlement fallback — a wedged 'close' must not wedge the run ---
+
+  function settlementEvents(db: ReturnType<typeof fakeDb>) {
+    return (db.insertedEvents as unknown[])
+      .flatMap((v) => (Array.isArray(v) ? v : [v]))
+      .filter(
+        (e) =>
+          (e as { type?: string })?.type === 'log' &&
+          (e as { payload?: { source?: string } })?.payload?.source === 'settlement-timeout',
+      );
+  }
+
+  function makeWedgedExecutor() {
+    const db = fakeDb({ ...executorConfig, settleGraceMs: 150 }, {});
+    const fakeJira = { getFeatureContext: vi.fn().mockResolvedValue({ linked: [] }) };
+    return { db, executor: new ClaudeCliExecutor(db as never, agentsConfig, fakeJira as never) };
+  }
+
+  it('feature 034: a timeout abort with NO close ever settles via the fallback + settlement-timeout event', async () => {
+    const group = makeGroupNoClose();
+    spawnGroupMock.mockReturnValue(group);
+    const { db, executor } = makeWedgedExecutor();
+    const controller = new AbortController();
+
+    const runPromise = executor.run(makeCtx(), controller.signal);
+    await waitForSpawn(spawnGroupMock);
+    controller.abort('timeout');
+
+    // Resolves WITHOUT anyone emitting 'close' — the pre-034 wedge.
+    const result = await runPromise;
+    expect(result.exitStatus).toBe('timeout');
+    expect(group.terminate).toHaveBeenCalledWith(1000);
+    expect(settlementEvents(db)).toHaveLength(1);
+  });
+
+  it('feature 034: a late real close after the fallback settled is a no-op (one resolve, one event)', async () => {
+    const group = makeGroupNoClose();
+    spawnGroupMock.mockReturnValue(group);
+    const { db, executor } = makeWedgedExecutor();
+    const controller = new AbortController();
+
+    const runPromise = executor.run(makeCtx(), controller.signal);
+    await waitForSpawn(spawnGroupMock);
+    controller.abort('timeout');
+    const result = await runPromise;
+    expect(result.exitStatus).toBe('timeout');
+
+    group.child.emit('close', null, 'SIGKILL');
+    await flush();
+    expect(result.exitStatus).toBe('timeout');
+    expect(settlementEvents(db)).toHaveLength(1);
+  });
+
+  it('feature 034: cancelled variant settles cancelled via the fallback', async () => {
+    const group = makeGroupNoClose();
+    spawnGroupMock.mockReturnValue(group);
+    const { executor } = makeWedgedExecutor();
+    const controller = new AbortController();
+
+    const runPromise = executor.run(makeCtx(), controller.signal);
+    await waitForSpawn(spawnGroupMock);
+    controller.abort('cancelled');
+
+    const result = await runPromise;
+    expect(result.exitStatus).toBe('cancelled');
+  });
+
+  it('feature 034: a rate-limited run whose kill wedges settles rate_limited with NO abort at all', async () => {
+    // Extends the incident-2026-07-19 invariant: pre-034 this run waited for
+    // the watchdog abort (~50min of a burned worker slot); now the rate-limit
+    // kill itself arms the fallback.
+    const group = makeGroupNoClose();
+    spawnGroupMock.mockReturnValue(group);
+    const { executor } = makeWedgedExecutor();
+
+    const runPromise = executor.run(makeCtx(), new AbortController().signal);
+    await waitForSpawn(spawnGroupMock);
+    for (const line of readFixtureLines('stream-rate-limit')) group.child.stdout.write(line + '\n');
+    await flush();
+
+    const result = await runPromise;
+    expect(result.exitStatus).toBe('rate_limited');
+  });
+
+  // --- Feature 034: abortable preparation phase ---
+
+  it('feature 034: a pre-aborted signal resolves cancelled without preparing or spawning anything', async () => {
+    const executor = makeExecutor();
+    const controller = new AbortController();
+    controller.abort('cancelled');
+
+    const result = await executor.run(makeCtx(), controller.signal);
+    expect(result.exitStatus).toBe('cancelled');
+    expect(result.diagnostics).toContain('aborted during workspace preparation');
+    expect(ensureCachesMock).not.toHaveBeenCalled();
+    expect(prepareMock).not.toHaveBeenCalled();
+    expect(spawnGroupMock).not.toHaveBeenCalled();
+  });
+
+  it('feature 034: an abort during a hung ensureCaches resolves timeout, not crashed', async () => {
+    // Models a git fetch wedged on a dead connection: the real ensureCaches
+    // rejects when the threaded signal aborts the execFile mid-transfer.
+    ensureCachesMock.mockReset().mockImplementation(
+      (_repos: unknown, _root: unknown, signal: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('fetch aborted')), {
+            once: true,
+          });
+        }),
+    );
+    const executor = makeExecutor();
+    const controller = new AbortController();
+
+    const runPromise = executor.run(makeCtx(), controller.signal);
+    await flush();
+    controller.abort('timeout');
+
+    const result = await runPromise;
+    expect(result.exitStatus).toBe('timeout');
+    expect(result.diagnostics).toContain('aborted during workspace preparation');
+    expect(spawnGroupMock).not.toHaveBeenCalled();
+  });
+
+  it('feature 034: a real close arriving inside the grace window wins — no settlement event', async () => {
+    const group = makeGroupNoClose();
+    spawnGroupMock.mockReturnValue(group);
+    const { db, executor } = makeWedgedExecutor();
+    const controller = new AbortController();
+
+    const runPromise = executor.run(makeCtx(), controller.signal);
+    await waitForSpawn(spawnGroupMock);
+    controller.abort('timeout');
+    // terminate() resolved (it is a resolved promise) — the timer is arming;
+    // the process then closes normally well inside the 150ms window.
+    await flush();
+    group.child.emit('close', null, 'SIGKILL');
+
+    const result = await runPromise;
+    expect(result.exitStatus).toBe('timeout');
+    expect(settlementEvents(db)).toHaveLength(0);
   });
 });
 
