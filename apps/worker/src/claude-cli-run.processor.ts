@@ -102,6 +102,29 @@ export function sanitizeRateLimitTtl(reported: unknown): number {
 }
 
 /**
+ * Hard ceiling on a run's timeout timer (feature 034). `timeout_ms_override`
+ * rides the `.passthrough()` TriggerEventSchema, so it is untrusted input: a
+ * fat-fingered epoch-millis value would arm a multi-year `setTimeout`,
+ * silently disabling the per-attempt kill. 24h is far above any sane agent
+ * budget and low enough that a bogus value still gets reaped same-day.
+ */
+export const MAX_RUN_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Pure: `timeout_ms_override` (or the agent's minutes-derived budget) → a
+ * bounded timer duration. Garbage (non-number/non-finite/≤0) falls back;
+ * small values pass through EXACTLY — sub-second overrides are how the
+ * orphan-process integration fixtures prove a real kill (see
+ * `claude-cli-limits.spec.ts`); only the unbounded top end is closed.
+ */
+export function sanitizeTimeoutMs(override: unknown, fallbackMs: number): number {
+  if (typeof override !== 'number' || !Number.isFinite(override) || override <= 0) {
+    return Math.min(fallbackMs, MAX_RUN_TIMEOUT_MS);
+  }
+  return Math.min(Math.ceil(override), MAX_RUN_TIMEOUT_MS);
+}
+
+/**
  * ClaudeCliRunProcessor (T083) — consumes `run.claude_cli` jobs. A near-copy
  * of `RunProcessor`: finalization flows through byte-for-byte the same
  * branches (FR-009). The only real difference is that this executor type
@@ -265,7 +288,7 @@ export class ClaudeCliRunProcessor
     // grandchild gets killed rather than racing the child's own startup.
     const timeoutMsOverride = (loaded.triggerEvent as { timeout_ms_override?: number } | null)
       ?.timeout_ms_override;
-    const timeoutMs = timeoutMsOverride ?? loaded.timeoutMinutes * 60_000;
+    const timeoutMs = sanitizeTimeoutMs(timeoutMsOverride, loaded.timeoutMinutes * 60_000);
     const timeoutTimer = setTimeout(() => controller.abort('timeout'), timeoutMs);
     // Set on the first poll tick that observes a callback finalize; the abort
     // is deferred until this deadline so the CLI can print its terminal result

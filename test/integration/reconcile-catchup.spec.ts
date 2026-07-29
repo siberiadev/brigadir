@@ -165,7 +165,9 @@ describe('reconcile orchestration: one failing step does not starve the rest (T0
       })
       .overrideProvider(WatchdogService)
       .useValue({
-        sweep: async () => {
+        // Feature 034: the watchdog is global (`sweepAll`) and runs BEFORE the
+        // per-workspace Jira-bound steps.
+        sweepAll: async () => {
           ran.watchdog = true;
         },
       })

@@ -104,6 +104,12 @@ export interface ClaudeCliRuntimeConfig {
   maxTurns?: number;
   killGraceMs: number;
   cancelPollMs: number;
+  /**
+   * Feature 034: bounded window after an abort's terminate() completes for
+   * the child's 'close' to arrive before the run is settled from the abort
+   * outcome (an escaped stdio-holding descendant otherwise wedges the run).
+   */
+  settleGraceMs: number;
   /** Feature 004 (D6): explicit opt-in to the MCP callback channel. */
   useCallbackChannel: boolean;
 }
@@ -231,6 +237,27 @@ export function normalizeKillGraceMs(raw: unknown): number {
   return int;
 }
 
+/** Bounds for the post-kill settlement window (feature 034). */
+const SETTLE_GRACE_MIN_MS = 100;
+const SETTLE_GRACE_MAX_MS = 60_000;
+const SETTLE_GRACE_DEFAULT_MS = 5000;
+
+/**
+ * Same clamp discipline as `normalizeKillGraceMs`: the value is read from
+ * stored jsonb / constructed directly in tests, both bypassing the schema.
+ * The floor is 100ms (not 1s): the window opens only AFTER terminate()
+ * completed — the group is already dead — so a small window is harmless and
+ * keeps the integration harness fast; a zero/near-zero window would race a
+ * genuinely imminent 'close' and emit spurious settlement-timeout events.
+ */
+export function normalizeSettleGraceMs(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return SETTLE_GRACE_DEFAULT_MS;
+  const int = Math.round(raw);
+  if (int < SETTLE_GRACE_MIN_MS) return SETTLE_GRACE_MIN_MS;
+  if (int > SETTLE_GRACE_MAX_MS) return SETTLE_GRACE_MAX_MS;
+  return int;
+}
+
 export function resolveClaudeCliConfig(
   raw: ClaudeCliExecutorConfigInput,
   agentAllowedTools: readonly string[] = [],
@@ -246,6 +273,7 @@ export function resolveClaudeCliConfig(
     maxTurns: raw.maxTurns,
     killGraceMs: normalizeKillGraceMs(raw.killGraceMs),
     cancelPollMs: raw.cancelPollMs,
+    settleGraceMs: normalizeSettleGraceMs(raw.settleGraceMs),
     useCallbackChannel: raw.useCallbackChannel,
   };
 }
