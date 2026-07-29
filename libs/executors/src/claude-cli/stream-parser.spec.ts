@@ -190,3 +190,89 @@ describe('ClaudeStreamParser — structured tool_call payload (feature 026)', ()
     expect(p.truncated).toBe(true);
   });
 });
+
+// Token-spend problem 1: bash-guard denials (PreToolUse hook) surface as
+// `user` tool_result blocks carrying the stable prefix — they become
+// `tool_denied` run events; every other user/tool_result stays dropped.
+describe('ClaudeStreamParser — tool_denied (bash-guard)', () => {
+  // Pinned literal — must match BASH_GUARD_PREFIX in
+  // packages/mcp-server/src/bash-guard-logic.ts (its spec pins it too).
+  const PREFIX = '[brigadir-bash-guard]';
+  const DENY_TEXT = `${PREFIX} Denied: cumulative sleep of 600s exceeds the 15s limit. …`;
+
+  const toolUseLine = (id: string, command: string) =>
+    JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }] },
+    });
+  const toolResultLine = (id: string, content: unknown) =>
+    JSON.stringify({
+      type: 'user',
+      message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content }] },
+    });
+
+  function deniedPayload(parser: ClaudeStreamParser, line: string) {
+    const parsed = parser.parseLine(line);
+    expect(parsed).toHaveLength(1);
+    if (parsed[0].kind !== 'run_event') throw new Error('expected run_event');
+    expect(parsed[0].event.type).toBe('tool_denied');
+    return parsed[0].event.payload as Record<string, unknown>;
+  }
+
+  it('a denied Bash call becomes one tool_denied event carrying the command', () => {
+    const parser = new ClaudeStreamParser();
+    parser.parseLine(toolUseLine('tu-1', 'sleep 600'));
+    const payload = deniedPayload(parser, toolResultLine('tu-1', DENY_TEXT));
+    expect(payload).toMatchObject({ name: 'Bash', command: 'sleep 600', truncated: false });
+    expect(String(payload.reason)).toContain(PREFIX);
+  });
+
+  it('handles tool_result content as an array of text blocks', () => {
+    const parser = new ClaudeStreamParser();
+    parser.parseLine(toolUseLine('tu-1', 'sleep 600'));
+    const payload = deniedPayload(
+      parser,
+      toolResultLine('tu-1', [{ type: 'text', text: DENY_TEXT }]),
+    );
+    expect(payload).toMatchObject({ name: 'Bash', command: 'sleep 600' });
+  });
+
+  it('an ordinary Bash error result (no prefix) emits nothing', () => {
+    const parser = new ClaudeStreamParser();
+    parser.parseLine(toolUseLine('tu-1', 'exit 1'));
+    expect(parser.parseLine(toolResultLine('tu-1', 'command failed: exit 1'))).toEqual([]);
+  });
+
+  it('a denial for an unknown tool_use_id still emits, without the command', () => {
+    const parser = new ClaudeStreamParser();
+    const payload = deniedPayload(parser, toolResultLine('tu-unknown', DENY_TEXT));
+    expect(payload.name).toBe('Bash');
+    expect(payload).not.toHaveProperty('command');
+  });
+
+  it('caps and scrubs the retained command, flagging truncation', () => {
+    const scrub = (s: string) => s.replace(/SECRET/g, '[redacted]');
+    const parser = new ClaudeStreamParser({ scrub });
+    parser.parseLine(toolUseLine('tu-1', `SECRET ${'c'.repeat(5000)}`));
+    const payload = deniedPayload(parser, toolResultLine('tu-1', DENY_TEXT));
+    expect(String(payload.command).startsWith('[redacted]')).toBe(true);
+    expect(String(payload.command).length).toBe(2000);
+    expect(payload.truncated).toBe(true);
+  });
+
+  it('bounds the pending tool_use map — an evicted id loses only its command', () => {
+    const parser = new ClaudeStreamParser();
+    for (let i = 0; i < 60; i++) parser.parseLine(toolUseLine(`tu-${i}`, `echo ${i}`));
+    const payload = deniedPayload(parser, toolResultLine('tu-0', DENY_TEXT));
+    expect(payload).not.toHaveProperty('command');
+  });
+
+  it('malformed user events yield [] and never throw', () => {
+    const parser = new ClaudeStreamParser();
+    expect(parser.parseLine(JSON.stringify({ type: 'user' }))).toEqual([]);
+    expect(parser.parseLine(JSON.stringify({ type: 'user', message: { content: 'x' } }))).toEqual([]);
+    expect(
+      parser.parseLine(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result' }] } })),
+    ).toEqual([]);
+  });
+});

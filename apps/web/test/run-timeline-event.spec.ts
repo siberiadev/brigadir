@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { mount } from '@vue/test-utils';
-import { Megaphone, MessageCircleQuestion, FlagTriangleRight, Unplug, Wrench } from 'lucide-vue-next';
+import { Ban, Megaphone, MessageCircleQuestion, FlagTriangleRight, Unplug, Wrench } from 'lucide-vue-next';
 import TimelineEvent from '../src/components/RunTimeline/TimelineEvent.vue';
 import MarkdownText from '../src/components/MarkdownText.vue';
 import type { TimelineItem } from '../src/components/RunTimeline/presenter';
@@ -149,5 +149,28 @@ describe('TimelineEvent — channel_failure (feature 027)', () => {
     expect(wrapper.find('li.event').classes()).toContain('event--channel_failure');
     expect(wrapper.find('dl.kv').text()).toContain('complete_task');
     expect(wrapper.find('.tag').text()).toBe('network');
+  });
+});
+
+// Token-spend problem 1: bash-guard denial card.
+describe('TimelineEvent — tool_denied (bash-guard)', () => {
+  it('uses the Ban icon with the warning accent class and the denied tag', () => {
+    const wrapper = mount(TimelineEvent, {
+      props: {
+        item: item({
+          typeKey: 'tool_denied',
+          iconKey: 'tool_denied',
+          title: 'Bash',
+          body: 'sleep 600',
+          bodyFormat: 'mono',
+          tags: [{ label: 'denied', tone: 'warning' }],
+        }),
+      },
+    });
+    expect(wrapper.findComponent(Ban).exists()).toBe(true);
+    expect(wrapper.find('li.event').classes()).toContain('event--tool_denied');
+    expect(wrapper.find('pre.mono').text()).toBe('sleep 600');
+    expect(wrapper.find('.tag').text()).toBe('denied');
+    expect(wrapper.find('.tag').classes()).toContain('tag--warning');
   });
 });

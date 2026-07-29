@@ -113,6 +113,20 @@ describe('buildArgs — useCallbackChannel (T103, D6)', () => {
     expect(args[settingsIdx + 1]).toBe('{"hooks":{"Stop":[]}}');
   });
 
+  // Token-spend problem 1: wakeup-polling costs a full cache-read turn per
+  // check, same as sleep-polling — waiting must end the session instead.
+  it('disallows ScheduleWakeup on the callback channel', () => {
+    const args = buildArgs({
+      ...input,
+      useCallbackChannel: true,
+      mcpConfigPath: '/tmp/brigadir/mcp-config/run-123.mcp.json',
+      stopHookSettingsJson: '{}',
+    });
+    const idx = args.indexOf('--disallowed-tools');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe('ScheduleWakeup');
+  });
+
   it('the built argv contains no run-token value (grep canary — token never in argv)', () => {
     const runToken = 'super-secret-run-token-value-should-never-appear';
     const args = buildArgs({
@@ -130,5 +144,6 @@ describe('buildArgs — useCallbackChannel (T103, D6)', () => {
     expect(withFlag).toEqual(withoutFlag);
     expect(withFlag).toContain('--json-schema');
     expect(withFlag).not.toContain('--mcp-config');
+    expect(withFlag).not.toContain('--disallowed-tools');
   });
 });

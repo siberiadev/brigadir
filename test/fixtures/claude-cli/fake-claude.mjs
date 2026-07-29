@@ -162,6 +162,13 @@ async function runCallbacks() {
         '-c', 'user.name=Agent',
         'commit', '-m', 'agent work',
       ]);
+      // Feature 033: { push: '<branch>' } — publish the commit like a real
+      // agent would (`git push -u origin <branch>`), so the next stage's
+      // prepare can continue the branch. The fixture remote is non-bare with
+      // `main` checked out; only NEW branch names are pushable.
+      if (step.push) {
+        execFileSync('git', ['-C', dir, 'push', 'origin', `HEAD:refs/heads/${step.push}`]);
+      }
       continue;
     }
     // Feature 024: on complete_task, mirror the real mcp-server — observe each

@@ -15,7 +15,13 @@ import {
 } from '@brigadir/database';
 import { AGENTS_CONFIG } from '@brigadir/app-config';
 import { JIRA_CLIENT, type JiraClient } from '@brigadir/jira';
-import { ReportSchema, isApiKeyOnlyExecutorType, type AgentsConfig } from '@brigadir/contracts';
+import {
+  ReportSchema,
+  isApiKeyOnlyExecutorType,
+  matchVerificationReceipt,
+  VerificationReceiptSchema,
+  type AgentsConfig,
+} from '@brigadir/contracts';
 import type {
   AgentExecutor,
   ExecutorResult,
@@ -57,7 +63,7 @@ import {
   RepositoryScopeUndeterminableError,
   type NarrowResult,
 } from './scope-ticket';
-import { buildWrapperText, type LinkedTicketEntry } from './wrapper';
+import { buildWrapperText, type LinkedTicketEntry, type WrapperVerifiedGates } from './wrapper';
 import { writeMcpConfig, resolveMcpConfigRoot, type WrittenMcpConfig } from './mcp-config';
 import { resolveMcpServerEntryPath } from './mcp-server-path';
 import { buildFeatureContextSection } from './feature-context';
@@ -293,6 +299,9 @@ export class ClaudeCliExecutor implements AgentExecutor {
     // so the wrapper (below) and the merge-conflict handler (in the catch) can
     // both see it. Null for no-repo, ticketless, and blocker-free runs.
     let inherit: InheritanceResult | null = null;
+    // Feature 033: the ticket's verification receipt, resolved against the
+    // prepared worktrees. Undefined unless every mounted repo matched.
+    let verifiedGates: WrapperVerifiedGates | undefined;
     if (noRepo) {
       // feature 010 (FR-018, Constitution V): a no-repository run (the
       // orchestrator's triage) runs from a scratch temp dir — no clone, no
@@ -365,6 +374,11 @@ export class ClaudeCliExecutor implements AgentExecutor {
         // starts and hands nothing off.
         if (ctx.ticket && ticketId) {
           await this.recordStartRefEvent(ctx.runId, workspace.repos, prior, matched, inherit);
+          // Feature 033: receipts exist only on the callback channel (the
+          // complete path writes them from measured observed heads).
+          if (runtimeConfig.useCallbackChannel) {
+            verifiedGates = await this.resolveVerificationReceipt(ctx.runId, ticketId, workspace.repos);
+          }
         }
       } catch (err) {
         // Feature 032: a diamond whose blocker branches conflict is not a
@@ -456,6 +470,8 @@ export class ClaudeCliExecutor implements AgentExecutor {
           // Feature 032: the direct blockers, from data already fetched during
           // prepare — this adds no Jira call of its own.
           linkedTickets: inherit?.linkedTickets ?? [],
+          // Feature 033: gates already verified at this exact workspace state.
+          verifiedGates,
         }),
       );
     } catch (err) {
@@ -1426,6 +1442,76 @@ export class ClaudeCliExecutor implements AgentExecutor {
       if (created) this.logger.warn(task.title);
     } catch (err) {
       this.logger.error(`could not raise "${task.kind}" human task: ${String(err)}`);
+    }
+  }
+
+  /**
+   * Feature 033: resolve the ticket's verification receipt against the freshly
+   * prepared worktrees. The receipt reaches the wrapper only when EVERY
+   * mounted repo sits exactly at its recorded sha (whole-workspace semantics —
+   * partial injection would claim run-level gates for a partially-matching
+   * workspace). A valid-but-mismatched receipt emits a `receipt-stale` event
+   * so invalidation is observable; garbage/legacy jsonb degrades silently.
+   * Best-effort throughout: prepare never depends on this resolving.
+   */
+  private async resolveVerificationReceipt(
+    runId: string,
+    ticketId: string,
+    repos: MultiPrepareResult['repos'],
+  ): Promise<WrapperVerifiedGates | undefined> {
+    try {
+      const [row] = await this.db
+        .select({ verification: schema.tickets.verification })
+        .from(schema.tickets)
+        .where(eq(schema.tickets.id, ticketId))
+        .limit(1);
+      const raw = row?.verification;
+      if (raw === null || raw === undefined) return undefined;
+
+      const startShas = Object.fromEntries(repos.map((r) => [r.repo.name, r.start.startSha]));
+      const receipt = matchVerificationReceipt(raw, startShas);
+      if (!receipt) {
+        const parsed = VerificationReceiptSchema.safeParse(raw);
+        if (parsed.success) {
+          await this.db.insert(schema.runEvents).values({
+            runId,
+            type: 'log',
+            payload: {
+              source: 'receipt-stale',
+              message:
+                `Verification receipt from run ${parsed.data.runId.slice(0, 8)} does not match ` +
+                'this workspace state — recorded gates will be re-verified.',
+              receiptRunId: parsed.data.runId,
+              receiptRepos: parsed.data.repos,
+              startShas,
+            },
+          });
+        }
+        return undefined;
+      }
+
+      await this.db.insert(schema.runEvents).values({
+        runId,
+        type: 'log',
+        payload: {
+          source: 'receipt-injected',
+          message:
+            `Verification receipt injected: ${receipt.gates.join(', ')} already verified at ` +
+            `this exact state (run ${receipt.runId.slice(0, 8)}).`,
+          receiptRunId: receipt.runId,
+          gates: receipt.gates,
+          repos: receipt.repos,
+        },
+      });
+      return {
+        agentRole: receipt.agentRole ?? receipt.agentName ?? 'a previous agent',
+        runId: receipt.runId,
+        gates: receipt.gates,
+        repoShas: receipt.repos,
+      };
+    } catch (err) {
+      this.logger.warn(`verification receipt resolution failed for run ${runId}: ${String(err)}`);
+      return undefined;
     }
   }
 

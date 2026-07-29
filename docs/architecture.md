@@ -268,6 +268,7 @@ CREATE TABLE tickets (
   priority_name   text,                        -- кэш имени приоритета для дашборда (feature 022)
   blocked_by      jsonb,                       -- ВСЕ входящие "is blocked by" ключи как наблюдались на доске, string[] (feature 032; до 022→032 — только открытые, и NULL после релиза)
   blocked_state   text,                        -- waiting | cycle | dead_end | out_of_scope (feature 022); NULL = не ждёт — ЕДИНСТВЕННЫЙ признак ожидания
+  verification    jsonb,                       -- feature 033: sha-якорная квитанция верификации (VerificationReceiptSchema): {version, runId, agentRole, agentName, outcome, recordedAt, gates[], repos{name→sha}}; пишется whole-replace на callback-complete с измеренными observed-heads, НЕ очищается никогда (протухание = sha-mismatch на prepare); NULL = квитанции ещё нет
   UNIQUE (workspace_id, jira_key)
 );
 -- feature 032, семантика `blocked_by`: это НАБЛЮДЕНИЕ, а не флаг ожидания.
@@ -908,6 +909,20 @@ scope'а (`<runId>/<repo.name>/`). **Ветками система не влад
   внутреннюю диагностическую таксономию в него не расширяем.
 - Тикет без наблюдённых блокеров не делает НИ ОДНОГО лишнего запроса и ведёт себя байт-в-байт как
   до 032.
+
+**Квитанции верификации (feature 033, token-spend problem 2).** Каждая роль перегоняла одни и те же
+гейты (lint/tsc/тесты) на том же коммите, потому что handoff не нёс записи «что уже проверено».
+Теперь: (1) на `POST …/complete` с измеренным `x-brigadir-observed-heads` бэкенд whole-replace
+пишет в `tickets.verification` sha-якорную квитанцию (`VerificationReceiptSchema`,
+`packages/contracts`) — pass-чеки отчёта (≤10, дедуп) + `{repo→sha}` ВСЕХ смонтированных репо;
+пишется для всех исходов отчёта, fail-open, событие `verification-receipt`; exit-time/outbox-пути
+без evidence квитанцию не пишут. (2) На prepare следующего прогона executor сравнивает квитанцию со
+startSha КАЖДОГО смонтированного репо (whole-workspace: любой mismatch/недостающий/лишний репо ⇒
+квитанция целиком игнорируется + событие `receipt-stale`); при полном совпадении в обёртку
+попадает секция `## Already verified at this exact state` (событие `receipt-injected`) с правилом:
+перечисленные чеки на неизменном коде не перегонять, гонять только своё; любой новый коммит
+обнуляет всё; advisory — при конкретном недоверии можно перепроверить, указав причину в отчёте.
+Только callback-канал; очистки колонки нет — протухание самоизлечивается несовпадением sha.
 
 Для не-Claude executor'ов те же опции компилируются в соответствующий формат (OpenAI system message + tools); для Routines — в сохранённый промпт routine + текст триггера. Компилятор обёртки — единственная точка, где «опции поведения» превращаются в текст: это позволяет улучшать промпт-инженерию без миграции пользовательских данных.
 

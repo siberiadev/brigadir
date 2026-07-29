@@ -42,6 +42,18 @@ describe('buildWrapperText (T103, D6)', () => {
     expect(text).toContain('until false');
   });
 
+  // Token-spend problem 1 (analysis 2026-07-28): the prohibition covers ANY
+  // precondition, not just infrastructure recovery, and names both
+  // session-ending exits.
+  it('callback path bans in-session waiting for any precondition and names the exit paths', () => {
+    const text = buildWrapperText(ctx, '/tmp/wt', { useCallbackChannel: true });
+    expect(text).toContain('Never wait in-session for ANY precondition');
+    expect(text).toContain('blocked by the harness');
+    expect(text).toContain('mcp__brigadir__request_human(blocking=true');
+    expect(text).toContain('mcp__brigadir__complete_task(outcome="failure" or "needs_human")');
+    expect(text).toContain('restarts the run when the condition holds');
+  });
+
   it('structured-output path does not contain callback-channel fail-fast rules', () => {
     const text = buildWrapperText(ctx, '/tmp/wt', { useCallbackChannel: false });
     expect(text).not.toContain('MCP callback channel unreachable');
@@ -359,5 +371,54 @@ describe('buildWrapperText — blocker provenance (feature 032)', () => {
     expect(withEmpty).toBe(without);
     expect(without).not.toContain('## Linked tickets');
     expect(without).not.toContain('DEPENDENCY');
+  });
+
+  // --- feature 033: verified-gates section (ticket verification receipt) ---
+
+  describe('verified gates (feature 033)', () => {
+    const verifiedGates = {
+      agentRole: 'Developer',
+      runId: '3f2a9c1e-0000-0000-0000-000000000000',
+      gates: ['lint', 'typecheck'],
+      repoShas: { web: 'd'.repeat(40), api: 'a'.repeat(40) },
+    };
+
+    it('renders the section with gates, source run, and short shas (sorted repos)', () => {
+      const text = buildWrapperText(ctx, '/tmp/wt', {
+        useCallbackChannel: true,
+        repos: [base],
+        verifiedGates,
+      });
+      expect(text).toContain('## Already verified at this exact state');
+      expect(text).toContain('(Developer, run 3f2a9c1e)');
+      expect(text).toContain('- lint');
+      expect(text).toContain('- typecheck');
+      expect(text).toContain(`(verified at: api@${'a'.repeat(7)}, web@${'d'.repeat(7)})`);
+      expect(text).toContain('Do NOT re-run these checks on the unchanged code');
+      expect(text).toContain('The moment you commit anything');
+      expect(text).toContain('say why in your report');
+    });
+
+    it('absent option renders byte-identically to feature 032 (both channels)', () => {
+      for (const useCallbackChannel of [false, true]) {
+        const without = buildWrapperText(ctx, '/tmp/wt', { useCallbackChannel, repos: [base] });
+        const withUndefined = buildWrapperText(ctx, '/tmp/wt', {
+          useCallbackChannel,
+          repos: [base],
+          verifiedGates: undefined,
+        });
+        expect(withUndefined).toBe(without);
+        expect(without).not.toContain('## Already verified');
+      }
+    });
+
+    it('Phase-0 channel never renders the section even if the option is passed', () => {
+      const text = buildWrapperText(ctx, '/tmp/wt', {
+        useCallbackChannel: false,
+        repos: [base],
+        verifiedGates,
+      });
+      expect(text).not.toContain('## Already verified');
+    });
   });
 });

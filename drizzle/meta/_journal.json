@@ -85,6 +85,13 @@
       "when": 1785236155418,
       "tag": "0011_one_active_per_ticket",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1785295473644,
+      "tag": "0012_verification_receipts",
+      "breakpoints": true
     }
   ]
 }

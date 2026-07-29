@@ -62,6 +62,21 @@ describe('writeMcpConfig (T103, D1/D8)', () => {
     expect(command).toContain(written.markerPath);
   });
 
+  // Token-spend problem 1: the bash-guard hook rides the same settings blob.
+  it('registers the PreToolUse bash-guard on Bash, pointing at the sibling of main.js', async () => {
+    root = await mkdtemp(join(tmpdir(), 'brigadir-mcp-config-test-'));
+    const written = await writeMcpConfig(
+      { runId: 'run-123', callbackUrl: 'http://x', runToken: 't', mcpServerEntryPath: '/x/main.js' },
+      root,
+    );
+
+    const settings = JSON.parse(written.settingsJson);
+    const entry = settings.hooks.PreToolUse[0];
+    expect(entry.matcher).toBe('Bash');
+    const command = entry.hooks[0].command as string;
+    expect(command).toBe('node /x/bash-guard.js');
+  });
+
   it('cleanup removes the config file and the marker (if present)', async () => {
     root = await mkdtemp(join(tmpdir(), 'brigadir-mcp-config-test-'));
     const written = await writeMcpConfig(

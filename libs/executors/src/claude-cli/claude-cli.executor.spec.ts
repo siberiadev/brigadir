@@ -92,7 +92,15 @@ function makeGroupNoClose() {
   return { child, killGroup: vi.fn(), terminate };
 }
 
-function fakeDb(executorConfig: unknown, behavior: unknown, settings: Record<string, unknown> = {}) {
+function fakeDb(
+  executorConfig: unknown,
+  behavior: unknown,
+  settings: Record<string, unknown> = {},
+  // Extra fields merged into the plain where().limit() row — the tickets
+  // reads (feature 032 blockedBy, feature 033 verification) share that chain
+  // shape with the workspace-settings read; each reader picks its own field.
+  rowExtras: Record<string, unknown> = {},
+) {
   // run_events payloads captured for assertions (feature 020 repo-scoping event).
   const insertedEvents: unknown[] = [];
   return {
@@ -114,7 +122,7 @@ function fakeDb(executorConfig: unknown, behavior: unknown, settings: Record<str
           }),
         }),
         where: () => ({
-          limit: () => Promise.resolve([{ settings }]),
+          limit: () => Promise.resolve([{ settings, ...rowExtras }]),
           // Feature 023 prior-work scan: runs on the ticket, newest first. No
           // prior run here, so every repo starts from its default branch.
           orderBy: () => ({ limit: () => Promise.resolve([]) }),
@@ -285,6 +293,83 @@ describe('ClaudeCliExecutor.run (T082)', () => {
       startSha: 'a'.repeat(40),
       decision: 'default_branch',
     });
+  });
+
+  // --- feature 033: verification receipt injection at prepare ---
+
+  const ticketReceipt = (sha: string) => ({
+    version: 1,
+    runId: 'prev-run-00000000',
+    agentRole: 'Developer',
+    agentName: 'Nemo',
+    outcome: 'success',
+    recordedAt: '2026-07-29T00:00:00.000Z',
+    gates: ['lint', 'typecheck'],
+    repos: { product: sha },
+  });
+
+  it('callback-wired: a matching ticket receipt renders the verified-gates section + receipt-injected event', async () => {
+    const group = makeGroup();
+    spawnGroupMock.mockReturnValue(group);
+    // fakeWorkspace's startSha is 'a'.repeat(40) — the receipt matches.
+    const db = fakeDb({ ...executorConfig, useCallbackChannel: true }, {}, {}, {
+      verification: ticketReceipt('a'.repeat(40)),
+    });
+    const fakeJira = { getFeatureContext: vi.fn().mockResolvedValue({ linked: [] }) };
+    const executor = new ClaudeCliExecutor(db as never, agentsConfig, fakeJira as never);
+
+    const runPromise = executor.run(makeCtx(), new AbortController().signal);
+    await waitForSpawn(spawnGroupMock);
+    const wrapperText = await readFile(join(worktreeDir, '.brigadir', 'wrapper.txt'), 'utf8');
+    expect(wrapperText).toContain('## Already verified at this exact state');
+    expect(wrapperText).toContain('(Developer, run prev-run)');
+    expect(wrapperText).toContain('- lint');
+    expect(wrapperText).toContain(`product@${'a'.repeat(7)}`);
+
+    for (const line of readFixtureLines('stream-success')) group.child.stdout.write(line + '\n');
+    await flush();
+    group.child.emit('close', 0, null);
+    await runPromise;
+
+    const injected = (db.insertedEvents as Array<{ payload?: { source?: string } }>).find(
+      (e) => e?.payload?.source === 'receipt-injected',
+    ) as { payload: Record<string, unknown> } | undefined;
+    expect(injected).toBeDefined();
+    expect(injected!.payload).toMatchObject({
+      receiptRunId: 'prev-run-00000000',
+      gates: ['lint', 'typecheck'],
+    });
+  });
+
+  it('callback-wired: a stale ticket receipt renders NO section and emits receipt-stale', async () => {
+    const group = makeGroup();
+    spawnGroupMock.mockReturnValue(group);
+    const db = fakeDb({ ...executorConfig, useCallbackChannel: true }, {}, {}, {
+      verification: ticketReceipt('b'.repeat(40)),
+    });
+    const fakeJira = { getFeatureContext: vi.fn().mockResolvedValue({ linked: [] }) };
+    const executor = new ClaudeCliExecutor(db as never, agentsConfig, fakeJira as never);
+
+    const runPromise = executor.run(makeCtx(), new AbortController().signal);
+    await waitForSpawn(spawnGroupMock);
+    const wrapperText = await readFile(join(worktreeDir, '.brigadir', 'wrapper.txt'), 'utf8');
+    expect(wrapperText).not.toContain('## Already verified');
+
+    for (const line of readFixtureLines('stream-success')) group.child.stdout.write(line + '\n');
+    await flush();
+    group.child.emit('close', 0, null);
+    await runPromise;
+
+    const stale = (db.insertedEvents as Array<{ payload?: { source?: string } }>).find(
+      (e) => e?.payload?.source === 'receipt-stale',
+    ) as { payload: Record<string, unknown> } | undefined;
+    expect(stale).toBeDefined();
+    expect(stale!.payload).toMatchObject({ receiptRunId: 'prev-run-00000000' });
+    expect(
+      (db.insertedEvents as Array<{ payload?: { source?: string } }>).find(
+        (e) => e?.payload?.source === 'receipt-injected',
+      ),
+    ).toBeUndefined();
   });
 
   it('invalid report: completed with no report and a diagnostic', async () => {

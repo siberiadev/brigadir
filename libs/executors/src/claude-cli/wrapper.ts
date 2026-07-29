@@ -48,8 +48,18 @@ function callbackToolsSection(): string[] {
       'with `network error` or `fetch failed`, immediately call ' +
       "mcp__brigadir__request_human(blocking=true, title='MCP callback channel unreachable', " +
       'details=...) and stop the session. Do not retry the same tool more than three times ' +
-      'yourself, and do not use `ScheduleWakeup`, `Bash sleep`, or `until false` loops to wait ' +
-      'for infrastructure recovery inside a run.',
+      'yourself.',
+    // Token-spend problem 1 (analysis 2026-07-28): every polling turn re-reads
+    // the whole cached context — waiting must END the session, never loop in
+    // it. Enforced at the boundary by the PreToolUse bash-guard.
+    'Never wait in-session for ANY precondition — not CI, not a deploy, not another ticket, not ' +
+      'a human answer, not infrastructure recovery. Do not use `ScheduleWakeup`, `Bash sleep`, ' +
+      'or `until false` polling loops to wait; sleep-based waiting is blocked by the harness. ' +
+      'If forward progress needs a condition that does not hold right now, end the session ' +
+      'instead: call mcp__brigadir__request_human(blocking=true, ...) when a person must act or ' +
+      'answer, or mcp__brigadir__complete_task(outcome="failure" or "needs_human") describing ' +
+      'exactly what you are waiting for — the platform restarts the run when the condition ' +
+      'holds.',
     '- outcome="success" ONLY if every required check actually passed in this session. Never ' +
       'claim a check passed without running it.',
     '- outcome="failure" if something required failed — report each check honestly with its ' +
@@ -122,6 +132,20 @@ export interface LinkedTicketEntry {
   prUrl?: string;
 }
 
+/**
+ * Feature 033: gates a previous run on this ticket reported passing with every
+ * repository at exactly the shas the current worktrees were just prepared at.
+ * The platform (executor prepare) does the sha comparison — this view-model
+ * only reaches the wrapper when the whole workspace matches.
+ */
+export interface WrapperVerifiedGates {
+  /** agents.role of the recording run's agent (name as fallback). */
+  agentRole: string;
+  runId: string;
+  gates: string[];
+  repoShas: Record<string, string>;
+}
+
 export interface WrapperOptions {
   useCallbackChannel: boolean;
   /** Feature 004 US6 (T115): pre-compiled, budget-bounded feature-context block. Omitted when empty. */
@@ -149,6 +173,13 @@ export interface WrapperOptions {
    * protocol. Absent/empty ⇒ byte-identical to feature 020 (FR-016).
    */
   linkedTickets?: LinkedTicketEntry[];
+  /**
+   * Feature 033: the ticket's verification receipt, present ONLY when the
+   * executor confirmed every mounted repo sits at the receipt's exact sha.
+   * Callback channel only (Phase 0 has no receipts by construction).
+   * Absent ⇒ byte-identical to feature 032.
+   */
+  verifiedGates?: WrapperVerifiedGates;
 }
 
 /** Cap on the `## Linked tickets` block — a prompt is a budget, not a dump. */
@@ -226,6 +257,33 @@ function repoLine(r: WrapperRepoInfo): string {
   }
 }
 
+/**
+ * The `## Already verified at this exact state` block (feature 033,
+ * token-spend problem 2). Advisory, not a ban: the wording says "reported …
+ * passing" (checks are run-level and self-reported — the receipt adds no new
+ * trust surface beyond run_checks) and leaves a re-verify escape hatch. The
+ * commit-anchor sentence is the load-bearing part: one new commit and
+ * everything must be re-verified.
+ */
+function verifiedGatesSection(v: WrapperVerifiedGates): string[] {
+  const repoList = Object.entries(v.repoShas)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([repo, sha]) => `${repo}@${sha.slice(0, 7)}`)
+    .join(', ');
+  return [
+    '## Already verified at this exact state',
+    `A previous run on this ticket (${v.agentRole}, run ${v.runId.slice(0, 8)}) completed with ` +
+      'every repository at exactly the commit your worktree is at now, and reported these checks ' +
+      'passing:',
+    ...v.gates.map((g) => `- ${g}`),
+    `(verified at: ${repoList})`,
+    'Do NOT re-run these checks on the unchanged code. Run only the checks your own role adds. ' +
+      'The moment you commit anything, every check above is unverified again and must be re-run ' +
+      'before you report it passing. If you have a concrete reason to distrust a recorded ' +
+      'result, you may re-verify it — say why in your report.',
+  ];
+}
+
 function repositoriesSection(
   repos: WrapperRepoInfo[],
   useCallbackChannel: boolean,
@@ -297,6 +355,10 @@ export function buildWrapperText(ctx: RunContext, worktreeDir: string, options: 
     // Feature 032: what this ticket is chained to. Facts, both channels.
     ...(options.linkedTickets && options.linkedTickets.length > 0
       ? [...linkedTicketsSection(options.linkedTickets), '']
+      : []),
+    // Feature 033: sha-anchored verification receipt. Callback channel only.
+    ...(options.useCallbackChannel && options.verifiedGates
+      ? [...verifiedGatesSection(options.verifiedGates), '']
       : []),
     '## How to report your result',
     ...(options.useCallbackChannel ? callbackToolsSection() : structuredOutputSection()),

@@ -2,11 +2,21 @@
 
 Per-run inline JSON passed to `claude --settings '<json>'`. **Verified to fire in `-p` print mode on
 v2.1.207** (research D2). Registers one `Stop` hook that enforces the completion contract (FR-022) and
-is bounded by `stop_hook_active` (FR-023).
+is bounded by `stop_hook_active` (FR-023), plus one `PreToolUse` bash-guard hook (token-spend
+problem 1, 2026-07-28) that denies sleep-dominant Bash commands.
 
 ```jsonc
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command",
+            "command": "node <abs>/packages/mcp-server/dist/bash-guard.js" }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
@@ -44,3 +54,37 @@ block is bounded to a single re-entry.
 **Boundary of guarantee:** the hook is best-effort UX to nudge a cooperating agent. Correctness does
 **not** depend on it — a run whose process ends `running` is finalized `failed` by FR-010
 (`RunsService.failIfStillRunning`, research D7), independent of hook availability.
+
+## Bash-guard hook behavior (`bash-guard.js`)
+
+Token-spend problem 1 (analysis 2026-07-28): in-session sleep-polling burns a full cache-read turn
+per check; waiting must END the session (`request_human(blocking=true)` / `complete_task`), never
+loop inside it. Stateless — no argv; reads the PreToolUse event JSON from stdin
+(`{tool_name, tool_input:{command}}`); anything that is not a Bash command string → silent allow.
+
+Heuristic over the raw command string (no shell parsing, v1):
+
+| Rule | Condition | Verdict |
+|---|---|---|
+| `loop_sleep` | a `sleep` occurrence AND a `while`/`until`/`for` keyword AND `done` in the same command | deny |
+| `unparsable_sleep` | a `sleep` whose duration is not `N[s\|m\|h\|d]` (e.g. `sleep $DELAY`) | deny |
+| `cumulative_sleep` | parsed sleep durations sum to > 15s | deny |
+| — | otherwise (incl. short cushioning sleeps ≤ 15s) | allow |
+
+On deny it prints the modern PreToolUse output shape and exits 0:
+
+```json
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",
+  "permissionDecisionReason":"[brigadir-bash-guard] Denied: <detail>. <guidance>"}}
+```
+
+**Prefix contract:** every deny reason starts with the literal `[brigadir-bash-guard]`
+(`BASH_GUARD_PREFIX` in `bash-guard-logic.ts`). The executor's stream parser matches this literal in
+`user`/`tool_result` blocks and persists a `tool_denied` run_event
+(`{name, command?, reason, truncated}`, scrubbed + capped per feature 026). The literal is
+duplicated in `stream-parser.ts` (no cross-package import); both spec suites pin it.
+
+**Fail-open:** every path exits 0 — a crashed or missing guard never blocks a run, and run
+correctness never depends on it (same boundary of guarantee as the Stop hook). Known accepted v1
+false positive: a space-preceded `sleep <n>` inside quoted prose (e.g. `echo "will sleep 600"`) is
+denied; a quote-adjacent one (`grep "sleep 600"`) is not matched and passes.

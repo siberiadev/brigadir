@@ -63,6 +63,7 @@ export async function writeMcpConfig(input: McpConfigInput, configRoot: string):
   const configPath = join(configRoot, `${input.runId}.mcp.json`);
   const markerPath = join(configRoot, `${input.runId}.marker`);
   const stopHookEntryPath = input.mcpServerEntryPath.replace(/main\.js$/, 'stop-hook.js');
+  const bashGuardEntryPath = input.mcpServerEntryPath.replace(/main\.js$/, 'bash-guard.js');
 
   const hasRepoDirs = input.repoDirs !== undefined && Object.keys(input.repoDirs).length > 0;
   const mcpConfig = {
@@ -91,6 +92,15 @@ export async function writeMcpConfig(input: McpConfigInput, configRoot: string):
 
   const settingsJson = JSON.stringify({
     hooks: {
+      // Bash-guard (token-spend problem 1): denies sleep-dominant Bash
+      // commands so agents end the session instead of busy-waiting. Stateless,
+      // fail-open — see «Bash-guard hook behavior» in stop-hook-settings.md.
+      PreToolUse: [
+        {
+          matcher: 'Bash',
+          hooks: [{ type: 'command', command: `node ${bashGuardEntryPath}` }],
+        },
+      ],
       Stop: [
         {
           hooks: [{ type: 'command', command: `node ${stopHookEntryPath} ${markerPath}` }],

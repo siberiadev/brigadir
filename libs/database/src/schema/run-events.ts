@@ -5,6 +5,8 @@ import { runs } from './runs';
 // type: progress | log | tool_call | api_retry | error | jira_action
 //       | undelivered_report | channel_down (feature 026)
 //       | channel_failure (feature 027 — доставка callback'а исчерпала ретраи)
+//       | tool_denied (token-spend problem 1 — PreToolUse bash-guard отклонил
+//         sleep-ожидание; payload {name, command?, reason, truncated})
 export const runEvents = pgTable(
   'run_events',
   {

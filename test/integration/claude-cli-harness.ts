@@ -143,8 +143,10 @@ export type FakeClaudeCallbackStep =
   | { tool: 'sleep'; ms: number }
   | { tool: 'stream'; fixture: string }
   // Feature 024: make a real commit in a repo's worktree (moves HEAD past the
-  // recorded start SHA) to exercise the completion gate.
-  | { tool: 'commit'; repo: string; file?: string };
+  // recorded start SHA) to exercise the completion gate. Feature 033: `push`
+  // additionally publishes the commit to `origin` under that branch name, so a
+  // next stage can continue it.
+  | { tool: 'commit'; repo: string; file?: string; push?: string };
 
 /** Sets FAKE_CLAUDE_CALLBACKS so the fake CLI plays this scripted sequence (quickstart.md pattern 1). */
 export function setFakeClaudeCallbacks(steps: FakeClaudeCallbackStep[]): void {

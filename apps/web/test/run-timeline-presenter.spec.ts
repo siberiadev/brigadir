@@ -344,6 +344,47 @@ describe('presentEvent — channel_failure (feature 027)', () => {
   });
 });
 
+// Token-spend problem 1: a PreToolUse bash-guard denial is a first-class card,
+// not an unknown event — the denied command is the body, `denied` is the tag.
+describe('presentEvent — tool_denied (bash-guard)', () => {
+  const payload = {
+    name: 'Bash',
+    command: 'sleep 600',
+    reason: '[brigadir-bash-guard] Denied: cumulative sleep of 600s exceeds the 15s limit. …',
+    truncated: false,
+  };
+
+  it('is a known type rendered with the denied tag and the command as mono body', () => {
+    const item = presentEvent(event('tool_denied', payload));
+    expect(item.typeKey).toBe('tool_denied');
+    expect(item.title).toBe('Bash');
+    expect(item.tags).toEqual([{ label: 'denied', tone: 'warning' }]);
+    expect(item.body).toBe('sleep 600');
+    expect(item.bodyFormat).toBe('mono');
+    expect(item.fieldTruncated).toBe(false);
+  });
+
+  it('falls back to the guard reason when the command is absent (evicted tool_use)', () => {
+    const { command: _command, ...noCommand } = payload;
+    const item = presentEvent(event('tool_denied', noCommand));
+    expect(item.body).toContain('[brigadir-bash-guard]');
+    expect(item.bodyFormat).toBe('mono');
+  });
+
+  it('flags a capped command via fieldTruncated', () => {
+    const item = presentEvent(event('tool_denied', { ...payload, truncated: true }));
+    expect(item.fieldTruncated).toBe(true);
+  });
+
+  it('malformed payload never crashes and renders a safe card', () => {
+    const item = presentEvent(event('tool_denied', 'garbage'));
+    expect(item.typeKey).toBe('tool_denied');
+    expect(item.title).toBe('tool_denied');
+    expect(item.body).toBeNull();
+    expect(item.bodyFormat).toBeNull();
+  });
+});
+
 /**
  * Feature 032 (T053): the five new start-ref decisions + the early-release
  * annotation. Every one renders as a readable sentence plus a compact kv list

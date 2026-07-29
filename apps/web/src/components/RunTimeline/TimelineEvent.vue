@@ -9,6 +9,7 @@
 import { computed, ref, type Component } from 'vue';
 import {
   Activity,
+  Ban,
   CircleDot,
   FlagTriangleRight,
   Info,
@@ -59,6 +60,8 @@ const ICONS: Record<IconKey, Component> = {
   channel_down: PlugZap,
   // feature 027: доставка callback'а исчерпала ретраи (breadcrumb-событие).
   channel_failure: Unplug,
+  // token-spend problem 1: bash-guard отклонил sleep-ожидание.
+  tool_denied: Ban,
 };
 
 const icon = computed<Component>(() => ICONS[props.item.iconKey] ?? CircleDot);
@@ -165,6 +168,11 @@ $body-indent: $time-width + $space-sm + $node-size + $space-sm;
 }
 .event--error {
   --type-color: var(--el-color-danger);
+}
+// token-spend problem 1: отклонённый bash-guard'ом вызов — предупреждение,
+// не сбой прогона (агент продолжает работу после отказа).
+.event--tool_denied {
+  --type-color: var(--el-color-warning);
 }
 // feature 026: a rescued verdict on an intentionally-stopped run (warning),
 // and a dead-channel hold before spawn (danger — an environment outage).

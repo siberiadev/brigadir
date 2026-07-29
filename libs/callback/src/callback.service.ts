@@ -10,6 +10,7 @@ import {
   ReportProgressSchema,
   RequestHumanSchema,
   normalizeReportArtifacts,
+  buildVerificationReceipt,
   type AgentReport,
 } from '@brigadir/contracts';
 import { scrub } from '@brigadir/scrubber';
@@ -143,6 +144,8 @@ export class CallbackService {
       return { kind: 'conflict' };
     }
 
+    await this.writeVerificationReceiptBestEffort(runId, scrubbedReport, observedHeadsHeader);
+
     await this.maybeQueueReviewTask(runId, scrubbedReport);
 
     Promise.resolve()
@@ -218,6 +221,70 @@ export class CallbackService {
           `for "${v.repo}", and call complete_task again.`,
       })),
     };
+  }
+
+  /**
+   * Ticket-level verification receipt (feature 033). Evidence-gated: written
+   * only when the completion carried a measured observed-heads header, the run
+   * is ticket-bound, and the report has at least one passing check — the
+   * exit-time/outbox finalization paths carry no evidence and never reach
+   * here. Runs for ALL report outcomes (a failed QA run's honest lint/tsc
+   * passes still save the rework run those gates; sha anchoring keeps stale
+   * receipts inert). Best-effort by contract: the run is already finalized, so
+   * nothing thrown here may undo the completion — every failure only logs.
+   */
+  private async writeVerificationReceiptBestEffort(
+    runId: string,
+    report: AgentReport,
+    observedHeadsHeader: string | undefined,
+  ): Promise<void> {
+    try {
+      const observed = parseObservedHeads(observedHeadsHeader);
+      if (!observed) return;
+
+      const [row] = await this.db
+        .select({
+          ticketId: schema.runs.ticketId,
+          agentRole: schema.agents.role,
+          agentName: schema.agents.name,
+        })
+        .from(schema.runs)
+        .innerJoin(schema.agents, eq(schema.runs.agentId, schema.agents.id))
+        .where(eq(schema.runs.id, runId))
+        .limit(1);
+      if (!row?.ticketId) return;
+
+      const receipt = buildVerificationReceipt(report, observed, {
+        runId,
+        agentRole: row.agentRole ?? null,
+        agentName: row.agentName ?? null,
+        recordedAt: new Date().toISOString(),
+      });
+      if (!receipt) return;
+
+      await this.db
+        .update(schema.tickets)
+        .set({ verification: receipt })
+        .where(eq(schema.tickets.id, row.ticketId));
+
+      const repoList = Object.entries(receipt.repos)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([repo, sha]) => `${repo}@${sha.slice(0, 7)}`)
+        .join(', ');
+      await this.db.insert(schema.runEvents).values({
+        runId,
+        type: 'log',
+        payload: {
+          source: 'verification-receipt',
+          message: `Verification receipt saved to the ticket: ${receipt.gates.join(', ')} — verified at ${repoList}`,
+          gates: receipt.gates,
+          repos: receipt.repos,
+          outcome: receipt.outcome,
+        },
+      });
+    } catch (err) {
+      this.logger.error(`verification receipt best-effort write failed for run ${runId}: ${String(err)}`);
+    }
   }
 
   /**
