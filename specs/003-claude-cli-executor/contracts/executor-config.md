@@ -24,6 +24,8 @@ loader.
 | `killGraceMs` | int ≥ 0 | no | 5000 | SIGTERM→SIGKILL grace (D2) |
 | `cancelPollMs` | int ≥ 1 | no | 3000 | run-status cancel poll interval (D4) |
 | `settleGraceMs` | int ≥ 0 | no | 5000 | feature 034: post-kill window for `close` before the run settles from the parsed outcome (runtime clamp [100, 60000]); a wedged stdio-holding descendant can no longer block settlement — a `run_events` log row (`payload.source: 'settlement-timeout'`) records the fallback |
+| `bootstrapTimeoutMs` | int ≥ 0 | no | 600000 | feature 035: hang-breaker on a repository's `bootstrap_command` (runtime clamp [10s, 30min]); the command itself lives on `workspace.settings.repositories[].bootstrap_command`, not here |
+| `pmCacheRoot` | string | no | `~/.brigadir/pm-cache` | feature 035: shared package-manager cache root; bootstrap commands get `npm_config_cache=<pmCacheRoot>/npm` so per-run worktrees share one warm cache |
 
 Budget/timeout live on the **agent**, not the executor (existing
 `AgentConfigSchema.max_budget_usd`, `timeout_minutes`) → flow into

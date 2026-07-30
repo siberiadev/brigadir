@@ -58,6 +58,7 @@ import {
   type MultiPrepareResult,
 } from './worktree';
 import { spawnGroup } from './process-group';
+import { runBootstrap, dirtyGuard } from './bootstrap';
 import {
   narrowByTicketComponents,
   RepositoryScopeUndeterminableError,
@@ -151,7 +152,7 @@ export function resolveRepositoryNames(behavior: {
  * validation). Pure — unit-tested directly.
  */
 export function pickWorkspaceRepositories(
-  dbRepos: { name: string; git_url: string; default_branch: string }[],
+  dbRepos: { name: string; git_url: string; default_branch: string; bootstrap_command?: string }[],
   yamlRepos: { name: string; url: string; default_branch: string }[],
   names: string[],
   yamlLoaded: boolean,
@@ -165,7 +166,12 @@ export function pickWorkspaceRepositories(
       }
     }
     const selected = names.length > 0 ? dbRepos.filter((r) => names.includes(r.name)) : dbRepos;
-    return selected.map((r) => ({ name: r.name, url: r.git_url, defaultBranch: r.default_branch }));
+    return selected.map((r) => ({
+      name: r.name,
+      url: r.git_url,
+      defaultBranch: r.default_branch,
+      ...(r.bootstrap_command ? { bootstrapCommand: r.bootstrap_command } : {}),
+    }));
   }
 
   for (const name of names) {
@@ -429,6 +435,15 @@ export class ClaudeCliExecutor implements AgentExecutor {
 
     let mcpConfig: WrittenMcpConfig | undefined;
     try {
+      // Feature 035: bootstrap + dirty-guard INSIDE this try, not the prepare
+      // try above — its catch is the one that tears the prepared worktrees
+      // down (cleanupWorkspace honoring keepFailedWorktrees) and maps an abort
+      // to the abort's own outcome. `runs.worktreePath` is already persisted,
+      // so a kept failed-bootstrap workspace is findable.
+      if (workspace !== null) {
+        await this.bootstrapWorkspace(ctx.runId, signal, workspace, runtimeConfig, userEnv, envSecretValues);
+      }
+
       if (runtimeConfig.useCallbackChannel) {
         mcpConfig = await writeMcpConfig(
           {
@@ -467,6 +482,8 @@ export class ClaudeCliExecutor implements AgentExecutor {
               absPath: r.worktreeDir,
               defaultBranch: r.repo.defaultBranch,
               continueBranch: r.start.continueBranch,
+              // Feature 035: the platform ran this before the session started.
+              ...(r.repo.bootstrapCommand ? { bootstrapCommand: r.repo.bootstrapCommand } : {}),
               // Feature 032: state the provenance so the agent knows whether
               // this branch is ITS chain's work or a dependency it merely reads.
               provenance:
@@ -537,6 +554,99 @@ export class ClaudeCliExecutor implements AgentExecutor {
     );
 
     return result;
+  }
+
+  /**
+   * Feature 035: per-repo bootstrap command + the unconditional dirty-guard,
+   * run between prepare and spawn so the agent finds a ready, clean workspace.
+   *
+   *  - `bootstrap_command` (when configured) runs in the worktree with the
+   *    agent child's own env assembly (allowlist floor + operator env — auth/
+   *    provider keys deliberately NOT injected; installing dependencies needs
+   *    no model credentials) plus the shared npm cache. A non-zero exit or the
+   *    hang-breaker THROWS: the run fails with diagnostics rather than handing
+   *    the agent a half-installed environment the wrapper claims is ready.
+   *  - the dirty-guard runs for EVERY repo, bootstrap or not: tracked
+   *    modifications left by prepare/bootstrap are reverted and reported once
+   *    at platform level (the st3_agentic two-spec-files defect), instead of
+   *    every agent paying to rediscover them.
+   *
+   * Every event and diagnostic is scrubbed with the run-scoped scrubber — the
+   * command line and npm output can echo operator secrets.
+   */
+  private async bootstrapWorkspace(
+    runId: string,
+    signal: AbortSignal,
+    workspace: MultiPrepareResult,
+    runtimeConfig: ReturnType<typeof resolveClaudeCliConfig>,
+    userEnv: Record<string, string>,
+    envSecretValues: string[],
+  ): Promise<void> {
+    const scrub = makeScrub(envSecretValues);
+    const logEvent = (payload: Record<string, unknown>): Promise<unknown> =>
+      this.db
+        .insert(schema.runEvents)
+        .values({ runId, type: 'log', payload: { source: 'bootstrap', ...payload } })
+        .catch((err) => this.logger.error(`failed to persist bootstrap event for ${runId}: ${String(err)}`));
+
+    for (const prepared of workspace.repos) {
+      const command = prepared.repo.bootstrapCommand;
+      if (command) {
+        signal.throwIfAborted();
+        const env = buildChildEnv(process.env);
+        // The shared package-manager cache (token-spend §5). Set BEFORE the
+        // operator env so a repo that genuinely needs its own cache dir can
+        // still override it.
+        env.npm_config_cache = join(runtimeConfig.pmCacheRoot, 'npm');
+        applyUserEnv(env, userEnv);
+        const result = await runBootstrap({
+          worktreeDir: prepared.worktreeDir,
+          command,
+          env,
+          timeoutMs: runtimeConfig.bootstrapTimeoutMs,
+          signal,
+        });
+        await logEvent({
+          repo: prepared.repo.name,
+          command: scrub(command),
+          exit_code: result.exitCode,
+          duration_ms: result.durationMs,
+          ...(result.timedOut ? { kind: 'timeout' } : {}),
+          ...(result.stdoutTail ? { stdout_tail: scrub(result.stdoutTail) } : {}),
+          ...(result.stderrTail ? { stderr_tail: scrub(result.stderrTail) } : {}),
+        });
+        signal.throwIfAborted();
+        if (result.timedOut) {
+          throw new Error(
+            `bootstrap of "${prepared.repo.name}" exceeded ${runtimeConfig.bootstrapTimeoutMs}ms and was killed: ${scrub(command)}`,
+          );
+        }
+        if (result.exitCode !== 0) {
+          throw new Error(
+            `bootstrap of "${prepared.repo.name}" failed with exit code ${result.exitCode ?? 'null'}: ` +
+              `${scrub(command)}${result.stderrTail ? ` — stderr tail: ${scrub(result.stderrTail)}` : ''}`,
+          );
+        }
+      }
+
+      // The dirty-guard is NOT gated on a bootstrap command being set.
+      const guard = await dirtyGuard(prepared.worktreeDir);
+      if (guard.found.modified.length > 0 || guard.found.untracked.length > 0) {
+        await logEvent({
+          kind: 'dirty-after-prepare',
+          repo: prepared.repo.name,
+          message:
+            guard.reverted.length > 0
+              ? `worktree was dirty after prepare${command ? '/bootstrap' : ''} — ` +
+                `reverted ${guard.reverted.length} tracked file(s); the repository itself dirties them ` +
+                '(fix the source repo to stop paying this on every run)'
+              : 'worktree has untracked files after prepare (left in place)',
+          reverted_files: guard.reverted,
+          untracked: guard.found.untracked,
+          ...(guard.residual.modified.length > 0 ? { residual_modified: guard.residual.modified } : {}),
+        });
+      }
+    }
   }
 
   /**
@@ -1222,10 +1332,14 @@ export class ClaudeCliExecutor implements AgentExecutor {
       .where(eq(schema.workspaces.id, workspaceId))
       .limit(1);
     const settings = (ws?.settings ?? {}) as {
-      repositories?: { name: string; git_url: string; default_branch: string }[];
+      repositories?: { name: string; git_url: string; default_branch: string; bootstrap_command?: string }[];
       ticket_scoping?: boolean;
     };
     const dbRepos = settings.repositories ?? [];
+    // Deliberately no bootstrap on the legacy yaml fallback (feature 035):
+    // RepositoryConfigSchema predates the env/bootstrap surfaces and the
+    // yaml path exists only for pre-wizard setups. Configure repositories in
+    // workspace settings to use bootstrap_command.
     const yamlRepos = this.agentsConfig?.workspace.repositories ?? [];
 
     return {
