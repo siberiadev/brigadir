@@ -21,8 +21,16 @@ vi.mock('./worktree', async (importOriginal) => ({
 vi.mock('./process-group', () => ({
   spawnGroup: vi.fn(),
 }));
+// Feature 035: the bootstrap module shells out (sh, git status) — faked here;
+// its own spec exercises the real processes against real temp git repos.
+vi.mock('./bootstrap', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./bootstrap')>()),
+  runBootstrap: vi.fn(),
+  dirtyGuard: vi.fn(),
+}));
 
 import { prepareAll, cleanupAll, ensureCaches } from './worktree';
+import { runBootstrap, dirtyGuard } from './bootstrap';
 import { spawnGroup } from './process-group';
 import { ClaudeCliExecutor } from './claude-cli.executor';
 import { DEFAULT_REPO_RUN_ALLOWED_TOOLS } from './claude-cli.config';
@@ -32,6 +40,17 @@ const prepareMock = prepareAll as unknown as ReturnType<typeof vi.fn>;
 const cleanupMock = cleanupAll as unknown as ReturnType<typeof vi.fn>;
 const ensureCachesMock = ensureCaches as unknown as ReturnType<typeof vi.fn>;
 const spawnGroupMock = spawnGroup as unknown as ReturnType<typeof vi.fn>;
+const runBootstrapMock = runBootstrap as unknown as ReturnType<typeof vi.fn>;
+const dirtyGuardMock = dirtyGuard as unknown as ReturnType<typeof vi.fn>;
+
+/** A dirty-guard result for a clean worktree (the common case). */
+function cleanGuard() {
+  return {
+    found: { modified: [], untracked: [] },
+    reverted: [],
+    residual: { modified: [], untracked: [] },
+  };
+}
 
 /** Fake MultiPrepareResult for a single-repo workspace rooted at `parentDir`. */
 function fakeWorkspace(parentDir: string, repoName = 'product', continueBranch?: string) {
@@ -207,6 +226,8 @@ describe('ClaudeCliExecutor.run (T082)', () => {
     cleanupMock.mockReset().mockResolvedValue(undefined);
     ensureCachesMock.mockReset().mockResolvedValue({});
     spawnGroupMock.mockReset();
+    runBootstrapMock.mockReset();
+    dirtyGuardMock.mockReset().mockResolvedValue(cleanGuard());
   });
 
   afterEach(async () => {
@@ -469,7 +490,9 @@ describe('ClaudeCliExecutor.run (T082)', () => {
     const controller = new AbortController();
 
     const runPromise = executor.run(makeCtx(), controller.signal);
-    await flush();
+    // Feature 034 made the prepare phase abortable, so the abort must land on
+    // the RUNNING process to exercise the terminate path — wait for the spawn.
+    await waitForSpawn(spawnGroupMock);
     controller.abort('timeout');
 
     const result = await runPromise;
@@ -544,7 +567,7 @@ describe('ClaudeCliExecutor.run (T082)', () => {
     const controller = new AbortController();
 
     const runPromise = executor.run(makeCtx(), controller.signal);
-    await flush();
+    await waitForSpawn(spawnGroupMock);
     controller.abort('cancelled');
 
     const result = await runPromise;
@@ -677,6 +700,148 @@ describe('ClaudeCliExecutor.run (T082)', () => {
     expect(result.diagnostics).toContain('branch already exists');
     expect(spawnGroupMock).not.toHaveBeenCalled();
   });
+
+  // --- Feature 034: settlement fallback — a wedged 'close' must not wedge the run ---
+
+  function settlementEvents(db: ReturnType<typeof fakeDb>) {
+    return (db.insertedEvents as unknown[])
+      .flatMap((v) => (Array.isArray(v) ? v : [v]))
+      .filter(
+        (e) =>
+          (e as { type?: string })?.type === 'log' &&
+          (e as { payload?: { source?: string } })?.payload?.source === 'settlement-timeout',
+      );
+  }
+
+  function makeWedgedExecutor() {
+    const db = fakeDb({ ...executorConfig, settleGraceMs: 150 }, {});
+    const fakeJira = { getFeatureContext: vi.fn().mockResolvedValue({ linked: [] }) };
+    return { db, executor: new ClaudeCliExecutor(db as never, agentsConfig, fakeJira as never) };
+  }
+
+  it('feature 034: a timeout abort with NO close ever settles via the fallback + settlement-timeout event', async () => {
+    const group = makeGroupNoClose();
+    spawnGroupMock.mockReturnValue(group);
+    const { db, executor } = makeWedgedExecutor();
+    const controller = new AbortController();
+
+    const runPromise = executor.run(makeCtx(), controller.signal);
+    await waitForSpawn(spawnGroupMock);
+    controller.abort('timeout');
+
+    // Resolves WITHOUT anyone emitting 'close' — the pre-034 wedge.
+    const result = await runPromise;
+    expect(result.exitStatus).toBe('timeout');
+    expect(group.terminate).toHaveBeenCalledWith(1000);
+    expect(settlementEvents(db)).toHaveLength(1);
+  });
+
+  it('feature 034: a late real close after the fallback settled is a no-op (one resolve, one event)', async () => {
+    const group = makeGroupNoClose();
+    spawnGroupMock.mockReturnValue(group);
+    const { db, executor } = makeWedgedExecutor();
+    const controller = new AbortController();
+
+    const runPromise = executor.run(makeCtx(), controller.signal);
+    await waitForSpawn(spawnGroupMock);
+    controller.abort('timeout');
+    const result = await runPromise;
+    expect(result.exitStatus).toBe('timeout');
+
+    group.child.emit('close', null, 'SIGKILL');
+    await flush();
+    expect(result.exitStatus).toBe('timeout');
+    expect(settlementEvents(db)).toHaveLength(1);
+  });
+
+  it('feature 034: cancelled variant settles cancelled via the fallback', async () => {
+    const group = makeGroupNoClose();
+    spawnGroupMock.mockReturnValue(group);
+    const { executor } = makeWedgedExecutor();
+    const controller = new AbortController();
+
+    const runPromise = executor.run(makeCtx(), controller.signal);
+    await waitForSpawn(spawnGroupMock);
+    controller.abort('cancelled');
+
+    const result = await runPromise;
+    expect(result.exitStatus).toBe('cancelled');
+  });
+
+  it('feature 034: a rate-limited run whose kill wedges settles rate_limited with NO abort at all', async () => {
+    // Extends the incident-2026-07-19 invariant: pre-034 this run waited for
+    // the watchdog abort (~50min of a burned worker slot); now the rate-limit
+    // kill itself arms the fallback.
+    const group = makeGroupNoClose();
+    spawnGroupMock.mockReturnValue(group);
+    const { executor } = makeWedgedExecutor();
+
+    const runPromise = executor.run(makeCtx(), new AbortController().signal);
+    await waitForSpawn(spawnGroupMock);
+    for (const line of readFixtureLines('stream-rate-limit')) group.child.stdout.write(line + '\n');
+    await flush();
+
+    const result = await runPromise;
+    expect(result.exitStatus).toBe('rate_limited');
+  });
+
+  // --- Feature 034: abortable preparation phase ---
+
+  it('feature 034: a pre-aborted signal resolves cancelled without preparing or spawning anything', async () => {
+    const executor = makeExecutor();
+    const controller = new AbortController();
+    controller.abort('cancelled');
+
+    const result = await executor.run(makeCtx(), controller.signal);
+    expect(result.exitStatus).toBe('cancelled');
+    expect(result.diagnostics).toContain('aborted during workspace preparation');
+    expect(ensureCachesMock).not.toHaveBeenCalled();
+    expect(prepareMock).not.toHaveBeenCalled();
+    expect(spawnGroupMock).not.toHaveBeenCalled();
+  });
+
+  it('feature 034: an abort during a hung ensureCaches resolves timeout, not crashed', async () => {
+    // Models a git fetch wedged on a dead connection: the real ensureCaches
+    // rejects when the threaded signal aborts the execFile mid-transfer.
+    ensureCachesMock.mockReset().mockImplementation(
+      (_repos: unknown, _root: unknown, signal: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('fetch aborted')), {
+            once: true,
+          });
+        }),
+    );
+    const executor = makeExecutor();
+    const controller = new AbortController();
+
+    const runPromise = executor.run(makeCtx(), controller.signal);
+    await flush();
+    controller.abort('timeout');
+
+    const result = await runPromise;
+    expect(result.exitStatus).toBe('timeout');
+    expect(result.diagnostics).toContain('aborted during workspace preparation');
+    expect(spawnGroupMock).not.toHaveBeenCalled();
+  });
+
+  it('feature 034: a real close arriving inside the grace window wins — no settlement event', async () => {
+    const group = makeGroupNoClose();
+    spawnGroupMock.mockReturnValue(group);
+    const { db, executor } = makeWedgedExecutor();
+    const controller = new AbortController();
+
+    const runPromise = executor.run(makeCtx(), controller.signal);
+    await waitForSpawn(spawnGroupMock);
+    controller.abort('timeout');
+    // terminate() resolved (it is a resolved promise) — the timer is arming;
+    // the process then closes normally well inside the 150ms window.
+    await flush();
+    group.child.emit('close', null, 'SIGKILL');
+
+    const result = await runPromise;
+    expect(result.exitStatus).toBe('timeout');
+    expect(settlementEvents(db)).toHaveLength(0);
+  });
 });
 
 /**
@@ -695,6 +860,8 @@ describe('ClaudeCliExecutor — default allowed tools (ST3-768)', () => {
     cleanupMock.mockReset().mockResolvedValue(undefined);
     ensureCachesMock.mockReset().mockResolvedValue({});
     spawnGroupMock.mockReset();
+    runBootstrapMock.mockReset();
+    dirtyGuardMock.mockReset().mockResolvedValue(cleanGuard());
   });
 
   afterEach(async () => {
@@ -891,6 +1058,8 @@ describe('ClaudeCliExecutor — workspace-setup environment (feature 015)', () =
     cleanupMock.mockReset().mockResolvedValue(undefined);
     ensureCachesMock.mockReset().mockResolvedValue({});
     spawnGroupMock.mockReset();
+    runBootstrapMock.mockReset();
+    dirtyGuardMock.mockReset().mockResolvedValue(cleanGuard());
   });
   afterEach(async () => {
     await rm(worktreeDir, { recursive: true, force: true });
@@ -1050,6 +1219,8 @@ describe('ClaudeCliExecutor ticket scoping (feature 020)', () => {
     cleanupMock.mockReset().mockResolvedValue(undefined);
     ensureCachesMock.mockReset().mockResolvedValue({});
     spawnGroupMock.mockReset();
+    runBootstrapMock.mockReset();
+    dirtyGuardMock.mockReset().mockResolvedValue(cleanGuard());
   });
 
   afterEach(async () => {
@@ -1179,6 +1350,8 @@ describe('ClaudeCliExecutor operator env (feature 031)', () => {
     cleanupMock.mockReset().mockResolvedValue(undefined);
     ensureCachesMock.mockReset().mockResolvedValue({});
     spawnGroupMock.mockReset();
+    runBootstrapMock.mockReset();
+    dirtyGuardMock.mockReset().mockResolvedValue(cleanGuard());
   });
 
   afterEach(async () => {
@@ -1249,5 +1422,183 @@ describe('ClaudeCliExecutor operator env (feature 031)', () => {
   it('zero-config workspace: child env is byte-identical to the pre-feature floor (SC-005)', async () => {
     const env = await spawnEnvFor({ repositories: [repo()] });
     expect(env).toEqual(buildChildEnv(process.env));
+  });
+});
+
+describe('ClaudeCliExecutor bootstrap + dirty-guard (feature 035)', () => {
+  let worktreeDir: string;
+
+  /** fakeWorkspace whose repo carries a bootstrap command. */
+  function bootstrapWorkspace(parentDir: string, command: string) {
+    const ws = fakeWorkspace(parentDir);
+    ws.repos[0].repo = { ...ws.repos[0].repo, bootstrapCommand: command } as never;
+    return ws;
+  }
+
+  function okBootstrapResult(overrides: Record<string, unknown> = {}) {
+    return {
+      exitCode: 0,
+      durationMs: 1234,
+      stdoutTail: 'added 100 packages',
+      stderrTail: '',
+      timedOut: false,
+      aborted: false,
+      ...overrides,
+    };
+  }
+
+  beforeEach(async () => {
+    worktreeDir = await mkdtemp(join(tmpdir(), 'brigadir-bootstrap-test-'));
+    prepareMock.mockReset().mockResolvedValue(bootstrapWorkspace(worktreeDir, 'npm ci'));
+    cleanupMock.mockReset().mockResolvedValue(undefined);
+    ensureCachesMock.mockReset().mockResolvedValue({});
+    spawnGroupMock.mockReset();
+    runBootstrapMock.mockReset().mockResolvedValue(okBootstrapResult());
+    dirtyGuardMock.mockReset().mockResolvedValue(cleanGuard());
+  });
+
+  afterEach(async () => {
+    await rm(worktreeDir, { recursive: true, force: true });
+  });
+
+  const bootstrapConfig = {
+    ...executorConfig,
+    pmCacheRoot: '/tmp/brigadir-test-pm-cache',
+    bootstrapTimeoutMs: 120_000,
+    // Callback channel so the wrapper's verification section (where the
+    // "dependencies are already installed" rule lives) is rendered.
+    useCallbackChannel: true,
+  };
+
+  function makeBootstrapExecutor(config: unknown = bootstrapConfig) {
+    const db = fakeDb(config, {});
+    const fakeJira = { getFeatureContext: vi.fn().mockResolvedValue({ linked: [] }) };
+    return {
+      db,
+      executor: new ClaudeCliExecutor(db as never, agentsConfig, fakeJira as never),
+    };
+  }
+
+  async function driveSuccess(executor: ClaudeCliExecutor) {
+    const group = makeGroup();
+    spawnGroupMock.mockReturnValue(group);
+    const runPromise = executor.run(makeCtx(), new AbortController().signal);
+    await waitForSpawn(spawnGroupMock);
+    for (const line of readFixtureLines('stream-success')) group.child.stdout.write(line + '\n');
+    await flush();
+    group.child.emit('close', 0, null);
+    return runPromise;
+  }
+
+  it('runs the bootstrap command with the agent env + shared npm cache, records the event, and tells the agent', async () => {
+    const { db, executor } = makeBootstrapExecutor();
+    const result = await driveSuccess(executor);
+    expect(result.exitStatus).toBe('completed');
+
+    expect(runBootstrapMock).toHaveBeenCalledTimes(1);
+    const call = runBootstrapMock.mock.calls[0][0] as {
+      worktreeDir: string;
+      command: string;
+      timeoutMs: number;
+      env: Record<string, string>;
+    };
+    expect(call.worktreeDir).toBe(join(worktreeDir, 'product'));
+    expect(call.command).toBe('npm ci');
+    expect(call.timeoutMs).toBe(120_000);
+    // The shared cache override rides the same env assembly the agent gets.
+    expect(call.env.npm_config_cache).toBe(join('/tmp/brigadir-test-pm-cache', 'npm'));
+    expect(call.env.PATH).toBe(buildChildEnv(process.env).PATH);
+    // No model credentials for a dependency install.
+    expect(call.env.ANTHROPIC_API_KEY).toBeUndefined();
+
+    const event = (db.insertedEvents as Array<{ type?: string; payload?: Record<string, unknown> }>).find(
+      (e) => e.payload?.source === 'bootstrap' && e.payload?.command !== undefined,
+    );
+    expect(event).toBeDefined();
+    expect(event?.payload).toMatchObject({ repo: 'product', command: 'npm ci', exit_code: 0, duration_ms: 1234 });
+
+    const wrapperText = await readFile(join(worktreeDir, '.brigadir', 'wrapper.txt'), 'utf8');
+    expect(wrapperText).toContain('bootstrap already ran: `npm ci`');
+    expect(wrapperText).toContain('Dependencies are ALREADY INSTALLED');
+  });
+
+  it('bootstrap failure fails the run before any spawn, with cleanup and diagnostics', async () => {
+    runBootstrapMock.mockResolvedValue(okBootstrapResult({ exitCode: 1, stderrTail: 'ERESOLVE unable to resolve' }));
+    const { db, executor } = makeBootstrapExecutor();
+
+    const result = await executor.run(makeCtx(), new AbortController().signal);
+    expect(result.exitStatus).toBe('crashed');
+    expect(result.diagnostics).toContain('bootstrap of "product" failed with exit code 1');
+    expect(result.diagnostics).toContain('ERESOLVE');
+    expect(spawnGroupMock).not.toHaveBeenCalled();
+    expect(cleanupMock).toHaveBeenCalled();
+    // The event is persisted even for the failed command — that IS the diagnosis.
+    const event = (db.insertedEvents as Array<{ payload?: Record<string, unknown> }>).find(
+      (e) => e.payload?.source === 'bootstrap' && e.payload?.exit_code === 1,
+    );
+    expect(event).toBeDefined();
+  });
+
+  it('bootstrap hang-breaker maps to a crashed run naming the timeout', async () => {
+    runBootstrapMock.mockResolvedValue(okBootstrapResult({ exitCode: null, timedOut: true }));
+    const { executor } = makeBootstrapExecutor();
+
+    const result = await executor.run(makeCtx(), new AbortController().signal);
+    expect(result.exitStatus).toBe('crashed');
+    expect(result.diagnostics).toContain('exceeded 120000ms');
+    expect(spawnGroupMock).not.toHaveBeenCalled();
+  });
+
+  it('abort during bootstrap maps to the abort outcome, not crashed', async () => {
+    const controller = new AbortController();
+    runBootstrapMock.mockImplementation(async () => {
+      controller.abort('timeout');
+      return okBootstrapResult({ exitCode: null, aborted: true });
+    });
+    const { executor } = makeBootstrapExecutor();
+
+    const result = await executor.run(makeCtx(), controller.signal);
+    expect(result.exitStatus).toBe('timeout');
+    expect(result.diagnostics).toBe('aborted during workspace preparation');
+    expect(spawnGroupMock).not.toHaveBeenCalled();
+    expect(cleanupMock).toHaveBeenCalled();
+  });
+
+  it('dirty-guard runs for every repo even with no bootstrap command, and reports a revert', async () => {
+    prepareMock.mockResolvedValue(fakeWorkspace(worktreeDir)); // no bootstrapCommand
+    dirtyGuardMock.mockResolvedValue({
+      found: { modified: ['src/a.spec.ts'], untracked: ['junk.log'] },
+      reverted: ['src/a.spec.ts'],
+      residual: { modified: [], untracked: ['junk.log'] },
+    });
+    const { db, executor } = makeBootstrapExecutor();
+
+    const result = await driveSuccess(executor);
+    expect(result.exitStatus).toBe('completed');
+    expect(runBootstrapMock).not.toHaveBeenCalled();
+    expect(dirtyGuardMock).toHaveBeenCalledWith(join(worktreeDir, 'product'));
+
+    const event = (db.insertedEvents as Array<{ payload?: Record<string, unknown> }>).find(
+      (e) => e.payload?.source === 'bootstrap' && e.payload?.kind === 'dirty-after-prepare',
+    );
+    expect(event).toBeDefined();
+    expect(event?.payload).toMatchObject({
+      repo: 'product',
+      reverted_files: ['src/a.spec.ts'],
+      untracked: ['junk.log'],
+    });
+    // No bootstrap ⇒ the wrapper must NOT claim dependencies are installed.
+    const wrapperText = await readFile(join(worktreeDir, '.brigadir', 'wrapper.txt'), 'utf8');
+    expect(wrapperText).not.toContain('Dependencies are ALREADY INSTALLED');
+  });
+
+  it('a clean worktree emits no dirty event', async () => {
+    prepareMock.mockResolvedValue(fakeWorkspace(worktreeDir));
+    const { db, executor } = makeBootstrapExecutor();
+    await driveSuccess(executor);
+    const dirtyEvents = (db.insertedEvents as Array<{ payload?: Record<string, unknown> }>).filter(
+      (e) => e.payload?.kind === 'dirty-after-prepare',
+    );
+    expect(dirtyEvents).toEqual([]);
   });
 });

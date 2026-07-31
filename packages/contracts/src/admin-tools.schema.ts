@@ -206,6 +206,15 @@ export const AdminRepositoryInputSchema = z
       .array(AdminEnvRowSchema)
       .optional()
       .describe('Optional env vars injected into runs mounting this repo (secrets via secret_from_env).'),
+    bootstrap_command: z
+      .string()
+      .min(1)
+      .max(500)
+      .optional()
+      .describe(
+        'Optional shell command the platform runs in the fresh worktree before the agent starts ' +
+          '(e.g. "npm ci"). Non-secret — visible in run events; secrets go via env.',
+      ),
   })
   .strict();
 

@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import {
   resolveClaudeCliConfig,
   normalizeKillGraceMs,
+  normalizeSettleGraceMs,
+  normalizeBootstrapTimeoutMs,
   resolveEffectiveAuth,
   applyAuthEnv,
   applyProviderEnv,
@@ -58,6 +60,64 @@ describe('normalizeKillGraceMs (Phase 2, incident 2026-07-19)', () => {
 describe('resolveClaudeCliConfig applies the killGraceMs clamp', () => {
   it('clamps a below-floor stored value to the runtime floor', () => {
     expect(resolveClaudeCliConfig({ ...base, killGraceMs: 50 }).killGraceMs).toBe(1000);
+  });
+});
+
+describe('normalizeSettleGraceMs (feature 034 — post-kill settlement window)', () => {
+  it('passes an in-range value through unchanged', () => {
+    expect(normalizeSettleGraceMs(150)).toBe(150);
+    expect(normalizeSettleGraceMs(5000)).toBe(5000);
+    expect(normalizeSettleGraceMs(60_000)).toBe(60_000);
+  });
+
+  it('clamps out-of-range values ([100, 60000] — zero would race an imminent close)', () => {
+    expect(normalizeSettleGraceMs(0)).toBe(100);
+    expect(normalizeSettleGraceMs(-5)).toBe(100);
+    expect(normalizeSettleGraceMs(120_000)).toBe(60_000);
+  });
+
+  it('falls back to the 5s default for a missing or non-finite value', () => {
+    expect(normalizeSettleGraceMs(undefined)).toBe(5000);
+    expect(normalizeSettleGraceMs(NaN)).toBe(5000);
+    expect(normalizeSettleGraceMs('150')).toBe(5000);
+  });
+
+  it('resolveClaudeCliConfig defaults settleGraceMs when the stored jsonb omits it', () => {
+    expect(resolveClaudeCliConfig(base).settleGraceMs).toBe(5000);
+    expect(resolveClaudeCliConfig({ ...base, settleGraceMs: 150 }).settleGraceMs).toBe(150);
+  });
+});
+
+describe('normalizeBootstrapTimeoutMs (feature 035 — bootstrap hang-breaker)', () => {
+  it('passes an in-range value through unchanged', () => {
+    expect(normalizeBootstrapTimeoutMs(10_000)).toBe(10_000);
+    expect(normalizeBootstrapTimeoutMs(120_000)).toBe(120_000);
+    expect(normalizeBootstrapTimeoutMs(30 * 60_000)).toBe(30 * 60_000);
+  });
+
+  it('clamps out-of-range values ([10s, 30min])', () => {
+    expect(normalizeBootstrapTimeoutMs(0)).toBe(10_000);
+    expect(normalizeBootstrapTimeoutMs(-5)).toBe(10_000);
+    expect(normalizeBootstrapTimeoutMs(60 * 60_000)).toBe(30 * 60_000);
+  });
+
+  it('falls back to the 10min default for a missing or non-finite value', () => {
+    expect(normalizeBootstrapTimeoutMs(undefined)).toBe(10 * 60_000);
+    expect(normalizeBootstrapTimeoutMs(NaN)).toBe(10 * 60_000);
+    expect(normalizeBootstrapTimeoutMs('5000')).toBe(10 * 60_000);
+  });
+
+  it('resolveClaudeCliConfig wires the clamp and the pm-cache default', () => {
+    const runtime = resolveClaudeCliConfig(base);
+    expect(runtime.bootstrapTimeoutMs).toBe(10 * 60_000);
+    expect(runtime.pmCacheRoot).toBe(join(homedir(), '.brigadir', 'pm-cache'));
+    const custom = resolveClaudeCliConfig({
+      ...base,
+      bootstrapTimeoutMs: 120_000,
+      pmCacheRoot: '/custom/pm-cache',
+    });
+    expect(custom.bootstrapTimeoutMs).toBe(120_000);
+    expect(custom.pmCacheRoot).toBe('/custom/pm-cache');
   });
 });
 

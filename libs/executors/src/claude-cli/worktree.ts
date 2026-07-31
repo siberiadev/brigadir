@@ -6,10 +6,80 @@ import { join } from 'node:path';
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * Hang-breaker on every git subprocess in this module (feature 034), NOT a
+ * performance budget — hence generous. A `git fetch` on a dead TCP connection
+ * or a `merge` waiting on an editor otherwise blocks the whole prepare phase
+ * forever: the run's AbortSignal has no listener yet at that point, so nothing
+ * else can end it. Deliberately local (not `GIT_OP_TIMEOUT_MS` from
+ * `@brigadir/contracts` — that 30s value budgets small template repos; product
+ * repo clones legitimately take minutes on a cold cache).
+ */
+export const WORKTREE_GIT_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * The one low-level runner every git call in this module goes through: the
+ * hang-breaker timeout always applies; network-bound call sites additionally
+ * thread the run's AbortSignal so an abort interrupts a transfer mid-flight.
+ */
+function gitExec(
+  args: string[],
+  opts: { cwd?: string; signal?: AbortSignal } = {},
+): Promise<{ stdout: string; stderr: string }> {
+  return execFileAsync('git', args, {
+    cwd: opts.cwd,
+    timeout: WORKTREE_GIT_TIMEOUT_MS,
+    ...(opts.signal ? { signal: opts.signal } : {}),
+  });
+}
+
 export interface WorktreeRepo {
   name: string;
   url: string;
   defaultBranch: string;
+  /**
+   * Feature 035: shell command the executor runs inside this repo's freshly
+   * prepared worktree before the agent starts (settings.repositories[]
+   * `bootstrap_command`). Ignored by this module — it rides `RepoWorktree.repo`
+   * to the executor's bootstrap step and the wrapper.
+   */
+  bootstrapCommand?: string;
+}
+
+/** What the post-prepare cleanliness check found in one worktree (feature 035). */
+export interface WorktreeDirtyState {
+  /** Tracked paths with modifications (`git status --porcelain`, non-`??`). */
+  modified: string[];
+  /** Untracked paths (`??`). Left in place — bootstrap output may be wanted. */
+  untracked: string[];
+}
+
+/**
+ * Feature 035 (dirty-guard): parse one worktree's `git status --porcelain`.
+ * Exposed as a helper (rather than the executor shelling out itself) so every
+ * git call keeps this module's hang-breaker timeout discipline.
+ */
+export async function statusPorcelain(worktreeDir: string): Promise<WorktreeDirtyState> {
+  const { stdout } = await gitExec(['status', '--porcelain'], { cwd: worktreeDir });
+  const modified: string[] = [];
+  const untracked: string[] = [];
+  for (const line of stdout.split('\n')) {
+    if (line.trim().length === 0) continue;
+    const path = line.slice(3);
+    if (line.startsWith('??')) untracked.push(path);
+    else modified.push(path);
+  }
+  return { modified, untracked };
+}
+
+/**
+ * Feature 035 (dirty-guard): revert working-tree modifications to tracked
+ * files (`git checkout -- .` touches nothing untracked). Deliberately not
+ * claimed to leave the tree clean — the caller re-runs {@link statusPorcelain}
+ * and reports any residue instead (index changes, smudge/case artifacts).
+ */
+export async function revertTracked(worktreeDir: string): Promise<void> {
+  await gitExec(['checkout', '--', '.'], { cwd: worktreeDir });
 }
 
 /**
@@ -78,11 +148,9 @@ export class WorktreePrepareError extends Error {
  */
 async function remoteBranchExists(cacheDir: string, branch: string): Promise<boolean> {
   try {
-    await execFileAsync(
-      'git',
-      ['show-ref', '--verify', '--quiet', `refs/remotes/origin/${branch}`],
-      { cwd: cacheDir },
-    );
+    await gitExec(['show-ref', '--verify', '--quiet', `refs/remotes/origin/${branch}`], {
+      cwd: cacheDir,
+    });
     return true;
   } catch {
     return false;
@@ -120,15 +188,15 @@ async function assertSafeBranchName(branch: string): Promise<void> {
     throw new WorktreePrepareError(`reported branch name "${branch}" is not a valid branch name`);
   }
   try {
-    await execFileAsync('git', ['check-ref-format', '--branch', branch]);
+    await gitExec(['check-ref-format', '--branch', branch]);
   } catch {
     throw new WorktreePrepareError(`reported branch name "${branch}" is not a valid branch name`);
   }
 }
 
-async function git(args: string[], cwd?: string): Promise<string> {
+async function git(args: string[], cwd?: string, signal?: AbortSignal): Promise<string> {
   try {
-    const { stdout } = await execFileAsync('git', args, { cwd });
+    const { stdout } = await gitExec(args, { cwd, signal });
     return stdout;
   } catch (err) {
     const e = err as { stderr?: string; message: string };
@@ -139,7 +207,7 @@ async function git(args: string[], cwd?: string): Promise<string> {
 /** Does `cacheDir` hold a repository git itself will accept? */
 async function isHealthyRepo(cacheDir: string): Promise<boolean> {
   try {
-    await execFileAsync('git', ['rev-parse', '--git-dir'], { cwd: cacheDir });
+    await gitExec(['rev-parse', '--git-dir'], { cwd: cacheDir });
     return true;
   } catch {
     return false;
@@ -149,7 +217,7 @@ async function isHealthyRepo(cacheDir: string): Promise<boolean> {
 /** Can HEAD still be resolved to an object? Cheap probe for a gutted object store. */
 async function headResolves(cacheDir: string): Promise<boolean> {
   try {
-    await execFileAsync('git', ['cat-file', '-e', 'HEAD'], { cwd: cacheDir });
+    await gitExec(['cat-file', '-e', 'HEAD'], { cwd: cacheDir });
     return true;
   } catch {
     return false;
@@ -175,7 +243,11 @@ async function headResolves(cacheDir: string): Promise<boolean> {
  * the same rot arriving by another route — do we discard and re-clone; otherwise
  * the error propagates for the operator to see.
  */
-async function ensureCache(repo: WorktreeRepo, repoCacheRoot: string): Promise<string> {
+async function ensureCache(
+  repo: WorktreeRepo,
+  repoCacheRoot: string,
+  signal?: AbortSignal,
+): Promise<string> {
   const cacheDir = join(repoCacheRoot, repo.name);
   if (existsSync(cacheDir) && !(await isHealthyRepo(cacheDir))) {
     await rm(cacheDir, { recursive: true, force: true });
@@ -187,14 +259,15 @@ async function ensureCache(repo: WorktreeRepo, repoCacheRoot: string): Promise<s
       // resolved against `refs/remotes/origin/*`, and without pruning a branch
       // deleted upstream lingers here forever — a run would silently start from
       // a deleted branch's stale tip, with no error anywhere. Do not drop it.
-      await git(['fetch', '--prune', 'origin'], cacheDir);
+      await git(['fetch', '--prune', 'origin'], cacheDir, signal);
     } catch (err) {
+      if (signal?.aborted) throw err;
       if (await headResolves(cacheDir)) throw err;
       await rm(cacheDir, { recursive: true, force: true });
-      await git(['clone', repo.url, cacheDir]);
+      await git(['clone', repo.url, cacheDir], undefined, signal);
     }
   } else {
-    await git(['clone', repo.url, cacheDir]);
+    await git(['clone', repo.url, cacheDir], undefined, signal);
   }
 
   await git(['worktree', 'prune'], cacheDir);
@@ -310,7 +383,7 @@ async function mergeIntoWorktree(
       );
     } catch (err) {
       // Best-effort: leave no half-merged index behind for the unwind to trip on.
-      await execFileAsync('git', ['merge', '--abort'], { cwd: worktreeDir }).catch(() => {});
+      await gitExec(['merge', '--abort'], { cwd: worktreeDir }).catch(() => {});
       throw new BlockerMergeConflictError(repo.name, startRef, mergeBranches, (err as Error).message);
     }
     merged.push(branch);
@@ -359,11 +432,13 @@ export class BlockerMergeConflictError extends WorktreePrepareError {
 export async function ensureCaches(
   repos: WorktreeRepo[],
   repoCacheRoot: string,
+  signal?: AbortSignal,
 ): Promise<Record<string, string>> {
   await mkdir(repoCacheRoot, { recursive: true });
   const caches: Record<string, string> = {};
   for (const repo of repos) {
-    caches[repo.name] = await ensureCache(repo, repoCacheRoot);
+    signal?.throwIfAborted();
+    caches[repo.name] = await ensureCache(repo, repoCacheRoot, signal);
   }
   return caches;
 }
@@ -384,6 +459,8 @@ export async function prepareAll(
      * work. Absent ⇒ this function ensures them itself (pre-032 behaviour).
      */
     caches?: Record<string, string>;
+    /** Feature 034: run abort interrupts any network git op mid-flight. */
+    signal?: AbortSignal;
   } = {},
 ): Promise<MultiPrepareResult> {
   if (repos.length === 0) {
@@ -396,7 +473,9 @@ export async function prepareAll(
   const prepared: RepoWorktree[] = [];
   for (const repo of repos) {
     try {
-      const cacheDir = opts.caches?.[repo.name] ?? (await ensureCache(repo, repoCacheRoot));
+      opts.signal?.throwIfAborted();
+      const cacheDir =
+        opts.caches?.[repo.name] ?? (await ensureCache(repo, repoCacheRoot, opts.signal));
       const worktreeDir = join(parentDir, repo.name);
       const start = await addRepoWorktree(
         repo,

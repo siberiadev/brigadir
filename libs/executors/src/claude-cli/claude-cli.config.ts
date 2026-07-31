@@ -104,6 +104,20 @@ export interface ClaudeCliRuntimeConfig {
   maxTurns?: number;
   killGraceMs: number;
   cancelPollMs: number;
+  /**
+   * Feature 034: bounded window after an abort's terminate() completes for
+   * the child's 'close' to arrive before the run is settled from the abort
+   * outcome (an escaped stdio-holding descendant otherwise wedges the run).
+   */
+  settleGraceMs: number;
+  /** Feature 035: hang-breaker on a repository's bootstrap_command. */
+  bootstrapTimeoutMs: number;
+  /**
+   * Feature 035: shared package-manager cache root — bootstrap commands get
+   * `npm_config_cache=<pmCacheRoot>/npm` so installs across per-run worktrees
+   * hit one warm cache instead of re-downloading every tarball.
+   */
+  pmCacheRoot: string;
   /** Feature 004 (D6): explicit opt-in to the MCP callback channel. */
   useCallbackChannel: boolean;
 }
@@ -231,6 +245,48 @@ export function normalizeKillGraceMs(raw: unknown): number {
   return int;
 }
 
+/** Bounds for the post-kill settlement window (feature 034). */
+const SETTLE_GRACE_MIN_MS = 100;
+const SETTLE_GRACE_MAX_MS = 60_000;
+const SETTLE_GRACE_DEFAULT_MS = 5000;
+
+/**
+ * Same clamp discipline as `normalizeKillGraceMs`: the value is read from
+ * stored jsonb / constructed directly in tests, both bypassing the schema.
+ * The floor is 100ms (not 1s): the window opens only AFTER terminate()
+ * completed — the group is already dead — so a small window is harmless and
+ * keeps the integration harness fast; a zero/near-zero window would race a
+ * genuinely imminent 'close' and emit spurious settlement-timeout events.
+ */
+export function normalizeSettleGraceMs(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return SETTLE_GRACE_DEFAULT_MS;
+  const int = Math.round(raw);
+  if (int < SETTLE_GRACE_MIN_MS) return SETTLE_GRACE_MIN_MS;
+  if (int > SETTLE_GRACE_MAX_MS) return SETTLE_GRACE_MAX_MS;
+  return int;
+}
+
+/** Bounds for a repository bootstrap command's hang-breaker (feature 035). */
+const BOOTSTRAP_TIMEOUT_MIN_MS = 10_000;
+const BOOTSTRAP_TIMEOUT_MAX_MS = 30 * 60_000;
+const BOOTSTRAP_TIMEOUT_DEFAULT_MS = 10 * 60_000;
+
+/**
+ * Same clamp discipline as the graces above (stored jsonb / direct test
+ * construction bypass the schema). The ceiling is a hang-breaker, not a
+ * budget: a cold `npm ci` on a big repo legitimately takes minutes, but a
+ * bootstrap that needs more than 30 belongs in the repo's own tooling, and an
+ * unbounded value would let a stuck install pin a worker slot forever — the
+ * exact wedge feature 034 closed for the agent process itself.
+ */
+export function normalizeBootstrapTimeoutMs(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return BOOTSTRAP_TIMEOUT_DEFAULT_MS;
+  const int = Math.round(raw);
+  if (int < BOOTSTRAP_TIMEOUT_MIN_MS) return BOOTSTRAP_TIMEOUT_MIN_MS;
+  if (int > BOOTSTRAP_TIMEOUT_MAX_MS) return BOOTSTRAP_TIMEOUT_MAX_MS;
+  return int;
+}
+
 export function resolveClaudeCliConfig(
   raw: ClaudeCliExecutorConfigInput,
   agentAllowedTools: readonly string[] = [],
@@ -246,6 +302,9 @@ export function resolveClaudeCliConfig(
     maxTurns: raw.maxTurns,
     killGraceMs: normalizeKillGraceMs(raw.killGraceMs),
     cancelPollMs: raw.cancelPollMs,
+    settleGraceMs: normalizeSettleGraceMs(raw.settleGraceMs),
+    bootstrapTimeoutMs: normalizeBootstrapTimeoutMs(raw.bootstrapTimeoutMs),
+    pmCacheRoot: raw.pmCacheRoot ?? join(homedir(), '.brigadir', 'pm-cache'),
     useCallbackChannel: raw.useCallbackChannel,
   };
 }

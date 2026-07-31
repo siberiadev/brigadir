@@ -90,6 +90,18 @@ export const ClaudeCliExecutorConfigSchema = z
     // failing boot validation.
     killGraceMs: z.number().int().min(0).default(10_000),
     cancelPollMs: z.number().int().min(1).default(3000),
+    // Feature 034: post-kill settlement window before a wedged 'close' stops
+    // blocking the run's resolution. Runtime clamp ([100, 60000], default
+    // 5000) lives in normalizeSettleGraceMs — kept optional here so old
+    // stored jsonb stays valid.
+    settleGraceMs: z.number().int().min(0).optional(),
+    // Feature 035: hang-breaker on a repository's bootstrap_command. Runtime
+    // clamp ([10s, 30min], default 10min) lives in normalizeBootstrapTimeoutMs —
+    // kept loose here for the same stored-jsonb reason as the fields above.
+    bootstrapTimeoutMs: z.number().int().min(0).optional(),
+    // Feature 035: shared package-manager cache root handed to bootstrap
+    // commands (npm_config_cache=<root>/npm). Default ~/.brigadir/pm-cache.
+    pmCacheRoot: z.string().min(1).optional(),
     // Feature 004 (D6): explicit opt-in to the MCP callback channel. When
     // true, the executor drops --json-schema and wires the run onto
     // mcp-config + Stop hook instead; omitted/false keeps the iteration-3
@@ -143,6 +155,11 @@ export const KimiExecutorConfigSchema = z
     // resolveClaudeCliConfig (incident 2026-07-19).
     killGraceMs: z.number().int().min(0).default(10_000),
     cancelPollMs: z.number().int().min(1).default(3000),
+    // Feature 034 — see the claude_cli branch.
+    settleGraceMs: z.number().int().min(0).optional(),
+    // Feature 035 — see the claude_cli branch.
+    bootstrapTimeoutMs: z.number().int().min(0).optional(),
+    pmCacheRoot: z.string().min(1).optional(),
     useCallbackChannel: z.boolean().default(false),
   })
   .strict();
@@ -172,6 +189,11 @@ export const DeepseekExecutorConfigSchema = z
     maxTurns: z.number().int().min(1).optional(),
     killGraceMs: z.number().int().min(0).default(10_000),
     cancelPollMs: z.number().int().min(1).default(3000),
+    // Feature 034 — see the claude_cli branch.
+    settleGraceMs: z.number().int().min(0).optional(),
+    // Feature 035 — see the claude_cli branch.
+    bootstrapTimeoutMs: z.number().int().min(0).optional(),
+    pmCacheRoot: z.string().min(1).optional(),
     useCallbackChannel: z.boolean().default(false),
   })
   .strict();

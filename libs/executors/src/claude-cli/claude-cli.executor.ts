@@ -58,6 +58,7 @@ import {
   type MultiPrepareResult,
 } from './worktree';
 import { spawnGroup } from './process-group';
+import { runBootstrap, dirtyGuard } from './bootstrap';
 import {
   narrowByTicketComponents,
   RepositoryScopeUndeterminableError,
@@ -151,7 +152,7 @@ export function resolveRepositoryNames(behavior: {
  * validation). Pure — unit-tested directly.
  */
 export function pickWorkspaceRepositories(
-  dbRepos: { name: string; git_url: string; default_branch: string }[],
+  dbRepos: { name: string; git_url: string; default_branch: string; bootstrap_command?: string }[],
   yamlRepos: { name: string; url: string; default_branch: string }[],
   names: string[],
   yamlLoaded: boolean,
@@ -165,7 +166,12 @@ export function pickWorkspaceRepositories(
       }
     }
     const selected = names.length > 0 ? dbRepos.filter((r) => names.includes(r.name)) : dbRepos;
-    return selected.map((r) => ({ name: r.name, url: r.git_url, defaultBranch: r.default_branch }));
+    return selected.map((r) => ({
+      name: r.name,
+      url: r.git_url,
+      defaultBranch: r.default_branch,
+      ...(r.bootstrap_command ? { bootstrapCommand: r.bootstrap_command } : {}),
+    }));
   }
 
   for (const name of names) {
@@ -290,6 +296,18 @@ export class ClaudeCliExecutor implements AgentExecutor {
       envSecretValues,
     } = await this.loadRunConfig(ctx);
 
+    // Feature 034: the whole preparation phase used to be un-abortable — the
+    // signal grows its first listener only inside runProcess, so an abort
+    // during a hung clone/fetch fired into the void and the run wedged in
+    // 'running' forever. Boundary checks + signal-aware git ops close that;
+    // an abort here maps to the abort's own outcome, never 'crashed' (which
+    // would burn an attempt on a cancel and mislabel a timeout).
+    const abortedDuringPrepare = (): ExecutorResult => ({
+      exitStatus: signal.reason === 'cancelled' ? 'cancelled' : 'timeout',
+      diagnostics: 'aborted during workspace preparation',
+    });
+    if (signal.aborted) return abortedDuringPrepare();
+
     // The run's workspace dir: the parent `worktreeRoot/<runId>` holding one
     // worktree per repo (feature 019, research D3), or a scratch temp dir for
     // no-repo runs. `workspace` stays null exactly for the scratch case.
@@ -347,7 +365,8 @@ export class ClaudeCliExecutor implements AgentExecutor {
         // Feature 032: caches are ensured FIRST (their `fetch --prune` is what
         // makes the origin probes below truthful), then the blockers' work is
         // resolved against them, and only then are worktrees added.
-        const caches = await ensureCaches(repos, runtimeConfig.repoCacheRoot);
+        const caches = await ensureCaches(repos, runtimeConfig.repoCacheRoot, signal);
+        signal.throwIfAborted();
         inherit = await this.resolveInheritance({
           ctx,
           ticketId,
@@ -366,6 +385,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
             continueBranches: inherit.continueBranches,
             mergeBranches: inherit.mergeBranches,
             caches,
+            signal,
           },
         );
         // Feature 024: record start-ref events AFTER prepare, so each carries
@@ -381,6 +401,10 @@ export class ClaudeCliExecutor implements AgentExecutor {
           }
         }
       } catch (err) {
+        // Feature 034: an abort mid-prepare is the run being killed, not a
+        // fault — checked FIRST (a conflict discovered while aborting needs no
+        // human task for a run that is already being ended).
+        if (signal.aborted) return abortedDuringPrepare();
         // Feature 032: a diamond whose blocker branches conflict is not a
         // generic prepare fault — it is a specific, actionable human case, and
         // the run must not just die with a git message nobody can act on.
@@ -411,6 +435,15 @@ export class ClaudeCliExecutor implements AgentExecutor {
 
     let mcpConfig: WrittenMcpConfig | undefined;
     try {
+      // Feature 035: bootstrap + dirty-guard INSIDE this try, not the prepare
+      // try above — its catch is the one that tears the prepared worktrees
+      // down (cleanupWorkspace honoring keepFailedWorktrees) and maps an abort
+      // to the abort's own outcome. `runs.worktreePath` is already persisted,
+      // so a kept failed-bootstrap workspace is findable.
+      if (workspace !== null) {
+        await this.bootstrapWorkspace(ctx.runId, signal, workspace, runtimeConfig, userEnv, envSecretValues);
+      }
+
       if (runtimeConfig.useCallbackChannel) {
         mcpConfig = await writeMcpConfig(
           {
@@ -449,6 +482,8 @@ export class ClaudeCliExecutor implements AgentExecutor {
               absPath: r.worktreeDir,
               defaultBranch: r.repo.defaultBranch,
               continueBranch: r.start.continueBranch,
+              // Feature 035: the platform ran this before the session started.
+              ...(r.repo.bootstrapCommand ? { bootstrapCommand: r.repo.bootstrapCommand } : {}),
               // Feature 032: state the provenance so the agent knows whether
               // this branch is ITS chain's work or a dependency it merely reads.
               provenance:
@@ -477,7 +512,20 @@ export class ClaudeCliExecutor implements AgentExecutor {
     } catch (err) {
       await mcpConfig?.cleanup();
       await this.cleanupWorkspace(workspace, workspaceDir, runtimeConfig.keepFailedWorktrees, ctx.runId);
+      if (signal.aborted) return abortedDuringPrepare();
       return { exitStatus: 'crashed', diagnostics: err instanceof Error ? err.message : String(err) };
+    }
+
+    // Feature 034: last pre-spawn boundary — an already-aborted run must not
+    // spawn a CLI process just to kill it.
+    if (signal.aborted) {
+      try {
+        await mcpConfig?.cleanup();
+      } catch (err) {
+        this.logger.error(`mcp-config cleanup failed for run ${ctx.runId}: ${String(err)}`);
+      }
+      await this.cleanupWorkspace(workspace, workspaceDir, runtimeConfig.keepFailedWorktrees, ctx.runId);
+      return abortedDuringPrepare();
     }
 
     const result = await this.runProcess(
@@ -506,6 +554,99 @@ export class ClaudeCliExecutor implements AgentExecutor {
     );
 
     return result;
+  }
+
+  /**
+   * Feature 035: per-repo bootstrap command + the unconditional dirty-guard,
+   * run between prepare and spawn so the agent finds a ready, clean workspace.
+   *
+   *  - `bootstrap_command` (when configured) runs in the worktree with the
+   *    agent child's own env assembly (allowlist floor + operator env — auth/
+   *    provider keys deliberately NOT injected; installing dependencies needs
+   *    no model credentials) plus the shared npm cache. A non-zero exit or the
+   *    hang-breaker THROWS: the run fails with diagnostics rather than handing
+   *    the agent a half-installed environment the wrapper claims is ready.
+   *  - the dirty-guard runs for EVERY repo, bootstrap or not: tracked
+   *    modifications left by prepare/bootstrap are reverted and reported once
+   *    at platform level (the st3_agentic two-spec-files defect), instead of
+   *    every agent paying to rediscover them.
+   *
+   * Every event and diagnostic is scrubbed with the run-scoped scrubber — the
+   * command line and npm output can echo operator secrets.
+   */
+  private async bootstrapWorkspace(
+    runId: string,
+    signal: AbortSignal,
+    workspace: MultiPrepareResult,
+    runtimeConfig: ReturnType<typeof resolveClaudeCliConfig>,
+    userEnv: Record<string, string>,
+    envSecretValues: string[],
+  ): Promise<void> {
+    const scrub = makeScrub(envSecretValues);
+    const logEvent = (payload: Record<string, unknown>): Promise<unknown> =>
+      this.db
+        .insert(schema.runEvents)
+        .values({ runId, type: 'log', payload: { source: 'bootstrap', ...payload } })
+        .catch((err) => this.logger.error(`failed to persist bootstrap event for ${runId}: ${String(err)}`));
+
+    for (const prepared of workspace.repos) {
+      const command = prepared.repo.bootstrapCommand;
+      if (command) {
+        signal.throwIfAborted();
+        const env = buildChildEnv(process.env);
+        // The shared package-manager cache (token-spend §5). Set BEFORE the
+        // operator env so a repo that genuinely needs its own cache dir can
+        // still override it.
+        env.npm_config_cache = join(runtimeConfig.pmCacheRoot, 'npm');
+        applyUserEnv(env, userEnv);
+        const result = await runBootstrap({
+          worktreeDir: prepared.worktreeDir,
+          command,
+          env,
+          timeoutMs: runtimeConfig.bootstrapTimeoutMs,
+          signal,
+        });
+        await logEvent({
+          repo: prepared.repo.name,
+          command: scrub(command),
+          exit_code: result.exitCode,
+          duration_ms: result.durationMs,
+          ...(result.timedOut ? { kind: 'timeout' } : {}),
+          ...(result.stdoutTail ? { stdout_tail: scrub(result.stdoutTail) } : {}),
+          ...(result.stderrTail ? { stderr_tail: scrub(result.stderrTail) } : {}),
+        });
+        signal.throwIfAborted();
+        if (result.timedOut) {
+          throw new Error(
+            `bootstrap of "${prepared.repo.name}" exceeded ${runtimeConfig.bootstrapTimeoutMs}ms and was killed: ${scrub(command)}`,
+          );
+        }
+        if (result.exitCode !== 0) {
+          throw new Error(
+            `bootstrap of "${prepared.repo.name}" failed with exit code ${result.exitCode ?? 'null'}: ` +
+              `${scrub(command)}${result.stderrTail ? ` — stderr tail: ${scrub(result.stderrTail)}` : ''}`,
+          );
+        }
+      }
+
+      // The dirty-guard is NOT gated on a bootstrap command being set.
+      const guard = await dirtyGuard(prepared.worktreeDir);
+      if (guard.found.modified.length > 0 || guard.found.untracked.length > 0) {
+        await logEvent({
+          kind: 'dirty-after-prepare',
+          repo: prepared.repo.name,
+          message:
+            guard.reverted.length > 0
+              ? `worktree was dirty after prepare${command ? '/bootstrap' : ''} — ` +
+                `reverted ${guard.reverted.length} tracked file(s); the repository itself dirties them ` +
+                '(fix the source repo to stop paying this on every run)'
+              : 'worktree has untracked files after prepare (left in place)',
+          reverted_files: guard.reverted,
+          untracked: guard.found.untracked,
+          ...(guard.residual.modified.length > 0 ? { residual_modified: guard.residual.modified } : {}),
+        });
+      }
+    }
   }
 
   /**
@@ -614,10 +755,20 @@ export class ClaudeCliExecutor implements AgentExecutor {
       // events can interleave with its own promise resolution in either
       // order, so two independent "resolve the run" call sites would race.
       let abortReason: 'timeout' | 'cancelled' | undefined;
+      // Feature 034 (settlement fallback): armed AFTER terminate() completes in
+      // the abort path; fires only if 'close' still hasn't arrived — a
+      // detached grandchild that inherited the stdio pipes can hold 'close'
+      // open forever even though the process group is already SIGKILLed.
+      let settleFallbackTimer: NodeJS.Timeout | undefined;
+      // Exactly-once guard for handleClose itself (not just the resolve): the
+      // fallback path calls handleClose(null), and a late real 'close' must
+      // not re-run its persist side effects.
+      let closeStarted = false;
 
       const settle = (result: ExecutorResult): void => {
         if (settled) return;
         settled = true;
+        if (settleFallbackTimer) clearTimeout(settleFallbackTimer);
         resolvePromise(result);
       };
 
@@ -633,6 +784,28 @@ export class ClaudeCliExecutor implements AgentExecutor {
           .catch((err) => this.logger.error(`failed to persist run_event for ${ctx.runId}: ${String(err)}`));
         lastPersist = p;
         return p;
+      };
+
+      // Feature 034: every kill path arms the settlement fallback — the wedge
+      // (an escaped stdio-holding descendant blocking 'close') threatens the
+      // abort kill AND the rate-limit kill alike (incident 2026-07-19: the
+      // rate-limited process lingered ~50min until the watchdog abort).
+      const terminateAndSettle = (): void => {
+        void group
+          .terminate(runtimeConfig.killGraceMs)
+          .catch(() => undefined)
+          .then(() => {
+            if (settled || closeStarted) return;
+            if (settleFallbackTimer) clearTimeout(settleFallbackTimer);
+            settleFallbackTimer = setTimeout(() => {
+              if (settled || closeStarted) return;
+              void persistRunEvent('log', {
+                source: 'settlement-timeout',
+                message: `process group did not close within ${runtimeConfig.settleGraceMs}ms of the kill — settling the run from the parsed outcome`,
+              });
+              void handleClose(null);
+            }, runtimeConfig.settleGraceMs);
+          });
       };
 
       const rl = createInterface({ input: group.child.stdout! });
@@ -651,7 +824,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
             case 'rate_limit':
               rateLimited = { retryDelayMs: parsed.retryDelayMs, attempt: parsed.attempt };
               // D5: don't wait out a subscription window inside a worker slot.
-              void group.terminate(runtimeConfig.killGraceMs);
+              terminateAndSettle();
               break;
           }
         }
@@ -661,7 +834,7 @@ export class ClaudeCliExecutor implements AgentExecutor {
 
       const onAbort = (): void => {
         abortReason = signal.reason === 'cancelled' ? 'cancelled' : 'timeout';
-        void group.terminate(runtimeConfig.killGraceMs);
+        terminateAndSettle();
       };
       signal.addEventListener('abort', onAbort, { once: true });
       if (signal.aborted) onAbort();
@@ -671,6 +844,8 @@ export class ClaudeCliExecutor implements AgentExecutor {
       });
 
       const handleClose = async (code: number | null): Promise<void> => {
+        if (closeStarted) return;
+        closeStarted = true;
         signal.removeEventListener('abort', onAbort);
 
         // The CLI prices total_cost_usd at ANTHROPIC rates regardless of the
@@ -813,6 +988,9 @@ export class ClaudeCliExecutor implements AgentExecutor {
       };
 
       group.child.once('close', (code) => {
+        // Disarm the settlement fallback synchronously — the real 'close' won
+        // the race and must not be shadowed by a spurious fallback event.
+        if (settleFallbackTimer) clearTimeout(settleFallbackTimer);
         void handleClose(code);
       });
     });
@@ -1154,10 +1332,14 @@ export class ClaudeCliExecutor implements AgentExecutor {
       .where(eq(schema.workspaces.id, workspaceId))
       .limit(1);
     const settings = (ws?.settings ?? {}) as {
-      repositories?: { name: string; git_url: string; default_branch: string }[];
+      repositories?: { name: string; git_url: string; default_branch: string; bootstrap_command?: string }[];
       ticket_scoping?: boolean;
     };
     const dbRepos = settings.repositories ?? [];
+    // Deliberately no bootstrap on the legacy yaml fallback (feature 035):
+    // RepositoryConfigSchema predates the env/bootstrap surfaces and the
+    // yaml path exists only for pre-wizard setups. Configure repositories in
+    // workspace settings to use bootstrap_command.
     const yamlRepos = this.agentsConfig?.workspace.repositories ?? [];
 
     return {

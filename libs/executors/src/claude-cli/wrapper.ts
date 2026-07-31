@@ -80,11 +80,21 @@ function callbackToolsSection(): string[] {
  * on the Phase-0 structured-output channel (kept byte-identical). Mirrors the
  * `callbackToolsSection()` style.
  */
-function verificationSection(): string[] {
+function verificationSection(anyBootstrapRan: boolean): string[] {
   return [
     '## Verification and QA',
     'When you verify or QA changes, do the cheap thing first — do NOT stand up a full ' +
       'development stack inside this run.',
+    // Feature 035: when the platform pre-installed dependencies, say so — the
+    // observed alternative is every agent probing for node_modules and
+    // re-installing "just in case" (204 installs across 142 runs).
+    ...(anyBootstrapRan
+      ? [
+          '- Dependencies are ALREADY INSTALLED in every repository marked "bootstrap already ran" ' +
+            'above — do not run `npm ci` / `npm install` (or the equivalent) there again; go ' +
+            'straight to the checks.',
+        ]
+      : []),
     '- Do not boot a full dev stack (`docker compose up`, `npm ci`, a long-running ' +
       '`npm run start:dev` / `npm run dev`, or any equivalent) if bringing it up would take more ' +
       'than about 5 minutes. It routinely eats the whole run budget and is a leading cause of ' +
@@ -122,6 +132,12 @@ export interface WrapperRepoInfo {
   blockerKey?: string;
   /** Every blocker branch folded into the start point, in merge order. */
   mergedFrom?: { key: string; branch: string }[];
+  /**
+   * Feature 035: the bootstrap command the platform ALREADY RAN in this
+   * worktree before the session started. Present ⇒ the repo line says so and
+   * the verification section adds the "dependencies are installed" rule.
+   */
+  bootstrapCommand?: string;
 }
 
 /** One direct blocker of this ticket, as listed in the wrapper (feature 032). */
@@ -232,6 +248,11 @@ function linkedTicketsSection(entries: LinkedTicketEntry[]): string[] {
  * it merely READS would otherwise be tempted to "fix" its blocker's work.
  */
 function repoLine(r: WrapperRepoInfo): string {
+  // Feature 035: state what the platform already did so the agent neither
+  // re-installs nor probes ("is node_modules there?") before every check.
+  const bootstrapNote = r.bootstrapCommand
+    ? ` [bootstrap already ran: \`${r.bootstrapCommand}\` — dependencies are installed, do not re-install]`
+    : '';
   const provenance =
     r.provenance ?? (r.continueBranch ? 'continue_own' : 'default');
   switch (provenance) {
@@ -239,7 +260,7 @@ function repoLine(r: WrapperRepoInfo): string {
       return (
         `- ${r.name}: ${r.absPath} (DEPENDENCY — branch ${r.continueBranch} from ${r.blockerKey}, ` +
         `not yet in ${r.defaultBranch}; read it and build against it, do not modify it unless the ` +
-        'task says so)'
+        `task says so)${bootstrapNote}`
       );
     case 'merged_blockers': {
       const from = (r.mergedFrom ?? [])
@@ -247,13 +268,13 @@ function repoLine(r: WrapperRepoInfo): string {
         .join(' merged with ');
       return (
         `- ${r.name}: ${r.absPath} (continues ${from} — already in your start point; open your PR ` +
-        `against ${r.continueBranch}, not ${r.defaultBranch})`
+        `against ${r.continueBranch}, not ${r.defaultBranch})${bootstrapNote}`
       );
     }
     case 'continue_own':
-      return `- ${r.name}: ${r.absPath} (continue branch ${r.continueBranch}, based on ${r.defaultBranch})`;
+      return `- ${r.name}: ${r.absPath} (continue branch ${r.continueBranch}, based on ${r.defaultBranch})${bootstrapNote}`;
     default:
-      return `- ${r.name}: ${r.absPath} (no prior branch; at ${r.defaultBranch})`;
+      return `- ${r.name}: ${r.absPath} (no prior branch; at ${r.defaultBranch})${bootstrapNote}`;
   }
 }
 
@@ -364,7 +385,9 @@ export function buildWrapperText(ctx: RunContext, worktreeDir: string, options: 
     ...(options.useCallbackChannel ? callbackToolsSection() : structuredOutputSection()),
     // Problem 4 (incident 2026-07-19): keep QA runs from booting a full dev
     // stack. Callback channel only — Phase 0 stays byte-identical.
-    ...(options.useCallbackChannel ? ['', ...verificationSection()] : []),
+    ...(options.useCallbackChannel
+      ? ['', ...verificationSection((options.repos ?? []).some((r) => Boolean(r.bootstrapCommand)))]
+      : []),
     '',
     '## Rules',
     `- Work only inside this workspace directory (${worktreeDir}).`,

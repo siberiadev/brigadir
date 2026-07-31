@@ -183,3 +183,4 @@ pnpm test:integration                       # testcontainers: нужен Docker,
 | Тикет не подхватывается | Скоуп: scrum-борда без активного спринта = пустой скоуп; проверьте scope_jql и что статус тикета точно равен trigger_status |
 | `ECONNREFUSED` к Postgres/Redis | `docker compose up -d postgres redis` не сделан, либо порты заняты |
 | `role "brigadir" does not exist` | Вы попали в НЕ наш Postgres (обычно brew на 5432). Проверьте, что `DATABASE_URL` в `.env` указывает на **5434** и контейнеры пересозданы после смены портов (`docker compose up -d postgres redis`) |
+| Разросся `~/.brigadir/pm-cache` | Общий npm-кэш bootstrap-команд (feature 035) намеренно переживает прогоны — это и есть ускорение. Ротации нет; если мешает — просто удалите каталог, следующий bootstrap прогреет заново |

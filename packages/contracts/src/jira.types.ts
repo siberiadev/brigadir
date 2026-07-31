@@ -125,6 +125,11 @@ export const WorkspaceRepositorySchema = z
     // delete-cascades by construction. Secret values for this repo live in the
     // sealed `workspaces.env_secrets` blob keyed by `id`, never here.
     env: EnvMapSchema.optional(),
+    // Feature 035: shell command the executor runs inside this repo's freshly
+    // prepared worktree BEFORE the agent starts (e.g. "npm ci"). NON-SECRET by
+    // policy — it is visible in `ps` argv and run events; secrets go through
+    // `env` above. Absent ⇒ no platform bootstrap, byte-identical prepare.
+    bootstrap_command: z.string().min(1).max(500).optional(),
   })
   .strict();
 export type WorkspaceRepository = z.infer<typeof WorkspaceRepositorySchema>;
