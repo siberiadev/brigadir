@@ -303,6 +303,10 @@ export function createToolHandlers(config: AdminToolConfig): AdminToolHandlers {
             default_branch:
               typeof raw.default_branch === 'string' && raw.default_branch.length > 0 ? raw.default_branch : 'main',
             ...(Object.keys(split.plain).length > 0 ? { env: split.plain } : {}),
+            // Feature 035: platform-run worktree bootstrap (non-secret).
+            ...(typeof raw.bootstrap_command === 'string' && raw.bootstrap_command.length > 0
+              ? { bootstrap_command: raw.bootstrap_command }
+              : {}),
           });
         }
       }
@@ -475,10 +479,20 @@ export function createToolHandlers(config: AdminToolConfig): AdminToolHandlers {
         scopeLabel = `repository ${repo.name as string}`;
         currentPlain = (repo.env ?? {}) as Record<string, string>;
         applyPlain = (merged) => {
+          // Rebuild each entry from its NAMED fields (junk keys must not ride
+          // into the settings PUT) — every schema field must be listed here or
+          // a set_env call silently strips it (feature 035: bootstrap_command).
+          const repoFields = (r: Record<string, unknown>) => ({
+            name: r.name,
+            git_url: r.git_url,
+            default_branch: r.default_branch,
+            id: r.id,
+            ...(typeof r.bootstrap_command === 'string' && r.bootstrap_command.length > 0
+              ? { bootstrap_command: r.bootstrap_command }
+              : {}),
+          });
           const nextRepos = repos.map((r) =>
-            r.id === repoId
-              ? { name: r.name, git_url: r.git_url, default_branch: r.default_branch, id: r.id, env: merged }
-              : { name: r.name, git_url: r.git_url, default_branch: r.default_branch, id: r.id, env: r.env },
+            r.id === repoId ? { ...repoFields(r), env: merged } : { ...repoFields(r), env: r.env },
           );
           return call('PUT', `/api/workspaces/${encodeURIComponent(wsId)}/settings`, { repositories: nextRepos });
         };

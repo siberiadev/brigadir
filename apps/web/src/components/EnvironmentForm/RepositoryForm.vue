@@ -35,6 +35,8 @@ const form = reactive({
   name: props.repo?.name ?? '',
   git_url: props.repo?.git_url ?? '',
   default_branch: props.repo?.default_branch ?? 'main',
+  // Feature 035: optional platform-run bootstrap ("" ⇒ field omitted on save).
+  bootstrap_command: props.repo?.bootstrap_command ?? '',
 });
 const repoEnv = ref<Record<string, string>>({ ...(props.repo?.env ?? {}) });
 const repoId = props.repo?.id;
@@ -87,12 +89,14 @@ function plaintextEnv(): Record<string, string> | undefined {
 /** The full repositories array with this repo replaced (by id) or appended. */
 function nextRepositories(): WorkspaceRepository[] {
   const env = plaintextEnv();
+  const bootstrapCommand = form.bootstrap_command.trim();
   const edited: WorkspaceRepository = {
     ...(props.repo ?? {}),
     name: form.name,
     git_url: form.git_url,
     default_branch: form.default_branch,
     env,
+    bootstrap_command: bootstrapCommand || undefined,
   };
   if (!isEdit.value) return [...props.repositories, edited];
   // Match by id when present (post-backfill), else by object identity — never
@@ -142,6 +146,18 @@ defineExpose({ submit, saving, canSave, remove, isEdit });
       </el-form-item>
       <el-form-item label="Default branch">
         <el-input v-model="form.default_branch" placeholder="main" data-test="repo-form-branch" />
+      </el-form-item>
+      <el-form-item label="Bootstrap command">
+        <el-input
+          v-model="form.bootstrap_command"
+          placeholder="npm ci"
+          maxlength="500"
+          data-test="repo-form-bootstrap"
+        />
+        <div class="hint">
+          Runs in the fresh worktree before every agent session (e.g. dependency install).
+          Non-secret — put tokens in Environment below.
+        </div>
       </el-form-item>
     </div>
 
@@ -197,5 +213,10 @@ defineExpose({ submit, saving, canSave, remove, isEdit });
   color: var(--el-color-danger);
   font-size: 13px;
   margin: 8px 0 0;
+}
+.hint {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.4;
 }
 </style>
