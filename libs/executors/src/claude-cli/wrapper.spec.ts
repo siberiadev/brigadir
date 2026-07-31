@@ -422,3 +422,43 @@ describe('buildWrapperText — blocker provenance (feature 032)', () => {
     });
   });
 });
+
+describe('bootstrap notes (feature 035)', () => {
+  const repo = { name: 'lib', absPath: '/wt/run-1/lib', defaultBranch: 'main' };
+
+  it('a bootstrapped repo says so on its line and the verification section adds the installed rule', () => {
+    const text = buildWrapperText(ctx, '/wt/run-1', {
+      useCallbackChannel: true,
+      repos: [{ ...repo, bootstrapCommand: 'npm ci' }],
+    });
+    expect(text).toContain(
+      '- lib: /wt/run-1/lib (no prior branch; at main) [bootstrap already ran: `npm ci` — dependencies are installed, do not re-install]',
+    );
+    expect(text).toContain('Dependencies are ALREADY INSTALLED');
+  });
+
+  it('the note composes with a continue branch', () => {
+    const text = buildWrapperText(ctx, '/wt/run-1', {
+      useCallbackChannel: true,
+      repos: [{ ...repo, continueBranch: 'run/BRIG-1', bootstrapCommand: 'pnpm install --frozen-lockfile' }],
+    });
+    expect(text).toContain(
+      '(continue branch run/BRIG-1, based on main) [bootstrap already ran: `pnpm install --frozen-lockfile`',
+    );
+  });
+
+  it('without a bootstrap command the wrapper is byte-identical to the pre-035 form', () => {
+    const withEmpty = buildWrapperText(ctx, '/wt/run-1', { useCallbackChannel: true, repos: [repo] });
+    expect(withEmpty).not.toContain('bootstrap already ran');
+    expect(withEmpty).not.toContain('Dependencies are ALREADY INSTALLED');
+  });
+
+  it('Phase-0 channel keeps the repo line note but has no verification section', () => {
+    const text = buildWrapperText(ctx, '/wt/run-1', {
+      useCallbackChannel: false,
+      repos: [{ ...repo, bootstrapCommand: 'npm ci' }],
+    });
+    expect(text).toContain('bootstrap already ran: `npm ci`');
+    expect(text).not.toContain('Dependencies are ALREADY INSTALLED');
+  });
+});

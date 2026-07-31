@@ -37,6 +37,49 @@ export interface WorktreeRepo {
   name: string;
   url: string;
   defaultBranch: string;
+  /**
+   * Feature 035: shell command the executor runs inside this repo's freshly
+   * prepared worktree before the agent starts (settings.repositories[]
+   * `bootstrap_command`). Ignored by this module — it rides `RepoWorktree.repo`
+   * to the executor's bootstrap step and the wrapper.
+   */
+  bootstrapCommand?: string;
+}
+
+/** What the post-prepare cleanliness check found in one worktree (feature 035). */
+export interface WorktreeDirtyState {
+  /** Tracked paths with modifications (`git status --porcelain`, non-`??`). */
+  modified: string[];
+  /** Untracked paths (`??`). Left in place — bootstrap output may be wanted. */
+  untracked: string[];
+}
+
+/**
+ * Feature 035 (dirty-guard): parse one worktree's `git status --porcelain`.
+ * Exposed as a helper (rather than the executor shelling out itself) so every
+ * git call keeps this module's hang-breaker timeout discipline.
+ */
+export async function statusPorcelain(worktreeDir: string): Promise<WorktreeDirtyState> {
+  const { stdout } = await gitExec(['status', '--porcelain'], { cwd: worktreeDir });
+  const modified: string[] = [];
+  const untracked: string[] = [];
+  for (const line of stdout.split('\n')) {
+    if (line.trim().length === 0) continue;
+    const path = line.slice(3);
+    if (line.startsWith('??')) untracked.push(path);
+    else modified.push(path);
+  }
+  return { modified, untracked };
+}
+
+/**
+ * Feature 035 (dirty-guard): revert working-tree modifications to tracked
+ * files (`git checkout -- .` touches nothing untracked). Deliberately not
+ * claimed to leave the tree clean — the caller re-runs {@link statusPorcelain}
+ * and reports any residue instead (index changes, smudge/case artifacts).
+ */
+export async function revertTracked(worktreeDir: string): Promise<void> {
+  await gitExec(['checkout', '--', '.'], { cwd: worktreeDir });
 }
 
 /**

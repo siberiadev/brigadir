@@ -5,6 +5,7 @@ import {
   resolveClaudeCliConfig,
   normalizeKillGraceMs,
   normalizeSettleGraceMs,
+  normalizeBootstrapTimeoutMs,
   resolveEffectiveAuth,
   applyAuthEnv,
   applyProviderEnv,
@@ -84,6 +85,39 @@ describe('normalizeSettleGraceMs (feature 034 — post-kill settlement window)',
   it('resolveClaudeCliConfig defaults settleGraceMs when the stored jsonb omits it', () => {
     expect(resolveClaudeCliConfig(base).settleGraceMs).toBe(5000);
     expect(resolveClaudeCliConfig({ ...base, settleGraceMs: 150 }).settleGraceMs).toBe(150);
+  });
+});
+
+describe('normalizeBootstrapTimeoutMs (feature 035 — bootstrap hang-breaker)', () => {
+  it('passes an in-range value through unchanged', () => {
+    expect(normalizeBootstrapTimeoutMs(10_000)).toBe(10_000);
+    expect(normalizeBootstrapTimeoutMs(120_000)).toBe(120_000);
+    expect(normalizeBootstrapTimeoutMs(30 * 60_000)).toBe(30 * 60_000);
+  });
+
+  it('clamps out-of-range values ([10s, 30min])', () => {
+    expect(normalizeBootstrapTimeoutMs(0)).toBe(10_000);
+    expect(normalizeBootstrapTimeoutMs(-5)).toBe(10_000);
+    expect(normalizeBootstrapTimeoutMs(60 * 60_000)).toBe(30 * 60_000);
+  });
+
+  it('falls back to the 10min default for a missing or non-finite value', () => {
+    expect(normalizeBootstrapTimeoutMs(undefined)).toBe(10 * 60_000);
+    expect(normalizeBootstrapTimeoutMs(NaN)).toBe(10 * 60_000);
+    expect(normalizeBootstrapTimeoutMs('5000')).toBe(10 * 60_000);
+  });
+
+  it('resolveClaudeCliConfig wires the clamp and the pm-cache default', () => {
+    const runtime = resolveClaudeCliConfig(base);
+    expect(runtime.bootstrapTimeoutMs).toBe(10 * 60_000);
+    expect(runtime.pmCacheRoot).toBe(join(homedir(), '.brigadir', 'pm-cache'));
+    const custom = resolveClaudeCliConfig({
+      ...base,
+      bootstrapTimeoutMs: 120_000,
+      pmCacheRoot: '/custom/pm-cache',
+    });
+    expect(custom.bootstrapTimeoutMs).toBe(120_000);
+    expect(custom.pmCacheRoot).toBe('/custom/pm-cache');
   });
 });
 

@@ -110,6 +110,14 @@ export interface ClaudeCliRuntimeConfig {
    * outcome (an escaped stdio-holding descendant otherwise wedges the run).
    */
   settleGraceMs: number;
+  /** Feature 035: hang-breaker on a repository's bootstrap_command. */
+  bootstrapTimeoutMs: number;
+  /**
+   * Feature 035: shared package-manager cache root — bootstrap commands get
+   * `npm_config_cache=<pmCacheRoot>/npm` so installs across per-run worktrees
+   * hit one warm cache instead of re-downloading every tarball.
+   */
+  pmCacheRoot: string;
   /** Feature 004 (D6): explicit opt-in to the MCP callback channel. */
   useCallbackChannel: boolean;
 }
@@ -258,6 +266,27 @@ export function normalizeSettleGraceMs(raw: unknown): number {
   return int;
 }
 
+/** Bounds for a repository bootstrap command's hang-breaker (feature 035). */
+const BOOTSTRAP_TIMEOUT_MIN_MS = 10_000;
+const BOOTSTRAP_TIMEOUT_MAX_MS = 30 * 60_000;
+const BOOTSTRAP_TIMEOUT_DEFAULT_MS = 10 * 60_000;
+
+/**
+ * Same clamp discipline as the graces above (stored jsonb / direct test
+ * construction bypass the schema). The ceiling is a hang-breaker, not a
+ * budget: a cold `npm ci` on a big repo legitimately takes minutes, but a
+ * bootstrap that needs more than 30 belongs in the repo's own tooling, and an
+ * unbounded value would let a stuck install pin a worker slot forever — the
+ * exact wedge feature 034 closed for the agent process itself.
+ */
+export function normalizeBootstrapTimeoutMs(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return BOOTSTRAP_TIMEOUT_DEFAULT_MS;
+  const int = Math.round(raw);
+  if (int < BOOTSTRAP_TIMEOUT_MIN_MS) return BOOTSTRAP_TIMEOUT_MIN_MS;
+  if (int > BOOTSTRAP_TIMEOUT_MAX_MS) return BOOTSTRAP_TIMEOUT_MAX_MS;
+  return int;
+}
+
 export function resolveClaudeCliConfig(
   raw: ClaudeCliExecutorConfigInput,
   agentAllowedTools: readonly string[] = [],
@@ -274,6 +303,8 @@ export function resolveClaudeCliConfig(
     killGraceMs: normalizeKillGraceMs(raw.killGraceMs),
     cancelPollMs: raw.cancelPollMs,
     settleGraceMs: normalizeSettleGraceMs(raw.settleGraceMs),
+    bootstrapTimeoutMs: normalizeBootstrapTimeoutMs(raw.bootstrapTimeoutMs),
+    pmCacheRoot: raw.pmCacheRoot ?? join(homedir(), '.brigadir', 'pm-cache'),
     useCallbackChannel: raw.useCallbackChannel,
   };
 }
